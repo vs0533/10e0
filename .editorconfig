@@ -1,0 +1,40 @@
+root = true
+
+[*]
+indent_style = space
+indent_size = 4
+end_of_line = lf
+charset = utf-8
+trim_trailing_whitespace = true
+insert_final_newline = true
+
+[*.{cs,vb}]
+# Use var when type is apparent
+csharp_style_var_when_type_is_apparent = true:suggestion
+csharp_style_var_for_built_in_types = false:suggestion
+
+# Expression-bodied members
+csharp_style_expression_bodied_methods = when_on_single_line:suggestion
+csharp_style_expression_bodied_properties = true:suggestion
+
+# File-scoped namespaces (C# 10+)
+csharp_style_namespace_declarations = file_scoped:suggestion
+
+# Prefer async methods
+dotnet_diagnostic.CA1849.severity = suggestion
+
+# Naming conventions
+dotnet_naming_rule.async_methods_end_in_async.severity = suggestion
+dotnet_naming_rule.async_methods_end_in_async.symbols = async_methods
+dotnet_naming_rule.async_methods_end_in_async.style = end_in_async_style
+dotnet_naming_symbols.async_methods.applicable_kinds = method
+dotnet_naming_symbols.async_methods.applicable_accessibilities = *
+dotnet_naming_symbols.async_methods.required_modifiers = async
+dotnet_naming_style.end_in_async_style.required_suffix = Async
+dotnet_naming_style.end_in_async_style.capitalization = pascal_case
+
+[*.{yml,yaml,json}]
+indent_size = 2
+
+[*.md]
+trim_trailing_whitespace = false

@@ -1,0 +1,101 @@
+using Microsoft.Extensions.Options;
+using TenE0.Core.Abstractions;
+
+namespace TenE0.Core.Permissions;
+
+/// <summary>
+/// IPermissionEvaluator 默认实现。
+///
+/// 升级要点（vs phase 3.1）：
+/// - 缓存粒度按角色（IPermissionCache）— grant/revoke 时精准失效该角色
+/// - 用户的最终权限 = 其所有角色权限的并集，每角色独立缓存
+/// - 超管判断改为 SuperUserRoles（基于 JWT role claim），更符合 RBAC
+/// </summary>
+internal sealed class PermissionEvaluator(
+    ICurrentUserContext currentUser,
+    IPermissionStore store,
+    IPermissionCache cache,
+    IOptions<PermissionsOptions> options) : IPermissionEvaluator
+{
+    private readonly PermissionsOptions _options = options.Value;
+
+    public async Task<bool> HasAsync(string permissionKey, CancellationToken cancellationToken = default)
+    {
+        if (!currentUser.IsAuthenticated) return false;
+        if (IsSuperUser()) return true;
+
+        var granted = await GetGrantedAsync(cancellationToken);
+        return granted.Contains(permissionKey);
+    }
+
+    public async Task<bool> HasAnyAsync(IEnumerable<string> permissionKeys, CancellationToken cancellationToken = default)
+    {
+        var list = permissionKeys.ToList();
+        if (list.Count == 0) return true;
+        if (!currentUser.IsAuthenticated) return false;
+        if (IsSuperUser()) return true;
+
+        var granted = await GetGrantedAsync(cancellationToken);
+        return list.Any(granted.Contains);
+    }
+
+    public async Task<bool> HasAllAsync(IEnumerable<string> permissionKeys, CancellationToken cancellationToken = default)
+    {
+        var list = permissionKeys.ToList();
+        if (list.Count == 0) return true;
+        if (!currentUser.IsAuthenticated) return false;
+        if (IsSuperUser()) return true;
+
+        var granted = await GetGrantedAsync(cancellationToken);
+        return list.All(granted.Contains);
+    }
+
+    /// <summary>当前用户的任一角色属于 SuperUserRoles 即视为超管。</summary>
+    private bool IsSuperUser()
+        => currentUser.RoleIds.Any(r => _options.SuperUserRoles.Contains(r));
+
+    /// <summary>聚合当前用户所有角色的权限快照（按角色 cache，逐个合并）。</summary>
+    private async Task<HashSet<string>> GetGrantedAsync(CancellationToken cancellationToken)
+    {
+        var union = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var roleCode in currentUser.RoleIds.Distinct())
+        {
+            var rolePerms = await cache.GetRolePermissionsAsync(roleCode, cancellationToken);
+            if (rolePerms is null)
+            {
+                // 未命中：到 Store 取该单一角色的权限
+                rolePerms = await store.GetGrantedPermissionsAsync([roleCode], cancellationToken);
+                await cache.SetRolePermissionsAsync(roleCode, rolePerms, cancellationToken);
+            }
+            union.UnionWith(rolePerms);
+        }
+
+        return union;
+    }
+}
+
+/// <summary>权限模块配置选项。</summary>
+public sealed class PermissionsOptions
+{
+    /// <summary>
+    /// 超管角色集合（任一匹配即视为超管）。默认空集合 — 不开启超管。
+    /// 例：opt.SuperUserRoles.Add("super_admin")
+    /// </summary>
+    public HashSet<string> SuperUserRoles { get; init; } = new(StringComparer.Ordinal);
+
+    /// <summary>权限快照缓存时长。</summary>
+    public TimeSpan CacheDuration { get; init; } = TimeSpan.FromMinutes(5);
+}
+
+/// <summary>
+/// IDataAccessPolicy 的权限模块实现：当前用户拥有任一 SuperUserRoles 即 bypass 所有行过滤。
+/// </summary>
+internal sealed class SuperUserDataAccessPolicy(
+    ICurrentUserContext currentUser,
+    IOptions<PermissionsOptions> options) : IDataAccessPolicy
+{
+    public bool BypassFilters =>
+        currentUser.IsAuthenticated &&
+        currentUser.RoleIds.Any(r => options.Value.SuperUserRoles.Contains(r));
+}

@@ -1,0 +1,39 @@
+## ===== .NET =====
+[Bb]in/
+[Oo]bj/
+[Dd]ebug/
+[Rr]elease/
+publish/
+*.user
+*.suo
+*.userosscache
+*.sln.docstats
+*.csproj.lscache
+.vs/
+TestResults/
+
+## ===== NuGet =====
+*.nupkg
+*.snupkg
+project.lock.json
+project.fragment.lock.json
+
+## ===== IDE =====
+.idea/
+*.DotSettings.user
+.vscode/
+*.sublime-workspace
+*.sublime-project
+
+## ===== OS =====
+.DS_Store
+Thumbs.db
+
+## ===== Secrets & Local Overrides =====
+secrets.json
+appsettings.*.local.json
+
+## ===== Build Artifacts =====
+artifacts/
+nupkgs/
+BenchmarkDotNet.Artifacts/

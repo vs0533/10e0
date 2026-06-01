@@ -1,0 +1,43 @@
+<Project>
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>14</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <AnalysisLevel>latest</AnalysisLevel>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+
+  <!-- Source Link: embed git metadata in PDBs for debugger source stepping -->
+  <PropertyGroup>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+  </PropertyGroup>
+
+  <!-- Default: not packable. Opt-in per project. -->
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <!-- NuGet metadata for packable projects (10E0.Core) -->
+  <PropertyGroup Condition="'$(IsPackable)' == 'true'">
+    <Authors>wilder</Authors>
+    <Company>10E0</Company>
+    <Copyright>Copyright (c) 10E0 contributors</Copyright>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/vs0533/10e0</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/vs0533/10e0.git</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageTags>lowcode;framework;ddd;cqrs;efcore;dotnet</PackageTags>
+    <Description>10E0 (TenE0) — Next-generation enterprise low-code framework core library.
+Clean Architecture + DDD + CQRS with EF Core 10, built-in Outbox pattern,
+pipeline behaviors, row-level security, and dynamic query engine.</Description>
+  </PropertyGroup>
+
+</Project>
