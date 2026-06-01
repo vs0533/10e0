@@ -6,7 +6,6 @@ on:
 
 permissions:
   contents: write
-  packages: write
 
 concurrency:
   group: release
@@ -43,6 +42,9 @@ jobs:
         run: dotnet test 10e0.slnx --no-build -c Release
 
       # ─── Version Computation ───────────────────────────────────────
+      - name: Fetch all tags
+        run: git fetch --tags origin
+
       - name: Compute next SemVer
         id: semver
         shell: bash
@@ -87,7 +89,7 @@ jobs:
 
           FEAT=$(git log $RANGE --pretty=format:"- %s (%h)" --no-merges --grep="^feat"  || true)
           FIX=$(git log $RANGE  --pretty=format:"- %s (%h)" --no-merges --grep="^fix"   || true)
-          OTHER=$(git log $RANGE --pretty=format:"- %s (%h)" --no-merges --grep="^feat\|^fix" --invert-grep || true)
+          OTHER=$(git log $RANGE --pretty=format:"- %s (%h)" --no-merges --grep="^feat" --grep="^fix" --invert-grep || true)
 
           {
             echo "body<<CHANGELOG_EOF"
@@ -133,9 +135,14 @@ jobs:
 
       # ─── NuGet.org Publishing ──────────────────────────────────────
       - name: Publish to NuGet.org
-        if: ${{ secrets.NUGET_API_KEY != '' }}
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
         run: |
+          if [ -z "$NUGET_API_KEY" ]; then
+            echo "NUGET_API_KEY not set, skipping NuGet publish"
+            exit 0
+          fi
           dotnet nuget push ./nupkgs/*.nupkg \
-            --api-key ${{ secrets.NUGET_API_KEY }} \
+            --api-key "$NUGET_API_KEY" \
             --source https://api.nuget.org/v3/index.json \
             --skip-duplicate

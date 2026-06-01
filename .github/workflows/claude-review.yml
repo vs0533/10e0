@@ -14,6 +14,7 @@ jobs:
   review:
     name: Code Review
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - name: Checkout (full history)
@@ -35,6 +36,8 @@ jobs:
           echo "Diff size: $(wc -c < /tmp/pr-diff.txt) bytes"
 
       - name: Run Code Review
+        id: review
+        continue-on-error: true
         env:
           ANTHROPIC_AUTH_TOKEN: ${{ secrets.ALIBABA_API_KEY }}
           ANTHROPIC_BASE_URL: https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic
@@ -45,7 +48,6 @@ jobs:
           API_TIMEOUT_MS: "3000000"
           CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
         run: |
-          set +e
           cat /tmp/pr-diff.txt | claude -p \
             --output-format text \
             --max-turns 1 \
@@ -65,11 +67,8 @@ jobs:
             If no issues found, confirm the PR looks good with a brief summary." \
             > /tmp/review-output.txt 2>&1
 
-          EXIT_CODE=$?
-          echo "Claude exit code: $EXIT_CODE"
-          echo "--- Review output ---"
+          echo "Review output:"
           cat /tmp/review-output.txt
-          echo "--- End ---"
 
       - name: Post Review Comment
         if: always()
