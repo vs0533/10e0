@@ -2,12 +2,31 @@
 
 从 `code/E0.Core/` (.NET 6) 重构而来，命名空间 `TenE0.*`，目标框架 .NET 10。
 
+## 仓库
+
+- **GitHub**: https://github.com/vs0533/10e0 （私有仓库）
+- **默认分支**: `dev`（开发集成分支，所有 feature PR 的目标）
+- **发布分支**: `main`（仅接收 dev→main 合并，自动触发发版）
+
 ## 项目结构
 
 ```
+10e0.slnx              — .NET 10 解决方案文件（slnx 格式）
+Directory.Build.props   — 集中构建设置（net10.0, C#14, NRT, TreatWarningsAsErrors）
+.editorconfig           — 代码风格规范（EnforceCodeStyleInBuild）
+
 src/
 ├── 10E0.Api/    — HTTP API 层（Minimal API，应用入口 + Demo）
-└── 10E0.Core/   — 共享框架核心（类库）
+└── 10E0.Core/   — 共享框架核心（类库，NuGet 包: TenE0.Core）
+
+tests/
+├── 10E0.Api.Tests/    — Api 集成测试（xUnit + WebApplicationFactory）
+└── 10E0.Core.Tests/   — Core 单元测试（xUnit + EF Core InMemory + coverlet）
+
+.github/workflows/
+├── pr-build.yml        — PR 构建测试 + 覆盖率
+├── claude-review.yml   — Claude Code (Qwen) 自动审查
+└── release.yml         — 自动发版（SemVer + GitHub Release + NuGet）
 ```
 
 ## 架构特征
@@ -32,20 +51,59 @@ src/
 ## 构建
 
 ```bash
-cd src && dotnet build
+dotnet build 10e0.slnx
+dotnet test 10e0.slnx
 ```
 
 ## 运行
 
 ```bash
-cd src/10E0.Api && dotnet run
+dotnet run --project src/10E0.Api
 ```
 
-## GitHub 工具
+## CI/CD
+
+### 工作流
+
+| Workflow | 触发 | 说明 |
+|----------|------|------|
+| `pr-build.yml` | PR 到 dev/main | restore → build → test + coverage |
+| `claude-review.yml` | PR opened/synchronize | 阿里云百炼 API (Qwen 3.7-max) headless 审查 |
+| `release.yml` | push 到 main | 自动 patch+1 → tag → Release → NuGet pack |
+
+### Code Review 配置
+
+Claude Code CLI 以 headless 模式（`claude -p`）运行在 GitHub Actions，使用阿里云百炼 API 而非 Anthropic 官方：
+
+```
+ANTHROPIC_AUTH_TOKEN   → secrets.ALIBABA_API_KEY
+ANTHROPIC_BASE_URL     → https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic
+ANTHROPIC_MODEL        → qwen3.7-max
+```
+
+与本机 `~/.claude/settings.json` 中的配置一致。
+
+### 发版流程
+
+合并 PR 到 `main` 时自动触发：
+1. 读最新 `v*` tag，patch+1（如 `v0.0.1` → `v0.0.2`）
+2. `dotnet pack` TenE0.Core（注入版本号）
+3. 创建 annotated tag + GitHub Release（附 .nupkg）
+4. 可选发布到 NuGet.org（需 `NUGET_API_KEY`）
+
+手动 bump major/minor：`git tag -a v2.0.0 -m "..." && git push origin v2.0.0`
+
+### GitHub Secrets
+
+| Secret | 用途 |
+|--------|------|
+| `ALIBABA_API_KEY` | 阿里云百炼 API 密钥（Code Review 必须） |
+| `NUGET_API_KEY` | NuGet.org 发布密钥（可选） |
+
+## 开发工具
 
 - 项目使用 GitHub API MCP Server 管理仓库
-
-使用前确保已配置 GitHub 认证（个人访问令牌），MCP Server 会自动处理鉴权。
+- 使用前确保已配置 GitHub 认证（`gh auth login`）
 
 ## 目录说明
 
