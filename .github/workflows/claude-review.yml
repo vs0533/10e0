@@ -45,6 +45,7 @@ jobs:
           API_TIMEOUT_MS: "3000000"
           CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
         run: |
+          set +e
           cat /tmp/pr-diff.txt | claude -p \
             --output-format text \
             --max-turns 1 \
@@ -64,8 +65,11 @@ jobs:
             If no issues found, confirm the PR looks good with a brief summary." \
             > /tmp/review-output.txt 2>&1
 
-          echo "Review output:"
+          EXIT_CODE=$?
+          echo "Claude exit code: $EXIT_CODE"
+          echo "--- Review output ---"
           cat /tmp/review-output.txt
+          echo "--- End ---"
 
       - name: Post Review Comment
         if: always()
@@ -76,6 +80,7 @@ jobs:
             let review = 'Review completed but no output captured.';
             try {
               review = fs.readFileSync('/tmp/review-output.txt', 'utf8');
+              if (!review.trim()) review = 'Review produced empty output. Check workflow logs.';
             } catch (e) {
               review = 'Review failed to produce output. Check workflow logs.';
             }
