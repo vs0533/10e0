@@ -1,4 +1,4 @@
-name: Claude Code Review
+name: Code Review
 
 on:
   pull_request:
@@ -12,19 +12,31 @@ permissions:
 
 jobs:
   review:
-    name: Claude Code Review
+    name: Code Review
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout (full history for context)
+      - name: Checkout (full history)
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Claude Code PR Review
-        uses: anthropics/claude-code-action@v1
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install Claude Code CLI
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Get PR diff to file
+        run: |
+          git diff origin/${{ github.base_ref }}...HEAD > /tmp/pr-diff.txt
+          echo "Diff size: $(wc -c < /tmp/pr-diff.txt) bytes"
+
+      - name: Run Code Review
         env:
-          # ── 阿里云百炼 API 配置（与你本机 settings.json 一致） ──
+          ANTHROPIC_AUTH_TOKEN: ${{ secrets.ALIBABA_API_KEY }}
           ANTHROPIC_BASE_URL: https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic
           ANTHROPIC_MODEL: qwen3.7-max
           ANTHROPIC_DEFAULT_SONNET_MODEL: qwen3.7-max
@@ -32,67 +44,44 @@ jobs:
           ANTHROPIC_DEFAULT_HAIKU_MODEL: qwen3.6-flash
           API_TIMEOUT_MS: "3000000"
           CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
+        run: |
+          cat /tmp/pr-diff.txt | claude -p \
+            --output-format text \
+            --max-turns 1 \
+            "Review this git diff for a .NET 10 / C# 14 enterprise framework PR.
+
+            Focus areas:
+            1. CQRS pattern correctness (ICommand/IHandler contracts, Pipeline Behaviors order)
+            2. EF Core 10 patterns (N+1 queries, DbContext scope, Savepoint transactions)
+            3. Security (permissions, JWT secrets, dynamic LINQ injection, row-level filters)
+            4. Code quality (async/await, NRT, TreatWarningsAsErrors)
+
+            Output format:
+            - 🔴 Critical: Must fix (bugs, security, pattern violations)
+            - 🟡 Suggestion: Recommended improvement
+            - 🟢 Nit: Optional polish
+
+            If no issues found, confirm the PR looks good with a brief summary." \
+            > /tmp/review-output.txt 2>&1
+
+          echo "Review output:"
+          cat /tmp/review-output.txt
+
+      - name: Post Review Comment
+        if: always()
+        uses: actions/github-script@v7
         with:
-          anthropic_api_key: ${{ secrets.ALIBABA_API_KEY }}
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          prompt: |
-            You are reviewing a pull request in the 10E0 (TenE0) framework —
-            a .NET 10 / C# 14 enterprise low-code framework using
-            Clean Architecture + DDD + CQRS.
-
-            ## Repository Context
-            - `src/10E0.Core/`: Framework core library (namespace: TenE0.Core)
-            - `src/10E0.Api/`: Minimal API demo app (namespace: TenE0.Api)
-            - Each module has its own CLAUDE.md with design decisions
-
-            ## Review Focus Areas
-
-            ### Architecture & Pattern Correctness
-            - **CQRS**: Every ICommand<T> must have exactly one ICommandHandler<T>.
-              Commands must not return entities directly; use Result<T> or primitives.
-            - **Pipeline Behaviors**: Order matters: Logging → Transaction → Permission → Handler.
-              New behaviors must implement IPipelineBehavior<TCommand, TResult>.
-            - **Domain Events**: Must be added via AggregateRoot.AddEvent(), never directly
-              to the events collection. Handlers must not publish synchronously.
-            - **Entity Hierarchy**: BaseEntity (no audit) vs TimedEntity (Created/Modified)
-              vs AuditedEntity (+ CreatedBy/ModifiedBy) vs TreeAuditedEntity (+ tree path).
-              Verify new entities extend the correct base.
-
-            ### EF Core 10 Patterns
-            - **N+1 Queries**: Flag any .ToList() followed by navigation access in loops.
-              Require .Include() or explicit projections.
-            - **DbContext Scope**: Core uses IDbContextFactory<T>. Verify no service
-              holds a DbContext reference across await boundaries.
-            - **Transactions**: Nested operations must use Savepoint (via TransactionBehavior),
-              never nested BeginTransaction calls.
-            - **Query Translation**: Flag LINQ that may cause client-side evaluation.
-              System.Linq.Dynamic.Core strings must be validated against allow-lists.
-
-            ### Security
-            - **Permissions**: All endpoints require [RequirePermission] or explicit
-              IPermissionEvaluator check. Flag unprotected endpoints.
-            - **JWT**: No hardcoded secrets. JwtTokenService must read from configuration.
-            - **Row-Level Security**: IEntityFilterContributor implementations must be
-              registered in DI and correctly scoped to org/tenant.
-            - **Dynamic LINQ Injection**: User input passed to Where() or OrderBy()
-              via System.Linq.Dynamic.Core must be sanitized.
-
-            ### Code Quality
-            - **Async**: No .Result, .Wait(), or .GetAwaiter().GetResult().
-              Library code (10E0.Core) should use ConfigureAwait(false).
-            - **Null Safety**: NRT is enabled project-wide. Flag suppressed null-forgiving
-              operators (!) without justification.
-            - **TreatWarningsAsErrors**: The build fails on warnings. New code must
-              not suppress warnings without documented reason.
-
-            ## Output Format
-            Categorize each finding:
-            - 🔴 **Critical**: Must fix before merge (bugs, security, pattern violations)
-            - 🟡 **Suggestion**: Recommended improvement (performance, readability)
-            - 🟢 **Nit**: Optional polish (naming, style consistency)
-
-            If no issues are found, confirm the PR looks good with a brief summary
-            of what was reviewed.
-
-            Reference the project's CLAUDE.md files for module-specific context when
-            reviewing changes in those directories.
+          script: |
+            const fs = require('fs');
+            let review = 'Review completed but no output captured.';
+            try {
+              review = fs.readFileSync('/tmp/review-output.txt', 'utf8');
+            } catch (e) {
+              review = 'Review failed to produce output. Check workflow logs.';
+            }
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: `## 🤖 Code Review\n\n${review}`
+            });
