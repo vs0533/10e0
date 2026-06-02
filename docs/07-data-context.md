@@ -99,7 +99,7 @@ public class AppDbContext(
 实体实现 `ISoftDeleteEntity` 时自动注册，条件 `e.IsSoftDelete == false`。需要查询已删除数据时：
 
 ```csharp
-dc.Set<DemoEntity>().IgnoreQueryFilters(["SoftDelete"]).Where(...)
+dc.Set<DemoEntity>().IgnoreQueryFilters().Where(...)  // 绕过全部过滤器，仅管理后台使用
 ```
 
 ### 第二层：DataPrivilege（行级权限）

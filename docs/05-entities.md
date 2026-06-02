@@ -113,14 +113,11 @@ public class Order : AggregateRoot
 
 **绕过软删除过滤**：
 
-> ⚠️ `IgnoreQueryFilters()` 会移除**所有**命名过滤器，包括行级安全（DataPrivilege）和动态过滤规则，属安全敏感操作。
+> ⚠️`IgnoreQueryFilters()` 会移除**所有**命名过滤器（SoftDelete + DataPrivilege + DynamicFilter），属安全敏感操作。仅在管理后台等受控场景使用。
 
 ```csharp
-// ✅ 推荐：只绕过软删除，保留行级权限过滤
-var all = await dc.Set<Product>().IgnoreQueryFilters(["SoftDelete"]).ToListAsync();
-
-// ❌ 危险：同时绕过软删除 + 行级权限 + 动态过滤
-var unsafe = await dc.Set<Product>().IgnoreQueryFilters().ToListAsync();
+// 绕过全部过滤器（含行级权限！），仅在受控场景使用
+var all = await dc.Set<Product>().IgnoreQueryFilters().ToListAsync();
 ```
 
 ## 扩展框架用户实体

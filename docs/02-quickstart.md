@@ -80,7 +80,11 @@ builder.Services.AddTenE0DataContext<AppDbContext>((_, opt) =>
 // CQRS 处理器自动注册
 builder.Services.AddTenE0Cqrs(typeof(Program).Assembly);
 
+// 通用 CRUD 服务（写 Command/Handler 时需要）
+builder.Services.AddTenE0EntityService();
+
 // 一键启用 JWT 认证 + 权限 + 组织
+// 注：单泛型参数使用框架默认 TenE0User/TenE0Role；扩展用户用 AddTenE0Identity<TUser, TContext>
 builder.Services.AddTenE0Identity<AppDbContext>(opt =>
 {
     // ⚠️ 生产环境必须从配置/环境变量读取，切勿硬编码到源码

@@ -35,7 +35,8 @@ DB 存储:     base64(SHA-256(token))   ← 泄露 DB 无法还原原始令牌
 通过 `AddTenE0Identity<TUser, TContext>()` 零摩擦配置，内部自动注册 JWT、权限、组织树等完整模块：
 
 ```csharp
-// Program.cs — 使用框架内置 TenE0User（不扩展用户字段）
+// Program.cs — 单泛型参数使用框架默认 TenE0User/TenE0Role
+// 如需扩展用户字段：AddTenE0Identity<AppUser, DemoDbContext>(opt => ...)
 builder.Services.AddTenE0Identity<DemoDbContext>(opt =>
 {
     opt.Jwt.Issuer = "10E0.Api";

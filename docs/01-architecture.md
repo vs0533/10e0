@@ -139,6 +139,7 @@ builder.Services.AddTenE0DataContext<DemoDbContext>((sp, options) =>
 
 // 4️⃣  CQRS 分发器 + Pipeline Behaviors + 程序集扫描 Handler
 builder.Services.AddTenE0Cqrs(typeof(Program).Assembly);
+builder.Services.AddTenE0TransactionBehavior<DemoDbContext>();  // 可选：启用事务管道行为
 
 // 5️⃣  权限系统（评估器、缓存、目录扫描、PermissionBehavior）
 builder.Services.AddTenE0PermissionsFromAssembly(typeof(Program).Assembly);

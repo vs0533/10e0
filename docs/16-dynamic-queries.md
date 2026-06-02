@@ -154,8 +154,12 @@ app.MapGet("/demo/query", async (
 {
     var q = db.Orders.AsQueryable();
 
-    // ⚠️ 生产环境禁止直接透传用户输入 — 见上方"表达式注入风险"章节
-    // 此处仅为演示，实际使用时必须对 query.Where 做白名单校验或使用预定义模板
+    // 白名单校验：只允许查询这些字段
+    var allowedFields = new[] { "Name", "Amount", "CreateTime", "Status" };
+    if (!string.IsNullOrEmpty(query.Where) && !allowedFields.All(f => query.Where.Contains(f)))
+        return Results.BadRequest(new { error = "包含不允许的查询字段" });
+
+    // 动态 WHERE
     q = q.WhereIf(!string.IsNullOrEmpty(query.Where), query.Where!);
 
     // 动态排序（默认按 CreateTime 降序）
