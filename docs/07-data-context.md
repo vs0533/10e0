@@ -196,14 +196,17 @@ services.AddScoped<IDataSeeder, PermissionSeeder>();  // Order=100
 services.AddScoped<IDataSeeder, AuthSeeder>();         // Order=200, 等角色建好后再建用户
 ```
 
-`DatabaseInitializerService` 按 `Order` 值升序依次调用，支持幂等（重复运行不会插入重复数据）。Seeder 内可通过 `IDbContextFactory` 创建独立 DbContext 实例绕过查询过滤器：
+`DatabaseInitializerService` 按 `Order` 值升序依次调用，支持幂等（重复运行不会插入重复数据）。
+
+> 💡 **为什么 Seeder 示例丢弃了 `context` 参数？**  
+> 传入的 `context` 是 `DatabaseInitializerService` 创建的共享 DbContext，已附加 `AuditInterceptor` 和 `SoftDelete` 过滤器。Seeder 通常需要**绕过查询过滤器**检查已有数据（如 `Roles.AnyAsync()`），或需要独立事务控制——因此推荐注入 `IDbContextFactory` 自建 DbContext 实例。如果 Seeder 不需要绕过过滤器，可直接使用传入的 `context` 参数。：
 
 ```csharp
 public class PermissionSeeder(IDbContextFactory<AppDbContext> f) : IDataSeeder
 {
     public int Order => 100;
 
-    public async Task SeedAsync(DbContext _, CancellationToken ct)
+    public async Task SeedAsync(DbContext _, CancellationToken ct)  // ← 丢弃共享 context，自建独立实例
     {
         await using var dc = await f.CreateDbContextAsync(ct);
         if (await dc.Roles.AnyAsync(ct)) return; // 幂等

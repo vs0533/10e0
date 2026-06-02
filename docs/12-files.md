@@ -54,7 +54,7 @@ public interface IFileService
 | `UploadAsync` | 通用文件上传，返回元数据 |
 | `UploadImageAsync` | 图片上传，可选缩放/水印/缩略图 |
 | `DownloadAsync` | 下载文件（文件流 + 元数据） |
-| `DeleteAsync` | 软删除（标记 `IsDeleted = true`） |
+| `DeleteAsync` | 逻辑删除（标记 `IsDeleted = true`，`FileService` 自行管理，不走框架 `ISoftDeleteEntity` 机制） |
 | `GetMetadataAsync` | 查询元数据（忽略已删除） |
 | `GetAccessUrlAsync` | 获取文件访问 URL |
 
@@ -200,7 +200,7 @@ public class TenE0FileAttachment : BaseEntity  // Id = Guid.NewGuid().ToString("
     public string? ThumbnailPath { get; set; }         // 缩略图路径
     public string? RelatedEntityId { get; set; }       // 关联实体 ID
     public string? RelatedEntityType { get; set; }     // 关联实体类型
-    public bool IsDeleted { get; set; }                // 软删除
+    public bool IsDeleted { get; set; }                // 逻辑删除（FileService 自行管理，未使用 ISoftDeleteEntity）
     public DateTimeOffset? CreateTime { get; set; }
     public string? CreateBy { get; set; }
 }

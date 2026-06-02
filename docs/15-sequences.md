@@ -57,7 +57,7 @@ public interface ISequenceGenerator
 
 ## Bucket 与重置行为
 
-Bucket 由格式串中的日期部分决定—`SequenceFormat.RenderBucket` 将当前时间按日期格式渲染为 bucket 字符串，`EfSequenceGenerator` 对比 `CurrentBucket` 判断是否需要归零：
+Bucket 由格式串中的日期部分决定——`SequenceFormat.RenderBucket` 将当前时间按日期格式渲染为 bucket 字符串，`EfSequenceGenerator` 对比 `CurrentBucket` 判断是否需要归零：
 
 | 日期占位 | Bucket 值 | 重置频率 |
 |----------|-----------|----------|

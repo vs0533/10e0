@@ -87,6 +87,7 @@ internal sealed class PublishDemoCommandHandler(
 
         demo.Publish(currentUser.UserCode ?? "anonymous");  // 聚合方法触发 DemoPublishedEvent
         await dc.SaveChangesAsync(ct);  // 业务状态 + OutboxMessage 同事务原子提交
+                                         // 注：此处无需 ITransactional 标记，SaveChangesAsync 本身是原子操作
         return true;
     }
 }

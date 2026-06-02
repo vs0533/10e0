@@ -293,7 +293,7 @@ using (var scope = app.Services.CreateScope())
 {
   "logic": "And",
   "rules": [
-    { "field": "IsDeleted", "op": "eq", "value": "false" },
+    { "field": "IsSoftDelete", "op": "eq", "value": "false" },
     { "field": "ExpireAt", "op": "gt", "value": "{loginUser}" }
   ]
 }
