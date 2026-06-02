@@ -4,8 +4,8 @@
 
 ### `pr-build.yml` — PR 构建测试
 
-- **触发**: PR 到 `dev` 或 `main`，以及 push 到 `test/**` 分支
-- **流程**: restore → build (Release) → test + 覆盖率（门禁 `/p:ThresholdLine=80`）
+- **触发**: PR 到 `dev` 或 `main`
+- **流程**: restore → build (Release) → test + 覆盖率 (coverlet)
 - **并发**: 同 PR 旧运行自动取消
 - **产物**: test results (.trx/.html) + coverage (.cobertura.xml)
 - **权限**: 最小化 (`contents: read`)
