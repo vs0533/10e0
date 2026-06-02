@@ -2,6 +2,8 @@
 
 基于 `System.Linq.Dynamic.Core` 的运行时动态查询支持，允许通过字符串表达式构建 LINQ 查询，主要服务于 REST API 的通用查询接口。
 
+> ⚠️ **安全警告**：`DynamicWhere` 的表达式字符串本身是用户可控的，直接透传可导致表达式注入——绕过软删除、行级权限等 Named Query Filters，或读取敏感字段。详见下方 [表达式注入风险](#表达式注入风险) 章节。
+
 ## 扩展方法
 
 所有扩展方法定义在 `TenE0.Core.Queries.DynamicQueryExtensions` 中，作用于 `IQueryable<T>`。

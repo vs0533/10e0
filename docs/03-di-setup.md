@@ -127,7 +127,8 @@ builder.Services.AddTenE0TransactionBehavior<AppDbContext>();
 // 身份 + 权限一站式注册
 builder.Services.AddTenE0Identity<User, Role, AppDbContext>(opt =>
 {
-    opt.Jwt.SigningKey = builder.Configuration["Jwt:SigningKey"]!;
+    opt.Jwt.SigningKey = builder.Configuration["Jwt:SigningKey"]
+        ?? throw new InvalidOperationException("Jwt:SigningKey 未配置");
     opt.Jwt.AccessTokenLifetime = TimeSpan.FromHours(1);
     opt.Permissions.SuperUserRoles.Add("super_admin");
 });

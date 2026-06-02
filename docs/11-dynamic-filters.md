@@ -287,14 +287,14 @@ using (var scope = app.Services.CreateScope())
 }
 ```
 
-### 场景 3：仅查看活跃记录
+### 场景 3：仅查看未过期的记录
 
 ```json
 {
   "logic": "And",
   "rules": [
     { "field": "IsSoftDelete", "op": "eq", "value": "false" },
-    { "field": "ExpireAt", "op": "gt", "value": "{loginUser}" }
+    { "field": "ExpiresAt", "op": "gt", "value": "2026-06-02T00:00:00" }
   ]
 }
 ```
