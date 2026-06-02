@@ -41,7 +41,7 @@ builder.Services.AddTenE0Identity<DemoDbContext>(opt =>
     opt.Jwt.Issuer = "10E0.Api";
     opt.Jwt.Audience = "10E0.Api";
     opt.Jwt.SigningKey = builder.Configuration["Jwt:SigningKey"]
-        ?? "dev-secret-CHANGE-ME-in-production-must-be-at-least-32-bytes-long";
+        ?? throw new InvalidOperationException("Jwt:SigningKey 未配置 — 生产环境必须设置 32 字节以上密钥");
     opt.Jwt.AccessTokenLifetime = TimeSpan.FromMinutes(30);
     opt.Jwt.RefreshTokenLifetime = TimeSpan.FromDays(14);
     opt.Permissions.SuperUserRoles.Add("super_admin");
@@ -204,9 +204,10 @@ PBKDF2-SHA256 验证密码哈希
        ▼
 检查 RevokedAt
        │
-       ├─→ 已撤销 → 🚨 重放检测！
-       │            标记该用户全部活跃 token 为 revoked
-       │            返回 TOKEN_REVOKED（需重新登录）
+        ├─→ 已撤销 → 🚨 重放检测！
+        │            标记该用户全部活跃 token 为 revoked
+        │            > 💡 注意：这将同时失效该用户所有设备（手机/电脑）的登录会话
+        │            返回 TOKEN_REVOKED（需重新登录）
        │
        ▼
 检查 ExpiresAt

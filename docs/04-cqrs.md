@@ -182,7 +182,7 @@ public interface IPipelineBehavior<in TCommand, TResult>
 public interface ITransactional { }
 
 // 标记事务命令
-internal sealed record CreateOrderCommand(string CustomerCode, decimal Amount) : ICommand&lt;string&gt;, ITransactional;
+internal sealed record CreateOrderCommand(string CustomerCode, decimal Amount) : ICommand<string>, ITransactional;
 ```
 
 事务行为处理两种场景：
@@ -261,4 +261,4 @@ builder.Services.AddTenE0TransactionBehavior<DemoDbContext>();
 builder.Services.AddTenE0Identity<AppUser, DemoDbContext>(opt => { ... });
 ```
 
-`RegisterHandlersFromAssembly` 内部反射扫描所有实现了 `ICommandHandler<,>` 的非抽象类，以 `Scoped` 生命周期注册到 DI。多个程序集可同时传入，`Distinct()` 去重。
+`RegisterHandlersFromAssembly` 内部反射扫描所有实现了 `ICommandHandler<,>` 的非抽象类，以 `Scoped` 生命周期注册到 DI（即每个 HTTP 请求一个实例，与 `ICommandDispatcher` 生命周期一致）。多个程序集可同时传入，`Distinct()` 去重。

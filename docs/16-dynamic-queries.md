@@ -152,7 +152,8 @@ app.MapGet("/demo/query", async (
 {
     var q = db.Orders.AsQueryable();
 
-    // 动态 WHERE
+    // ⚠️ 生产环境禁止直接透传用户输入 — 见上方"表达式注入风险"章节
+    // 此处仅为演示，实际使用时必须对 query.Where 做白名单校验或使用预定义模板
     q = q.WhereIf(!string.IsNullOrEmpty(query.Where), query.Where!);
 
     // 动态排序（默认按 CreateTime 降序）

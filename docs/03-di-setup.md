@@ -116,12 +116,9 @@ var builder = WebApplication.CreateBuilder(args);
 // 基础服务（必须最先调用）
 builder.Services.AddTenE0Core();
 
-// 数据层
-builder.Services.AddTenE0DataContext<AppDbContext>(opt =>
-{
-    opt.DbContextOptions = o => o.UseNpgsql(builder.Configuration.GetConnectionString("Default"));
-    opt.AutoApplyMigrations = true;
-});
+// 数据层 — Action<IServiceProvider, DbContextOptionsBuilder> 签名
+builder.Services.AddTenE0DataContext<AppDbContext>((sp, opt) =>
+    opt.UseNpgsql(builder.Configuration.GetConnectionString("Default")));
 
 // CQRS + 事务
 builder.Services.AddTenE0Cqrs(typeof(Program).Assembly);

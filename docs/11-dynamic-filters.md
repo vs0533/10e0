@@ -299,8 +299,8 @@ using (var scope = app.Services.CreateScope())
 }
 ```
 
-## 注意事项
+## ⚠️ 重要限制
 
-- **修改规则后需重启应用**：EF Model 在首次使用时缓存，新增/修改规则需重启（或重建 DbContext 模型）才能生效。
+- **修改规则后需重启应用**：EF Model 在首次使用时缓存（`IModelCacheKeyFactory`），新增/修改规则后不会自动生效。这是当前版本的一个已知限制。如需动态生效，可参考实现自定义 `IModelCacheKeyFactory` 使规则变更时触发模型缓存失效。
 - **InMemory 数据库跳过加载**：`DynamicFilterProvider.LoadRulesAsync` 在连接失败时 graceful 降级为空规则集，不会阻塞启动。
 - **类型自动转换**：`FilterExpressionBuilder.ConvertValue` 支持 `string/int/long/Guid/DateTime/DateTimeOffset/bool/decimal/float/double/enum` 及对应的 `Nullable<T>` 类型，不支持的属性类型会抛出 `NotSupportedException`。
