@@ -16,7 +16,7 @@
 | `SoftDelete` | `e.IsSoftDelete == false` | 实体实现 `ISoftDeleteEntity` |
 | `DataPrivilege:Xxx` | 由 `IEntityFilterContributor` 定义 | 实体匹配 contributor 的泛型参数 |
 
-多个 Filter 在同实体上 AND 组合。绕过过滤：`modelBuilder.Entity<T>().IgnoreQueryFilters(["SoftDelete"])`
+多个 Filter 在同实体上 AND 组合。绕过过滤：`modelBuilder.Entity<T>().IgnoreQueryFilters()`（移除该实体全部命名过滤器）
 
 ## 运行时属性
 
