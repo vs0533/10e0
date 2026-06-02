@@ -100,9 +100,41 @@ public record PagedResult<T>(
 
 使用 `PagedResult<T>.Create(items, total, page, pageSize)` 工厂方法构建。
 
-## 防 SQL 注入
+## ⚠️ 表达式注入风险
 
-`DynamicWhere` 所有用户输入通过 `@0`/`@1` 参数化传入，`System.Linq.Dynamic.Core` 在内部将其编译为 `System.Linq.Expressions.Expression` 参数节点，而非拼接字符串。查询最终由 EF Core 翻译为参数化 SQL，从根本上杜绝注入风险。
+### SQL 注入：已防护 ✅
+
+`DynamicWhere` 所有**值参数**通过 `@0`/`@1` 参数化传入，`System.Linq.Dynamic.Core` 在内部将其编译为 `ParameterExpression` 节点，由 EF Core 翻译为参数化 SQL，从根本上杜绝 SQL 注入。
+
+### 表达式注入：需注意 ⚠️
+
+**WHERE 表达式字符串本身是用户可控的**（如从查询参数直接传入），攻击者可构造恶意表达式绕过软删除、行级权限等 Named Query Filters，或读取敏感字段：
+
+```
+?where=Password.Contains(@0)      # 读取敏感字段
+?where=IsSoftDelete==false||true  # 绕过软删除过滤
+```
+
+**生产环境必须限制可查询的字段和操作符**，推荐采用以下方案之一：
+
+1. **白名单字段** — 校验 expression 中只包含允许的属性名：
+```csharp
+var allowedFields = new[] { "Name", "Amount", "CreateTime", "Status" };
+if (!allowedFields.All(f => query.Where!.Contains(f)))
+    return Results.BadRequest(new { error = "包含不允许的查询字段" });
+```
+
+2. **预定义查询模板** — 不允许用户自由输入表达式，只允许选择预定义过滤条件：
+```csharp
+// 前端传 filterKey，后端映射为安全表达式
+var whereMap = new Dictionary<string, string> {
+    ["byName"] = "Name.Contains(@0)",
+    ["byAmount"] = "Amount >= @0",
+};
+q.WhereIf(whereMap.TryGetValue(filterKey, out var expr), expr!, value);
+```
+
+3. **EntityService 封装** — 在通用查询服务层做统一校验，避免每个 Handler 重复处理。
 
 ## DI 注册
 

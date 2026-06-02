@@ -6,13 +6,13 @@
 
 ## 特性亮点
 
-- **自建 CQRS Dispatcher** — 不依赖 MediatR，消除 12.x+ 商业许可风险。`ICommandDispatcher` + `IQueryDispatcher` 零反射分发
+- **自建 CQRS Dispatcher** — 不依赖 MediatR，消除 12.x+ 商业许可风险。`ICommandDispatcher` 零反射分发（`IQuery` 是语义别名，共用一个分发器）
 - **Pipeline Behavior 链** — Logging → Transaction → Permission → Handler，类 ASP.NET Core 中间件，可插拔组合
 - **EF Core 10 + IDbContextFactory** — 作用域工厂模式，支持并发查询。Named Query Filters 自动注入软删除和行级数据过滤
 - **Outbox Pattern** — 领域事件同事务落库，后台 Relay 异步发布，确保最终一致性
 - **RBAC 权限系统** — 角色 + 权限 Key 两级模型，支持字段级和行级数据权限，分布式缓存加速
-- **动态查询引擎** — 基于表达式树的动态过滤、排序、分页，支持前端传入查询条件，零 SQL 拼接
-- **多后端文件服务** — 统一 `IFileService` 接口，支持本地、MinIO、阿里云 OSS 等后端，自动缩略图
+- **动态查询引擎** — 基于字符串表达式（编译为 LINQ Expression）的动态过滤、排序、分页，参数化防注入
+- **多后端文件服务** — 统一 `IFileService` 接口，支持本地文件系统、阿里云 OSS、AWS S3，自动缩略图与水印
 - **物化路径树** — 组织架构和菜单树使用物化路径（Materialized Path）方案，支持无限层级、高效子树查询和移动
 
 ---

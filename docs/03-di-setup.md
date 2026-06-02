@@ -37,13 +37,15 @@ AddTenE0Core()
 |------|-----------|------|
 | `AddTenE0Core()` | `HttpContextAccessor`, `TimeProvider`, `DistributedMemoryCache`, `ICurrentUserContext`, `IErrs`, `IDataAccessPolicy`, `AuditInterceptor` | **必须最先调用** |
 | `UseTenE0AmbientCurrentUser()` | 切换 `ICurrentUserContext` 为 `AsyncLocal` 实现 | 后台任务 / 测试场景 |
-| `AddTenE0DataContext<T>(Action?)` | `IDbContextFactory<T>`, `DatabaseInitializerService<T>` | DbContext 工厂注册 |
+| `AddTenE0DataContext<T>(Action<IServiceProvider, DbContextOptionsBuilder>)` | `IDbContextFactory<T>`, `DatabaseInitializerService<T>` | DbContext 工厂注册 |
 | `AddTenE0Cqrs(params Assembly[])` | `ICommandDispatcher`, `LoggingBehavior`, 扫描 `ICommandHandler` | CQRS 分发器 |
 | `AddTenE0TransactionBehavior<T>()` | `TransactionBehavior`（Savepoint 机制） | 事务包裹 |
 | `AddTenE0Permissions(Action?)` | `IPermissionEvaluator`, `IPermissionCache`, `PermissionCatalog`, `PermissionBehavior` | 权限评估 |
 | `AddTenE0PermissionStorage<T>()` | `IPermissionStore`, `IPermissionGrantService` | 权限存储 |
 | `AddTenE0PermissionsFromAssembly(Assembly)` | 扫描 `IPermissionProvider`, `IEntityFilterContributor` | 权限定义扫描 |
-| `AddTenE0Identity<TUser,TRole,TContext>(Action)` | JWT + Permissions + Organizations（一站式） | 推荐身份方案 |
+| `AddTenE0Identity<TContext>(Action)` | JWT + Permissions + Organizations（一站式） | 使用默认 `TenE0User`/`TenE0Role` |
+| `AddTenE0Identity<TUser,TContext>(Action)` | 同上 | 自定义 User，默认 Role |
+| `AddTenE0Identity<TUser,TRole,TContext>(Action)` | 同上 | 自定义 User + Role |
 | `AddTenE0JwtAuth<TUser,TContext>(Action)` | `IPasswordHasher`, `IJwtTokenService`, 3 个命令处理器, JWT Bearer | JWT 认证 |
 | `AddTenE0EntityService()` | `IEntityService` | 通用 CRUD |
 | `AddTenE0Menus<T>()` | `IMenuService` | 菜单管理 |

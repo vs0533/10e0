@@ -83,7 +83,9 @@ builder.Services.AddTenE0Cqrs(typeof(Program).Assembly);
 // 一键启用 JWT 认证 + 权限 + 组织
 builder.Services.AddTenE0Identity<AppDbContext>(opt =>
 {
-    opt.Jwt.SigningKey = "my-dev-secret-key-at-least-32-bytes-long!!";
+    // ⚠️ 生产环境必须从配置/环境变量读取，切勿硬编码到源码
+    opt.Jwt.SigningKey = builder.Configuration["Jwt:SigningKey"]
+        ?? throw new InvalidOperationException("Jwt:SigningKey 未配置");
     opt.Jwt.Issuer = "MyApp";
     opt.Jwt.Audience = "MyApp";
 });
@@ -118,4 +120,4 @@ dotnet run
 - [CQRS 命令查询](04-cqrs.md) — 命令、查询、处理器、管道行为
 - [EntityService CRUD](06-entity-service.md) — 增删改查、部分更新、字段权限
 
-> 使用 `AddTenE0Identity` 默认 Seed 的管理员账号：**admin / 111111**
+> 使用 `AddTenE0Identity` 默认 Seed 的管理员账号：**admin / 111111**。**首次登录后请立即修改默认密码！**

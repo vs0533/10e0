@@ -111,10 +111,16 @@ public class Order : AggregateRoot
 2. 设置 `IsSoftDelete = true`、`DeleteTime = now`
 3. 查询时自动过滤：`WHERE IsSoftDelete = false`
 
-**绕过软删除过滤**（慎用）：
+**绕过软删除过滤**：
+
+> ⚠️ `IgnoreQueryFilters()` 会移除**所有**命名过滤器，包括行级安全（DataPrivilege）和动态过滤规则，属安全敏感操作。
 
 ```csharp
-var all = await dc.Set<Product>().IgnoreQueryFilters().ToListAsync();
+// ✅ 推荐：只绕过软删除，保留行级权限过滤
+var all = await dc.Set<Product>().IgnoreQueryFilters(["SoftDelete"]).ToListAsync();
+
+// ❌ 危险：同时绕过软删除 + 行级权限 + 动态过滤
+var unsafe = await dc.Set<Product>().IgnoreQueryFilters().ToListAsync();
 ```
 
 ## 扩展框架用户实体

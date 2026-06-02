@@ -182,7 +182,7 @@ public interface IPipelineBehavior<in TCommand, TResult>
 public interface ITransactional { }
 
 // 标记事务命令
-internal sealed record PublishDemoCommand(string Id) : ICommand<bool>, ITransactional;
+internal sealed record CreateOrderCommand(string CustomerCode, decimal Amount) : ICommand&lt;string&gt;, ITransactional;
 ```
 
 事务行为处理两种场景：
