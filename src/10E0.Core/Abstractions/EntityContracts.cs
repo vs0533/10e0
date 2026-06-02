@@ -30,7 +30,7 @@ public interface ITimerEntity : IBaseEntity
 /// 软删除实体接口。
 /// - AuditInterceptor 自动把 Delete 操作转为 Update（IsSoftDelete=true）
 /// - OnModelCreating 自动注册 Named Query Filter "SoftDelete"，查询时自动过滤
-/// - 需要查询已删除数据时调用 .IgnoreQueryFilters(["SoftDelete"])
+/// - 需要查询已删除数据时调用 .IgnoreQueryFilters()（注意：这会同时绕过行级安全过滤器）
 /// </summary>
 public interface ISoftDeleteEntity : IBaseEntity
 {

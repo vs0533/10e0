@@ -37,3 +37,5 @@ appsettings.*.local.json
 artifacts/
 nupkgs/
 BenchmarkDotNet.Artifacts/
+tests/**/coverage.json
+.omo/
