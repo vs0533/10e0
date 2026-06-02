@@ -10,6 +10,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="10E0.Core.Tests" />
     <!--
       FrameworkReference 已包含 Microsoft.Extensions.* 全套（Caching/Hosting/Logging/Options 等）。
       显式引用同名 PackageReference 会触发 NU1510，所以只列 EF Core 这种不在 AspNetCore.App 共享框架里的包。
