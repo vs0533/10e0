@@ -1,0 +1,91 @@
+name: Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+    branches: [dev, main]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: read
+
+jobs:
+  review:
+    name: Code Review
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout (full history)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install Claude Code CLI
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Get PR diff to file
+        run: |
+          git diff origin/${{ github.base_ref }}...HEAD > /tmp/pr-diff.txt
+          echo "Diff size: $(wc -c < /tmp/pr-diff.txt) bytes"
+
+      - name: Run Code Review
+        id: review
+        continue-on-error: true
+        env:
+          ANTHROPIC_AUTH_TOKEN: ${{ secrets.ALIBABA_API_KEY }}
+          ANTHROPIC_BASE_URL: https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic
+          ANTHROPIC_MODEL: qwen3.7-max
+          ANTHROPIC_DEFAULT_SONNET_MODEL: qwen3.7-max
+          ANTHROPIC_DEFAULT_OPUS_MODEL: qwen3.7-max
+          ANTHROPIC_DEFAULT_HAIKU_MODEL: qwen3.6-flash
+          API_TIMEOUT_MS: "3000000"
+          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
+        run: |
+          cat /tmp/pr-diff.txt | claude -p \
+            --output-format text \
+            --max-turns 1 \
+            "Review this git diff for a .NET 10 / C# 14 enterprise framework PR.
+
+            Focus areas:
+            1. CQRS pattern correctness (ICommand/IHandler contracts, Pipeline Behaviors order)
+            2. EF Core 10 patterns (N+1 queries, DbContext scope, Savepoint transactions)
+            3. Security (permissions, JWT secrets, dynamic LINQ injection, row-level filters)
+            4. Code quality (async/await, NRT, TreatWarningsAsErrors)
+
+            Output format:
+            - 🔴 Critical: Must fix (bugs, security, pattern violations)
+            - 🟡 Suggestion: Recommended improvement
+            - 🟢 Nit: Optional polish
+
+            If no issues found, confirm the PR looks good with a brief summary." \
+            > /tmp/review-output.txt 2>&1
+
+          echo "Review output:"
+          cat /tmp/review-output.txt
+
+      - name: Post Review Comment
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let review = 'Review completed but no output captured.';
+            try {
+              review = fs.readFileSync('/tmp/review-output.txt', 'utf8');
+              if (!review.trim()) review = 'Review produced empty output. Check workflow logs.';
+            } catch (e) {
+              review = 'Review failed to produce output. Check workflow logs.';
+            }
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: `## 🤖 Code Review\n\n${review}`
+            });

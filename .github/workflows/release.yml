@@ -1,0 +1,148 @@
+name: Auto Release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build, Tag & Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout (full history for tags)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore & Build
+        run: |
+          dotnet restore 10e0.slnx
+          dotnet build 10e0.slnx --no-restore -c Release
+
+      - name: Run tests
+        run: dotnet test 10e0.slnx --no-build -c Release
+
+      # ─── Version Computation ───────────────────────────────────────
+      - name: Fetch all tags
+        run: git fetch --tags origin
+
+      - name: Compute next SemVer
+        id: semver
+        shell: bash
+        run: |
+          LATEST_TAG=$(git tag -l 'v*' --sort=-v:refname | head -n 1)
+          LATEST_TAG="${LATEST_TAG:-v0.0.0}"
+          echo "latest_tag=$LATEST_TAG" >> "$GITHUB_OUTPUT"
+
+          VERSION="${LATEST_TAG#v}"
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
+
+          NEW_PATCH=$(( PATCH + 1 ))
+          NEW_VERSION="${MAJOR}.${MINOR}.${NEW_PATCH}"
+          NEW_TAG="v${NEW_VERSION}"
+
+          echo "version=$NEW_VERSION"   >> "$GITHUB_OUTPUT"
+          echo "tag=$NEW_TAG"           >> "$GITHUB_OUTPUT"
+          echo "Next version: $NEW_TAG (from $LATEST_TAG)"
+
+      # ─── Pack NuGet ────────────────────────────────────────────────
+      - name: Pack TenE0.Core NuGet package
+        run: |
+          dotnet pack src/10E0.Core/10E0.Core.csproj \
+            --no-build \
+            -c Release \
+            -o ./nupkgs \
+            /p:Version=${{ steps.semver.outputs.version }} \
+            /p:ContinuousIntegrationBuild=true \
+            /p:PackageReleaseNotes="Release notes: https://github.com/${{ github.repository }}/releases/tag/${{ steps.semver.outputs.tag }}"
+
+      # ─── Changelog ─────────────────────────────────────────────────
+      - name: Generate changelog
+        id: changelog
+        shell: bash
+        run: |
+          PREV_TAG="${{ steps.semver.outputs.latest_tag }}"
+          if [ "$PREV_TAG" = "v0.0.0" ]; then
+            RANGE="HEAD"
+          else
+            RANGE="${PREV_TAG}..HEAD"
+          fi
+
+          FEAT=$(git log $RANGE --pretty=format:"- %s (%h)" --no-merges --grep="^feat"  || true)
+          FIX=$(git log $RANGE  --pretty=format:"- %s (%h)" --no-merges --grep="^fix"   || true)
+          OTHER=$(git log $RANGE --pretty=format:"- %s (%h)" --no-merges --grep="^feat" --grep="^fix" --invert-grep || true)
+
+          {
+            echo "body<<CHANGELOG_EOF"
+            [ -n "$FEAT"  ] && printf "### ✨ Features\n%s\n\n" "$FEAT"
+            [ -n "$FIX"   ] && printf "### 🐛 Fixes\n%s\n\n"   "$FIX"
+            [ -n "$OTHER" ] && printf "### 📝 Other\n%s\n\n"   "$OTHER"
+            [ -z "$FEAT$FIX$OTHER" ] && echo "_No changes recorded._"
+            echo "CHANGELOG_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      # ─── Tag + Push ────────────────────────────────────────────────
+      - name: Create and push Git tag
+        run: |
+          git tag -a ${{ steps.semver.outputs.tag }} \
+            -m "Release ${{ steps.semver.outputs.tag }}"
+          git push origin ${{ steps.semver.outputs.tag }}
+
+      # ─── GitHub Release ────────────────────────────────────────────
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.semver.outputs.tag }}
+          name: "${{ steps.semver.outputs.tag }}"
+          body: |
+            ## TenE0.Core ${{ steps.semver.outputs.version }}
+
+            ${{ steps.changelog.outputs.body }}
+
+            ## Installation
+
+            ```bash
+            dotnet add package TenE0.Core --version ${{ steps.semver.outputs.version }}
+            ```
+
+            **Full changelog**: [Compare ${{ steps.semver.outputs.latest_tag }}...${{ steps.semver.outputs.tag }}](https://github.com/${{ github.repository }}/compare/${{ steps.semver.outputs.latest_tag }}...${{ steps.semver.outputs.tag }})
+          draft: false
+          prerelease: false
+          files: |
+            ./nupkgs/*.nupkg
+            ./nupkgs/*.snupkg
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ─── NuGet.org Publishing ──────────────────────────────────────
+      - name: Publish to NuGet.org
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        run: |
+          if [ -z "$NUGET_API_KEY" ]; then
+            echo "NUGET_API_KEY not set, skipping NuGet publish"
+            exit 0
+          fi
+          dotnet nuget push ./nupkgs/*.nupkg \
+            --api-key "$NUGET_API_KEY" \
+            --source https://api.nuget.org/v3/index.json \
+            --skip-duplicate
