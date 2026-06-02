@@ -111,12 +111,11 @@ public class DemoOrgScopedFilter : EntityFilterContributor<DemoEntity>
 {
     protected override Expression<Func<DemoEntity, bool>>? Build(BaseDataContext context)
     {
-        var dc = (AppDbContext)context;
         return entity =>
-            dc.BypassFilters
-            || !dc.IsAuthenticated
+            context.BypassFilters
+            || !context.IsAuthenticated
             || entity.OrgId == null
-            || entity.OrgId == dc.CurrentOrgId;
+            || context.CurrentOrgIds.Contains(entity.OrgId ?? "");  // CurrentOrgIds 是 BaseDataContext 框架属性（string[]）
     }
 }
 ```

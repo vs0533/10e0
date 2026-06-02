@@ -28,7 +28,9 @@ builder.Services.AddTenE0DataContext<AppDbContext>((_, opt) =>
 builder.Services.AddTenE0Cqrs(typeof(Program).Assembly);
 builder.Services.AddTenE0Identity<AppDbContext>(opt =>
 {
-    opt.Jwt.SigningKey = "your-secret-key-at-least-32-bytes!!";
+    // ⚠️ 生产环境从配置/环境变量读取
+    opt.Jwt.SigningKey = builder.Configuration["Jwt:SigningKey"]
+        ?? throw new InvalidOperationException("Jwt:SigningKey 未配置");
 });
 var app = builder.Build();
 app.UseAuthentication(); app.UseAuthorization();

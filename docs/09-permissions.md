@@ -163,19 +163,18 @@ internal sealed class DemoOrgScopedFilter : EntityFilterContributor<DemoEntity>
 {
     protected override Expression<Func<DemoEntity, bool>>? Build(BaseDataContext context)
     {
-        var dc = (DemoDbContext)context;
         return entity =>
-            dc.BypassFilters              // 超管短路
-            || !dc.IsAuthenticated        // 未登录放行
-            || entity.OrgId == null       // 无组织数据放行
-            || entity.OrgId == dc.CurrentOrgId; // 按组织过滤
+            context.BypassFilters              // 超管短路
+            || !context.IsAuthenticated        // 未登录放行
+            || entity.OrgId == null            // 无组织数据放行
+            || context.CurrentOrgIds.Contains(entity.OrgId ?? ""); // 按组织过滤（CurrentOrgIds 是 string[]）
     }
 }
 ```
 
 - 同一实体多个 contributor 注册时，EF 自动 AND 组合所有过滤条件
 - 需要 OR 语义请在单个表达式内写 `||`
-- 表达式引用 `BaseDataContext` 的属性（如 `CurrentOrgId`），EF 运行时动态传入 SQL 参数
+- 表达式引用 `BaseDataContext` 的属性（如 `CurrentOrgIds`），EF 运行时动态传入 SQL 参数
 
 ---
 

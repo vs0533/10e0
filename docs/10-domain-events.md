@@ -120,6 +120,8 @@ builder.Services.AddTenE0DomainEventHandlersFromAssembly(typeof(Program).Assembl
 4. `aggregate.ClearEvents()` 清空内存列表
 5. EF Core 在同一事务中提交：**业务数据变更 + OutboxMessage 插入 = 原子提交**
 
+> 💡 **事件作用域**：事件的 `Raise` → `PendingEvents` 生命周期绑定到跟踪该聚合的 `DbContext` 实例。确保 `Raise` 和 `SaveChanges` 使用同一个 DbContext，否则事件将丢失。
+
 ### 第三步：OutboxRelay — 后台异步投递
 
 `OutboxRelayService<TContext>`（`BackgroundService`）持续轮询 Outbox 表：

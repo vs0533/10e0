@@ -130,7 +130,7 @@ protected override Expression<Func<DemoEntity, bool>>? Build(BaseDataContext con
     entity => context.BypassFilters
            || !context.IsAuthenticated
            || entity.OrgId == null
-           || entity.OrgId == context.CurrentOrgId;
+           || context.CurrentOrgIds.Contains(entity.OrgId ?? "");
 ```
 
 ### 3. DynamicFilter（运行时配置规则）
