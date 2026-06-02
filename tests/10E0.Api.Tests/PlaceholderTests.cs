@@ -1,5 +1,6 @@
 namespace TenE0.Api.Tests;
 
+[Trait("Category", "Smoke")]
 public class PlaceholderTests
 {
     [Fact]
@@ -9,7 +10,7 @@ public class PlaceholderTests
         var assembly = typeof(Program).Assembly;
 
         // Assert
-        Assert.NotNull(assembly);
-        Assert.Equal("10E0.Api", assembly.GetName().Name);
+        assembly.Should().NotBeNull();
+        assembly.GetName().Name.Should().Be("10E0.Api");
     }
 }
