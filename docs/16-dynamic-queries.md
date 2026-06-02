@@ -119,10 +119,13 @@ public record PagedResult<T>(
 
 **生产环境必须限制可查询的字段和操作符**，推荐采用以下方案之一：
 
-1. **白名单字段** — 校验 expression 中只包含允许的属性名：
+1. **白名单字段** — 提取表达式中的标识符，校验是否全在允许列表中：
 ```csharp
-var allowedFields = new[] { "Name", "Amount", "CreateTime", "Status" };
-if (!allowedFields.All(f => query.Where!.Contains(f)))
+var allowed = new HashSet<string> { "Name", "Amount", "CreateTime", "Status" };
+var identifiers = Regex.Matches(query.Where!, @"[A-Z][A-Za-z0-9_]*")
+    .Select(m => m.Value)
+    .Distinct();
+if (identifiers.Any(id => !allowed.Contains(id)))
     return Results.BadRequest(new { error = "包含不允许的查询字段" });
 ```
 
@@ -154,10 +157,16 @@ app.MapGet("/demo/query", async (
 {
     var q = db.Orders.AsQueryable();
 
-    // 白名单校验：只允许查询这些字段
-    var allowedFields = new[] { "Name", "Amount", "CreateTime", "Status" };
-    if (!string.IsNullOrEmpty(query.Where) && !allowedFields.All(f => query.Where.Contains(f)))
-        return Results.BadRequest(new { error = "包含不允许的查询字段" });
+    // 白名单校验：提取标识符，检查是否全在允许列表中
+    using System.Text.RegularExpressions;
+    var allowed = new HashSet<string> { "Name", "Amount", "CreateTime", "Status" };
+    if (!string.IsNullOrEmpty(query.Where))
+    {
+        var identifiers = Regex.Matches(query.Where!, @"[A-Z][A-Za-z0-9_]*")
+            .Select(m => m.Value).Distinct();
+        if (identifiers.Any(id => !allowed.Contains(id)))
+            return Results.BadRequest(new { error = "包含不允许的查询字段" });
+    }
 
     // 动态 WHERE
     q = q.WhereIf(!string.IsNullOrEmpty(query.Where), query.Where!);

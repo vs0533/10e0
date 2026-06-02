@@ -158,4 +158,6 @@ services.Replace(ServiceDescriptor.Scoped<IOutboxPublisher, KafkaOutboxPublisher
 | **自包含上下文** | handler 不应查库补全数据，事件本身携带全部所需信息 |
 | **JSON 可序列化** | 事件字段类型必须被 `System.Text.Json` 支持 |
 | **Raise 是 protected** | 仅聚合根内部可触发，外部需通过聚合的业务方法间接调用 |
+
+> ⚠️ **多实例部署**：两个 Relay 实例可能竞争同一条消息导致重复投递。建议使用 `FOR UPDATE SKIP LOCKED`（PostgreSQL/MySQL 8.0+）或 `WITH (UPDLOCK, ROWLOCK, READPAST)`（SQL Server）在查询时加行锁，使各实例独立处理不同消息。当前默认实现未包含锁机制，多实例需自行添加。
 | **多实例部署** | 两个实例的 Relay 可能竞争同一条消息。建议方案：① 使用数据库行锁 `FOR UPDATE SKIP LOCKED`（PostgreSQL/MySQL 8.0+）让 Relay 查询自动跳过被锁行；② 或用分布式锁（如 Redis RedLock）协调 Relay 实例。当前默认实现未包含锁机制，多实例部署需自行添加。 |

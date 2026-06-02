@@ -22,6 +22,8 @@
 ## 快速开始
 
 ```csharp
+var connectionString = builder.Configuration.GetConnectionString("Default");
+
 builder.Services.AddTenE0Core();
 builder.Services.AddTenE0DataContext<AppDbContext>((_, opt) =>
     opt.UseSqlServer(connectionString));

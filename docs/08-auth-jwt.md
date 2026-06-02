@@ -183,6 +183,7 @@ PBKDF2-SHA256 验证密码哈希
 签发令牌对：
   - Access Token：JWT（sub/name/user_type/role 写入 claims）
   - Refresh Token：32B 随机 → base64url → SHA-256 哈希存 DB
+    （原始令牌 256 位熵，暴力破解不可行；SHA-256 仅做防 DB 泄漏明文回推）
        │
        ▼
 返回 AuthResult（含两个令牌、过期时间、用户信息）

@@ -14,10 +14,9 @@ BaseEntity (abstract)           ← Id = Guid.NewGuid().ToString("N")
 ITimerEntity → TimedEntity     ← + CreateTime/CreateBy/UpdateTime/UpdateBy
     ↑
 ISoftDeleteEntity → AuditedEntity ← + IsSoftDelete/DeleteTime/DeleteBy 【最常用】
-    ↑
+    ↑                    ↑
 ITreeEntity → TreeAuditedEntity  ← + ParentId（树形结构）
-    ↑
-AggregateRoot                    ← + Raise(IDomainEvent) 领域事件
+                AggregateRoot     ← + Raise(IDomainEvent) 领域事件
 ```
 
 ## 各基类说明
