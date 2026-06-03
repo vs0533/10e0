@@ -38,4 +38,8 @@ artifacts/
 nupkgs/
 BenchmarkDotNet.Artifacts/
 tests/**/coverage.json
+tests/**/text.json
 .omo/
+
+## ===== Claude Code workspace =====
+.claude/

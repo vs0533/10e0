@@ -37,6 +37,8 @@ public static class AuthModelBuilderExtensions
             b.HasIndex(t => t.UserCode);
             b.Property(t => t.ReplacedByTokenHash).HasMaxLength(128);
             b.Property(t => t.CreatedByIp).HasMaxLength(64);
+            b.Property(t => t.RevokedReason).HasMaxLength(64);
+            b.HasIndex(t => t.RevokedAt);
         });
 
         return mb;
