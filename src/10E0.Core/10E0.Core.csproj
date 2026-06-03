@@ -20,11 +20,11 @@
     <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.0" />
     <!-- JWT 认证（JwtBearer + token handler 不在 AspNetCore.App 共享框架内） -->
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.0" />
-    <PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="8.2.1" />
+    <PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="8.18.0" />
     <!-- 动态 LINQ 查询 -->
-    <PackageReference Include="System.Linq.Dynamic.Core" Version="1.6.0" />
+    <PackageReference Include="System.Linq.Dynamic.Core" Version="1.7.2" />
     <!-- 阿里云 OSS 存储 -->
-    <PackageReference Include="Aliyun.OSS.SDK.NetCore" Version="2.13.0" />
+    <PackageReference Include="Aliyun.OSS.SDK.NetCore" Version="2.14.1" />
     <!-- AWS S3 存储 -->
     <PackageReference Include="AWSSDK.S3" Version="3.7.305.7" />
     <!-- 图片处理 -->
