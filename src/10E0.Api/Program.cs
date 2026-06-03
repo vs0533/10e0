@@ -74,7 +74,7 @@ builder.Services.AddTenE0DomainEventHandlersFromAssembly(typeof(Program).Assembl
 builder.Services.AddTenE0DynamicFilters<DemoDbContext>();
 
 // 文件上传
-builder.Services.AddTenE0Files(options =>
+builder.Services.AddTenE0Files<DemoDbContext>(options =>
 {
     options.BasePath = "uploads";
     options.BaseUrl = "/uploads";
@@ -489,20 +489,20 @@ app.MapPatch("/admin/data-filters/{id}/toggle", async (string id, bool enabled, 
     }
     else
     {
-    var connStr = ctx.Database.GetConnectionString() ?? "";
-    // 将 EF provider name 映射为 ADO.NET provider name
-    // Microsoft.EntityFrameworkCore.SqlServer → System.Data.SqlClient
-    if (!string.IsNullOrEmpty(connStr))
-    {
-        var adoProvider = providerName switch
+        var connStr = ctx.Database.GetConnectionString() ?? "";
+        // 将 EF provider name 映射为 ADO.NET provider name
+        // Microsoft.EntityFrameworkCore.SqlServer → System.Data.SqlClient
+        if (!string.IsNullOrEmpty(connStr))
         {
-            "Microsoft.EntityFrameworkCore.SqlServer" => "System.Data.SqlClient",
-            "Npgsql.EntityFrameworkCore.PostgreSQL" => "Npgsql",
-            "Pomelo.EntityFrameworkCore.MySql" => "MySqlConnector",
-            _ => providerName
-        };
-        await filterProvider.LoadRulesAsync(connStr, adoProvider);
-    }
+            var adoProvider = providerName switch
+            {
+                "Microsoft.EntityFrameworkCore.SqlServer" => "System.Data.SqlClient",
+                "Npgsql.EntityFrameworkCore.PostgreSQL" => "Npgsql",
+                "Pomelo.EntityFrameworkCore.MySql" => "MySqlConnector",
+                _ => providerName
+            };
+            await filterProvider.LoadRulesAsync(connStr, adoProvider);
+        }
     } // end else (non-InMemory)
 }
 
@@ -658,10 +658,10 @@ internal sealed class PermissionSeeder(IDbContextFactory<DemoDbContext> dcFactor
         if (await dc.Roles.AnyAsync(cancellationToken)) return; // 幂等
 
         dc.Roles.AddRange(
-            new TenE0Role { Code = "viewer",      Name = "查看者" },
-            new TenE0Role { Code = "editor",      Name = "编辑者" },
-            new TenE0Role { Code = "manager",     Name = "管理者" },
-            new TenE0Role { Code = "hr",          Name = "人事（管薪资）" },
+            new TenE0Role { Code = "viewer", Name = "查看者" },
+            new TenE0Role { Code = "editor", Name = "编辑者" },
+            new TenE0Role { Code = "manager", Name = "管理者" },
+            new TenE0Role { Code = "hr", Name = "人事（管薪资）" },
             new TenE0Role { Code = "super_admin", Name = "超级管理员" });
 
         dc.RolePermissions.AddRange(
@@ -1020,7 +1020,7 @@ internal sealed class AuthSeeder(
             var bj = await orgTree.AddAsync("BJ", "北京分公司", parentId: hq.Id, cancellationToken: ct);
             var sh = await orgTree.AddAsync("SH", "上海分公司", parentId: hq.Id, cancellationToken: ct);
             await orgTree.AddAsync("BJ-SALES", "北京销售部", parentId: bj.Id, cancellationToken: ct);
-            await orgTree.AddAsync("BJ-TECH",  "北京技术部", parentId: bj.Id, cancellationToken: ct);
+            await orgTree.AddAsync("BJ-TECH", "北京技术部", parentId: bj.Id, cancellationToken: ct);
             await orgTree.AddAsync("SH-SALES", "上海销售部", parentId: sh.Id, cancellationToken: ct);
         }
     }
