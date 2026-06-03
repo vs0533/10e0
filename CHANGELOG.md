@@ -11,6 +11,34 @@
 
 - 暂无
 
+### Changed
+
+- `FileService` 泛型化为 `FileService<TContext>`（不再硬绑定 `TenE0SystemDbContext`），调用方需用 `AddTenE0Files<YourDbContext>()` 显式指定（见 [#6](https://github.com/vs0533/10e0/pull/6)）
+- OSS / S3 Options 在构造期校验凭据（拒绝 `TODO`、`CHANGE_ME`、`PLACEHOLDER` 等占位符），错误消息指向环境变量名和 IAM / RAM Role 文档（[#6](https://github.com/vs0533/10e0/pull/6)）
+- 缩略图命名从 `thumb_{file}` 改为 `{name}_thumb{ext}`，避免上传 `thumb.jpg` 时出现 `thumb_thumb.jpg` 这类前缀重复，且让缩略图与原图在文件列表中相邻排序（[#6](https://github.com/vs0533/10e0/pull/6)）
+
+### Security
+
+- Refresh Token Rotation（OWASP 模式）：每次成功 refresh 旧 token 同事务撤销，新 token 写入；检测到旧 token 重放则撤销该用户全部活跃 token；新增 `JwtOptions.RefreshTokenRotationEnabled` 与 `SlidingRefreshExpiration`（默认均为 true）；`TenE0RefreshToken` 新增 `RevokedReason` 列（length 64）。需要 EF migration 升级 schema（[#6](https://github.com/vs0533/10e0/pull/6)）
+
+### Dependencies
+
+- 升级 `System.IdentityModel.Tokens.Jwt` 8.2.1 → 8.18.0（[#6](https://github.com/vs0533/10e0/pull/6)）
+- 升级 `System.Linq.Dynamic.Core` 1.6.0 → 1.7.2（[#6](https://github.com/vs0533/10e0/pull/6)）
+- 升级 `Aliyun.OSS.SDK.NetCore` 2.13.0 → 2.14.1（[#6](https://github.com/vs0533/10e0/pull/6)）
+
+### Infrastructure
+
+- 新增 `LICENSE`（MIT）、`CHANGELOG.md`、`CONTRIBUTING.md`（[#6](https://github.com/vs0533/10e0/pull/6)）
+- 新增 `dependabot.yml`：NuGet + GitHub Actions 周度更新，按 `Microsoft.*` / `AWSSDK.*` 分组减少 PR 噪音（[#6](https://github.com/vs0533/10e0/pull/6)）
+- 新增 `codeql.yml`：csharp 推送 / PR / 周扫，manual build mode 适配 .NET 10 slnx（[#6](https://github.com/vs0533/10e0/pull/6)）
+- PR build 加 `dotnet format --verify-no-changes` 门禁（[#6](https://github.com/vs0533/10e0/pull/6)）
+
+### Tests
+
+- 行覆盖率 78.18% → 83.48%；新增 41 个测试覆盖 CQRS 并发 / Savepoint 嵌套 / Refresh Token 旋转 / DI 扩展契约 / DynamicFilterProvider / BaseDataContext OnModelCreating（[#6](https://github.com/vs0533/10e0/pull/6)）
+- 测试依赖新增 `Microsoft.Data.Sqlite 10.0.0`（[#6](https://github.com/vs0533/10e0/pull/6)）
+
 ## [0.0.1] - 2026-06-02
 
 10E0 (TenE0) 框架首个公开版本，从 `code/E0.Core/` (.NET 6) 重构而来，
@@ -50,7 +78,7 @@
 
 ### Tests
 
-- 覆盖率从 53% 提升到 80%（新增 97 个测试）
+- 覆盖率从 53% 提升到 80%（新增 97 个测试，见 [#2](https://github.com/vs0533/10e0/pull/2)）
 - xUnit + EF Core InMemory + coverlet
 - API 集成测试基于 `WebApplicationFactory`
 
