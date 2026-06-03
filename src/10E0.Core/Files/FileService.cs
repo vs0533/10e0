@@ -93,7 +93,10 @@ public class FileService<TContext>(
             {
                 stream.Position = 0;
                 var thumbnailStream = await imageProcessor.GenerateThumbnailAsync(stream, options.ThumbnailWidth, options.ThumbnailHeight, ct);
-                var thumbnailResult = await storage.StoreAsync(thumbnailStream, $"thumb_{fileName}", "image/jpeg", ct);
+                // 缩略图文件名：原名 + "_thumb" 后缀（避免 thumb.jpg → thumb_thumb.jpg 的前缀重复，
+                // 也让缩略图与原图在文件列表中相邻排序）。
+                var thumbnailName = $"{Path.GetFileNameWithoutExtension(fileName)}_thumb{Path.GetExtension(fileName)}";
+                var thumbnailResult = await storage.StoreAsync(thumbnailStream, thumbnailName, "image/jpeg", ct);
 
                 if (thumbnailResult.Success)
                 {

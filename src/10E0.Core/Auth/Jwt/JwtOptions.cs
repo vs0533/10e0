@@ -27,8 +27,10 @@ public sealed class JwtOptions
     public bool RefreshTokenRotationEnabled { get; set; } = true;
 
     /// <summary>
-    /// 滑动过期：成功 refresh 时新 token 的过期时间是否刷新为 now + RefreshTokenLifetime。
-    /// 仅在 <see cref="RefreshTokenRotationEnabled"/> = true 时生效。
+    /// 滑动过期：成功 refresh 时新签发 token 的过期时间是否刷新为 now + <see cref="RefreshTokenLifetime"/>。
+    /// 与 <see cref="RefreshTokenRotationEnabled"/> 互相独立：
+    /// 即使关闭 rotation，handler 仍会写入新 token 行（旧 token 不撤销），新 token 的过期时间仍受此开关影响。
+    /// 关闭此开关时，新 token 保留原 token 未来的过期时间（不会延长，但也不会缩短）。
     /// </summary>
     public bool SlidingRefreshExpiration { get; set; } = true;
 }

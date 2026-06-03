@@ -229,7 +229,7 @@ public sealed class DynamicFilterProviderTests
     [Fact]
     public async Task LoadRulesAsync_NullableDescription_HandledGracefully()
     {
-        const string sharedConn = "Data Source=file:desc-test?mode=memory&cache=shared";
+        const string sharedConn = "Data Source=file:desc-test;Mode=Memory;Cache=Shared";
         using (var seed = new SqliteConnection(sharedConn))
         {
             seed.Open();
@@ -269,7 +269,7 @@ public sealed class DynamicFilterProviderTests
     [Fact]
     public void ApplyDynamicFilters_EntityNotInModel_LogsAndSkips()
     {
-        const string sharedConn = "Data Source=file:missing-entity?mode=memory&cache=shared";
+        const string sharedConn = "Data Source=file:missing-entity;Mode=Memory;Cache=Shared";
         using (var seed = new SqliteConnection(sharedConn))
         {
             seed.Open();
@@ -293,7 +293,7 @@ public sealed class DynamicFilterProviderTests
     [Fact]
     public async Task ApplyDynamicFilters_InvalidRuleJson_LogsAndContinues()
     {
-        const string sharedConn = "Data Source=file:bad-json?mode=memory&cache=shared";
+        const string sharedConn = "Data Source=file:bad-json;Mode=Memory;Cache=Shared";
         using (var seed = new SqliteConnection(sharedConn))
         {
             seed.Open();
