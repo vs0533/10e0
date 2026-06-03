@@ -18,7 +18,24 @@
 |------|------|
 | `Storage/` | 存储后端实现（Local / AWS S3 / Aliyun OSS）+ EF 映射 |
 
-## 存储后端
+## 新增功能
+
+这是旧 E0.Core 中没有的模块，为重构新增。
+
+## 设计决策
+
+### FileService 泛型化（PR #6）
+
+`FileService<TContext>` 消除硬绑定 `TenE0SystemDbContext`：
+
+- **接口签名**：`FileService<TContext> where TContext : DbContext`
+- **业务自定义 DbContext** 需在 `OnModelCreating` 调用 `modelBuilder.ConfigureTenE0FileAttachmentTables()`
+- **DI 注册**：
+  - `AddTenE0Files<TContext>()` — 仅文件服务
+  - `AddTenE0FilesWithAliyunOss<TContext>()` — 阿里云 OSS
+  - `AddTenE0FilesWithAwsS3<TContext>()` — AWS S3
+
+### 存储后端
 
 | 实现 | 说明 |
 |------|------|
@@ -28,6 +45,9 @@
 
 通过 DI 切换，业务代码只依赖 `IFileStorage`。
 
-## 新增功能
+#### 凭据校验（PR #6）
 
-这是旧 E0.Core 中没有的模块，为重构新增。
+`AliyunOssOptions` / `AwsS3Options` 在构造期校验，拒绝占位符值：
+
+- 检测：`TODO`、`CHANGE_ME`、`PLACEHOLDER`、`your-` 等未替换凭据
+- 构造时 `Validate()` 失败则抛 `OptionsValidationException`，防止部署到生产环境才发现

@@ -24,7 +24,7 @@ AddTenE0Core()
   → AddTenE0DomainEvents<TContext>()
   → AddTenE0DomainEventHandlersFromAssembly()
   → AddTenE0DynamicFilters<TContext>()
-  → AddTenE0Files() / AddTenE0FilesWithAliyunOss() / AddTenE0FilesWithAwsS3()
+  → AddTenE0Files<TContext>() / AddTenE0FilesWithAliyunOss<TContext>() / AddTenE0FilesWithAwsS3<TContext>()
 ```
 
 `AddTenE0Core()` 必须最先调用，它提供所有下游组件依赖的基础服务。
@@ -54,9 +54,9 @@ AddTenE0Core()
 | `AddTenE0DomainEvents<T>(Action?)` | `IDomainEventDispatcher`, `OutboxInterceptor`, `IOutboxPublisher`, `OutboxRelayService` | 领域事件 + Outbox |
 | `AddTenE0DomainEventHandlersFromAssembly(Assembly)` | 扫描 `IDomainEventHandler<T>` | 事件处理器 |
 | `AddTenE0DynamicFilters<T>()` | `IDynamicFilterProvider`, `IDataFilterRuleService` | 动态数据过滤 |
-| `AddTenE0Files(Action?)` | `IFileService`, `IFileStorage`(Local), `IImageProcessor` | 文件上传（本地） |
-| `AddTenE0FilesWithAliyunOss(Action)` | 同上 + `AliyunOssStorage` | 文件上传（OSS） |
-| `AddTenE0FilesWithAwsS3(Action)` | 同上 + `AwsS3Storage` | 文件上传（S3） |
+| `AddTenE0Files<TContext>(Action?)` | `IFileService`, `IFileStorage`(Local), `IImageProcessor` | 文件上传（本地） |
+| `AddTenE0FilesWithAliyunOss<TContext>(Action)` | 同上 + `AliyunOssStorage` | 文件上传（OSS） |
+| `AddTenE0FilesWithAwsS3<TContext>(Action)` | 同上 + `AwsS3Storage` | 文件上传（S3） |
 
 ---
 
@@ -145,7 +145,7 @@ builder.Services.AddTenE0DomainEvents<AppDbContext>();
 builder.Services.AddTenE0DomainEventHandlersFromAssembly(typeof(Program).Assembly);
 
 // 文件存储
-builder.Services.AddTenE0FilesWithAliyunOss(opt =>
+builder.Services.AddTenE0FilesWithAliyunOss<AppDbContext>(opt =>
 {
     opt.Endpoint = "oss-cn-hangzhou.aliyuncs.com";
     opt.Bucket = "my-app-bucket";

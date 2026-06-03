@@ -167,8 +167,8 @@ builder.Services.AddTenE0DomainEvents<DemoDbContext>(opt =>
 // 9️⃣  动态数据过滤
 builder.Services.AddTenE0DynamicFilters<DemoDbContext>();
 
-// 🔟  文件上传（本地存储、S3、OSS 可切换）
-builder.Services.AddTenE0Files(options =>
+// 🔟  文件上传（本地存储、S3、OSS 可切换；PR #6 起 AddTenE0Files 需带 TContext 泛型）
+builder.Services.AddTenE0Files<DemoDbContext>(options =>
 {
     options.BasePath = "uploads";
     options.BaseUrl = "/uploads";

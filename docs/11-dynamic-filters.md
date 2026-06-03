@@ -216,9 +216,24 @@ app.MapPatch("/admin/data-filters/{id}/toggle", ...);
 
 ## DI 注册
 
+### DbProviderFactory 注册
+
+动态过滤规则在启动时通过原始 ADO.NET 加载（绕过 DbContext 的 `OnModelCreating` 避免递归），需要注册对应数据库的 `DbProviderFactory`：
+
 ```csharp
 // Program.cs
 builder.Services.AddTenE0DynamicFilters<DemoDbContext>();
+
+// 启动时加载规则
+using (var scope = app.Services.CreateScope())
+{
+    var filterProvider = scope.ServiceProvider.GetRequiredService<IDynamicFilterProvider>();
+    var contextFactory = scope.ServiceProvider.GetRequiredService<IDbContextFactory<DemoDbContext>>();
+    using var ctx = await contextFactory.CreateDbContextAsync();
+    var connStr = ctx.Database.GetConnectionString() ?? "";
+    // 将 EF provider name 映射为 ADO.NET provider name 后调用
+    await filterProvider.LoadRulesAsync(connStr, adoProvider);
+}
 ```
 
 内部注册：
@@ -228,20 +243,14 @@ builder.Services.AddTenE0DynamicFilters<DemoDbContext>();
 | `IDynamicFilterProvider` | Singleton | 缓存规则，在 `OnModelCreating` 时注册 Named Query Filter |
 | `IDataFilterRuleService` | Scoped | 规则 CRUD 管理（每请求独立事务） |
 
-### 启动时加载规则
+### DbProviderFactory 注册（按数据库）
 
 ```csharp
-// Program.cs — 在 app.Build() 之后执行
-using (var scope = app.Services.CreateScope())
-{
-    var filterProvider = scope.ServiceProvider.GetRequiredService<IDynamicFilterProvider>();
-    var contextFactory = scope.ServiceProvider.GetRequiredService<IDbContextFactory<DemoDbContext>>();
-    using var ctx = await contextFactory.CreateDbContextAsync();
-    var providerName = ctx.Database.ProviderName ?? "";
-    var connStr = ctx.Database.GetConnectionString() ?? "";
-    // 将 EF provider name 映射为 ADO.NET provider name 后调用
-    await filterProvider.LoadRulesAsync(connStr, adoProvider);
-}
+// SQL Server / Azure SQL
+DbProviderFactories.RegisterFactory("Microsoft.Data.SqlClient", SqlClientFactory.Instance);
+```
+
+> 注意：.NET 10 / EF Core 10 默认使用 `Microsoft.Data.SqlClient`（前身为 `System.Data.SqlClient`，已 archive）。
 ```
 
 ## 完整 JSON 规则示例
