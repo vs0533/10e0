@@ -50,7 +50,8 @@ public sealed class LogoutCommandHandlerTests
         {
             ctx.RefreshTokens.Add(new TenE0RefreshToken
             {
-                TokenHash = "hash1", UserCode = "u001",
+                TokenHash = "hash1",
+                UserCode = "u001",
                 ExpiresAt = DateTimeOffset.UtcNow.AddDays(7)
             });
             await ctx.SaveChangesAsync();
@@ -83,7 +84,8 @@ public sealed class LogoutCommandHandlerTests
         {
             ctx.RefreshTokens.Add(new TenE0RefreshToken
             {
-                TokenHash = "hash1", UserCode = "u001",
+                TokenHash = "hash1",
+                UserCode = "u001",
                 ExpiresAt = DateTimeOffset.UtcNow.AddDays(7),
                 RevokedAt = DateTimeOffset.UtcNow.AddMinutes(-5)
             });
