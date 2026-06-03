@@ -490,13 +490,14 @@ app.MapPatch("/admin/data-filters/{id}/toggle", async (string id, bool enabled, 
     else
     {
         var connStr = ctx.Database.GetConnectionString() ?? "";
-        // 将 EF provider name 映射为 ADO.NET provider name
-        // Microsoft.EntityFrameworkCore.SqlServer → System.Data.SqlClient
+        // 将 EF provider name 映射为 ADO.NET provider invariant name
+        // Microsoft.EntityFrameworkCore.SqlServer → Microsoft.Data.SqlClient
+        // (System.Data.SqlClient 已 archive，.NET 10 / EF Core 10 默认使用 Microsoft.Data.SqlClient)
         if (!string.IsNullOrEmpty(connStr))
         {
             var adoProvider = providerName switch
             {
-                "Microsoft.EntityFrameworkCore.SqlServer" => "System.Data.SqlClient",
+                "Microsoft.EntityFrameworkCore.SqlServer" => "Microsoft.Data.SqlClient",
                 "Npgsql.EntityFrameworkCore.PostgreSQL" => "Npgsql",
                 "Pomelo.EntityFrameworkCore.MySql" => "MySqlConnector",
                 _ => providerName

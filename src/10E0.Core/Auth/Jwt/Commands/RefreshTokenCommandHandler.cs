@@ -94,7 +94,8 @@ public sealed class RefreshTokenCommandHandler<TUser, TContext>(
         var tokens = tokenService.Issue(user.UserCode, user.DisplayName, user.UserType, roles);
 
         // 滑动过期：新 refresh token 的过期时间刷新为 now + RefreshTokenLifetime
-        // 关闭滑动时保持原过期时间（不会超过原过期时间）
+        // 关闭滑动时保留原 token 的剩余有效期；按 JWT 'exp' 语义 record.ExpiresAt == now 视为已到期，
+        // 此时回退为重新签发完整 lifetime（也覆盖 record.ExpiresAt < now 的防御性兜底）。
         var newRefreshExpires = slidingEnabled
             ? now.Add(options.RefreshTokenLifetime)
             : (record.ExpiresAt > now ? record.ExpiresAt : now.Add(options.RefreshTokenLifetime));
