@@ -119,8 +119,12 @@ CommandManager 在嵌套事务时会抛出 InvalidOperationException，
 - [ ] 已执行 `git diff --cached --stat` 确认暂存内容无误
 - [ ] 没有提交生成文件（`coverage.json`、`*.xml`、`.DS_Store`、`.omo/` 等）
 - [ ] 遵循 `.editorconfig` 与项目编码规范
-- [ ] 公共 API 变更已更新对应 `docs/*.md` 文档
-- [ ] `CHANGELOG.md` 的 `## [Unreleased]` 章节已更新（如适用）
+- [ ] **相关文档已同步更新**（任何代码 / 行为 / CI 变更都要逐项检查）：
+  - `docs/*.md` — 用户面向的功能 / API 文档
+  - 受影响模块的 `src/10E0.Core/**/CLAUDE.md` — 模块设计决策与文件清单
+  - `.github/CLAUDE.md` — 如改了 workflow / dependabot / CodeQL
+  - `tests/CLAUDE.md` — 如新增测试文件或覆盖率显著变化
+- [ ] `CHANGELOG.md` 的 `## [Unreleased]` 章节已更新（如适用），条目链接回本 PR 编号
 - [ ] 新增或修改的公共 API 提供 XML 文档注释
 - [ ] 未引入未经讨论的破坏性变更（破坏性变更需先开 RFC Issue 达成共识）
 

@@ -24,9 +24,9 @@ dotnet test --collect:"XPlat Code Coverage"    # 带覆盖率
 
 ## 当前状态
 
-- **10E0.Core.Tests**: 535 个单元测试，覆盖 Auth/Jwt、Cqrs、Permissions、Events/Outbox、DynamicFilters、EntityService、Files、Hosting、Json、Menus、Organizations、Queries、Sequences 等 17 个模块
+- **10E0.Core.Tests**: 592 个单元测试，覆盖 Auth/Jwt、Cqrs、Permissions、Events/Outbox、DynamicFilters、EntityService、Files、Hosting、Json、Menus、Organizations、Queries、Sequences 等 17 个模块
 - **10E0.Api.Tests**: 1 个占位测试（程序集加载验证），集成测试待添加
-- **CI 覆盖率阈值**: 行 80%（已达标：80.34% 行 / 85.18% 分支 / 83.54% 方法）
+- **CI 覆盖率阈值**: 行 80%（已达标：83.48% 行 / 87.99% 分支 / 83.80% 方法）
 
 ### 各模块测试文件
 
@@ -35,13 +35,15 @@ dotnet test --collect:"XPlat Code Coverage"    # 带覆盖率
 | Abstractions | EntityContracts, DefaultDataAccessPolicy | 2 |
 | Auth | AuthCommands, HttpCurrentUserContext, AmbientCurrentUserContext | 3 |
 | Auth/Jwt | JwtTokenService, Pbkdf2PasswordHasher | 2 |
-| Auth/Jwt/Commands | LoginCommandHandler, RefreshTokenCommandHandler, LogoutCommandHandler | 3 |
+| Auth/Jwt/Commands | LoginCommandHandler, RefreshTokenCommandHandler (rotation + sliding + reuse), LogoutCommandHandler | 3 |
 | Auth/Jwt/Storage | AuthModelBuilderExtensions | 1 |
 | Common | ApiResult | 1 |
-| Cqrs | CommandDispatcher | 1 |
-| Cqrs/Behaviors | TransactionBehavior, LoggingBehavior | 2 |
+| DataContext | BaseDataContextTests (OnModelCreating 各 filter 注册) | 13 |
+| Cqrs | CommandDispatcher (基础 + 并发 + 边界) | 12 |
+| Cqrs/Behaviors | TransactionBehavior (嵌套 Savepoint 边界), LoggingBehavior | 11 |
 | DataContext/Interceptors | AuditInterceptor | 1 |
-| DynamicFilters | FilterExpressionBuilder, ConditionRule, DataFilterRuleService | 3 |
+| DependencyInjection | PermissionsExtensionsTests (AddTenE0Permissions/Storage/FromAssembly) | 15 |
+| DynamicFilters | FilterExpressionBuilder, ConditionRule, DataFilterRuleService, **DynamicFilterProvider (SQLite + DbProviderFactories)** | 13 |
 | Entities | BaseEntity | 1 |
 | EntityService | Create, Update, Delete, WriteOptions | 4 |
 | EntityService/Relations | RelationProcessor | 1 |
@@ -65,7 +67,12 @@ dotnet test --collect:"XPlat Code Coverage"    # 带覆盖率
 
 ### 已知覆盖缺口（跳过，非高质量测试目标）
 
-- `DependencyInjection/` — 纯 IServiceCollection 注册样板代码
 - `Files/Storage/AwsS3Storage` + `AliyunOssStorage` — 外部 SDK 依赖，需集成测试
-- `DynamicFilters/DynamicFilterProvider` — 需真实 DB 连接和 DbProviderFactory
+- `DependencyInjection/` 其他扩展 — `CqrsServiceCollectionExtensions` / `JwtAuthExtensions` 等仍有缺口
 - `TenE0*` 实体模型类 — 无业务逻辑的 POCO 属性定义
+
+## 测试依赖
+
+| 包 | 版本 | 用途 |
+|----|------|------|
+| `Microsoft.Data.Sqlite` | 10.0.0 | `DynamicFilterProvider` 测试（真实 SQLite 连接 + DbProviderFactories） |

@@ -4,6 +4,22 @@
 
 ---
 
+## 破坏性变更（Breaking Change）
+
+`AddTenE0Files` 系列方法从 **PR #6** 起要求泛型参数 `TContext`：
+
+```csharp
+// 旧写法（编译失败）
+services.AddTenE0Files(options => ...);
+
+// 新写法
+services.AddTenE0Files<DemoDbContext>(options => ...);
+```
+
+业务方 DbContext 需在 `OnModelCreating` 中调用 `ConfigureTenE0FileAttachmentTables()` 注册 `TenE0FileAttachment` 实体（继承 `TenE0SystemDbContext` 的 DbContext 已自动完成）。
+
+---
+
 ## 架构总览
 
 ```
@@ -102,6 +118,17 @@ public class LocalStorageOptions
 `AliyunOssOptions`：`Endpoint`、`AccessKeyId`、`AccessKeySecret`、`BucketName`
 `AwsS3Options`：`AccessKey`、`SecretKey`、`Region`（默认 `us-east-1`）、`BucketName`
 
+### OSS / S3 凭据校验
+
+`AliyunOssOptions.Validate()` 和 `AwsS3Options.Validate()` 在构造期自动校验：
+
+- 必填字段（Endpoint / AccessKeyId 等）不能为空
+- 占位符黑名单：`TODO` / `CHANGE_ME` / `PLACEHOLDER` / `your-`（大小写不敏感）
+
+校验失败时抛出 `OptionsValidationException`，提示配置环境变量路径（`OSS__AccessKeyId` / `AWS__AccessKey`）及推荐做法（IAM Role / RAM Role）。
+
+> 生产环境推荐做法：将凭据放入环境变量（`OSS__AccessKeyId`、`AWS__AccessKey`）或使用云厂商 IAM/RAM Role，切勿将真实凭据提交到源代码仓库或 `appsettings.*.json`。本地开发使用 `dotnet user-secrets`。
+
 ---
 
 ## 图片处理（SixLabors.ImageSharp）
@@ -148,6 +175,18 @@ public class ImageProcessOptions
 2. **水印**：Arial 24px 字体，白色 50% 透明度，右下角定位
 3. **输出编码**：`JpegEncoder` + 配置的 `Quality`
 4. **缩略图**：`ResizeMode.Crop` 居中裁剪，JPEG 质量 80
+
+### 缩略图命名规则
+
+生成缩略图时，文件名规则为 `{原文件名无扩展部分}_thumb{扩展名}`：
+
+```
+photo.jpg      → photo_thumb.jpg
+avatar.png     → avatar_thumb.png
+thumb.jpg      → thumb_thumb.jpg   （不会与前缀规则 thumb_xxx 混淆）
+```
+
+旧版规则为 `thumb_{fileName}`（前缀形式），新规则避免 `thumb.jpg` → `thumb_thumb.jpg` 的歧义，且让同一图片的原始文件与缩略图在文件系统中相邻排序。
 
 ---
 
@@ -312,24 +351,26 @@ app.MapGet("/files/{id}/metadata", async (string id, IFileService fileSvc,
 
 所有方法统一注册 `IFileService`（Scoped）、`IImageProcessor`（Scoped）和对应的 `IFileStorage`（Scoped）。
 
+`FileService<TContext>` 泛型化设计：不再硬绑定 `TenE0SystemDbContext`，业务方可用自己的 `DbContext` + 在 `OnModelCreating` 调用 `ConfigureTenE0FileAttachmentTables()` 即可。
+
 ```csharp
 // 本地文件系统
-services.AddTenE0Files(options =>
+services.AddTenE0Files<DemoDbContext>(options =>
 {
     options.BasePath = "uploads";
     options.BaseUrl = "/uploads";
 });
 
 // 阿里云 OSS
-services.AddTenE0FilesWithAliyunOss(options =>
+services.AddTenE0FilesWithAliyunOss<DemoDbContext>(options =>
 {
     options.Endpoint = "oss-cn-hangzhou.aliyuncs.com";
     options.BucketName = "my-bucket";
-    // AccessKeyId / AccessKeySecret 从配置读取
+    // AccessKeyId / AccessKeySecret 从 OSS__AccessKeyId 等环境变量读取
 });
 
 // AWS S3
-services.AddTenE0FilesWithAwsS3(options =>
+services.AddTenE0FilesWithAwsS3<DemoDbContext>(options =>
 {
     options.Region = "ap-northeast-1";
     options.BucketName = "my-bucket";
