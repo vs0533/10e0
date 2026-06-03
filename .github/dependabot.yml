@@ -1,0 +1,30 @@
+version: 2
+
+commit-message:
+  prefix: "chore(deps)"
+
+labels:
+  - "dependencies"
+
+target-branch: dev
+
+open-pull-requests-limit: 5
+
+updates:
+  - package-ecosystem: "nuget"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    groups:
+      microsoft:
+        patterns:
+          - "Microsoft.*"
+      aws:
+        patterns:
+          - "AWSSDK.*"
+
+  - package-ecosystem: "github-actions"
+    directory: "/.github/workflows"
+    schedule:
+      interval: "weekly"
