@@ -4,12 +4,13 @@ name: Code Review
 # 文件则跳过 run" 的安全机制（之前 PR #17 改了 .github/workflows/ 导致后续
 # 所有 PR 的 claude-review 静默被 GitHub 拒触发）。
 #
-# pull_request_target 安全注意：
-# - 跑的是 base 分支的 workflow + base 仓库 secrets（PAT/REVIEW_BOT_TOKEN 等）
-# - 不会自动 checkout PR head 代码，但本 workflow 显式 checkout PR head 以便 git diff
-# - 外部 fork PR：checkout 的代码不可信 — 本 workflow 只把 diff 喂给 LLM API，
-#   不执行任何 PR head 代码，因此风险有限（注意 git hooks 路径）
-# - workflow_dispatch 允许管理员从 GitHub UI 手动触发（用于手动复审 PR）
+# pull_request_target 安全约束（已通过 CodeQL 验证）：
+# - 跑 base 分支的 workflow + base 仓库 secrets
+# - **绝不** checkout PR head 那是 fork PR 的非信任代码（CodeQL 报
+#   actions/untrusted-checkout/critical 会导致 PR 状态检查失败）
+# - PR diff 通过 `gh pr diff` API 拿（不接触 PR head 代码）
+# - 整个 workflow 不执行任何 PR head 代码（只把 diff 字符串喂给 LLM API）
+# - workflow_dispatch 允许管理员从 GitHub UI 手动触发（用于 re-review）
 on:
   pull_request_target:
     types: [opened, synchronize, reopened]
@@ -35,13 +36,13 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      - name: Checkout (PR head, full history)
+      # 关键：pull_request_target 不能 checkout PR head（untrusted）。
+      # 改为 checkout base 分支；diff 通过 gh CLI API 拿。
+      - name: Checkout (base branch, full history)
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          # 显式 checkout PR head commit。fork PR 场景下这是非信任代码，
-          # 但本 workflow 不会执行 head 代码，只用于 git diff。
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.event.pull_request.base.sha || github.ref }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -51,17 +52,23 @@ jobs:
       - name: Install Claude Code CLI
         run: npm install -g @anthropic-ai/claude-code
 
-      - name: Get PR diff to file
+      - name: Get PR diff via API (no untrusted checkout)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          BASE_SHA="${{ github.event.pull_request.base.sha }}"
-          HEAD_SHA="${{ github.event.pull_request.head.sha }}"
-          if [ -z "$BASE_SHA" ] || [ -z "$HEAD_SHA" ]; then
-            # workflow_dispatch 兜底：对比 base_ref
-            git diff origin/${{ github.base_ref || 'dev' }}...HEAD > /tmp/pr-diff.txt
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+          if [ -n "$PR_NUMBER" ]; then
+            # pull_request_target: 通过 GitHub API 拿 PR diff，不 checkout 非信任代码
+            gh pr diff "$PR_NUMBER" > /tmp/pr-diff.txt
           else
-            git diff "${BASE_SHA}...${HEAD_SHA}" > /tmp/pr-diff.txt
+            # workflow_dispatch / push 兜底：用本地 git diff
+            git diff origin/${{ github.base_ref || 'dev' }}...HEAD > /tmp/pr-diff.txt
           fi
           echo "Diff size: $(wc -c < /tmp/pr-diff.txt) bytes"
+          if [ ! -s /tmp/pr-diff.txt ]; then
+            echo "::warning::Empty diff. Nothing to review."
+            exit 0
+          fi
 
       - name: Run Code Review (MiniMax-M3)
         id: review
