@@ -42,4 +42,11 @@ tests/**/text.json
 .omo/
 
 ## ===== Claude Code workspace =====
-.claude/
+# 只 ignore 用户特定/运行时状态文件，团队共享的 agents/commands/skills/workflows/ 全部入库
+/.claude/settings.local.json
+/.claude/scheduled_tasks.lock
+/.claude/projects/
+/.claude/cache/
+/.claude/ide/
+/.claude/statsig/
+/.claude/todos/
