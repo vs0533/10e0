@@ -91,4 +91,3 @@ tests/
 
 MIT
 
-<!-- test: trigger claude-review bot verification 2026-06-04T05:02:22Z -->
