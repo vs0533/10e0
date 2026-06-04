@@ -1,19 +1,15 @@
 name: Code Review
 
-# 使用 pull_request_target 跑在 base 分支权限下，绕开 GitHub "PR 改了 workflow
-# 文件则跳过 run" 的安全机制（之前 PR #17 改了 .github/workflows/ 导致后续
-# 所有 PR 的 claude-review 静默被 GitHub 拒触发）。
-#
-# pull_request_target 安全约束（已通过 CodeQL 验证）：
-# - 跑 base 分支的 workflow + base 仓库 secrets
-# - **绝不** checkout PR head 那是 fork PR 的非信任代码（CodeQL 报
-#   actions/untrusted-checkout/critical 会导致 PR 状态检查失败）
-# - PR diff 通过 `gh pr diff` API 拿（不接触 PR head 代码）
-# - 整个 workflow 不执行任何 PR head 代码（只把 diff 字符串喂给 LLM API）
-# - workflow_dispatch 允许管理员从 GitHub UI 手动触发（用于 re-review）
+# 触发器：pull_request (branches: dev/main) + push (feature/**) + workflow_dispatch
+# - pull_request: 跟 qwen 时代一样，PR opened/synchronize 到 dev/main 时跑
+# - checkout base 分支 + gh pr diff API: 满足 CodeQL untrusted-checkout
+#   安全要求（不接触 PR head 非信任代码）
+# - REVIEW_BOT_TOKEN (PAT) 调 pulls.createReview 发真 review (算 branch
+#   protection approval)；fallback 走 issues.createComment
 on:
-  pull_request_target:
-    types: [opened, synchronize, reopened]
+  pull_request:
+    types: [opened, synchronize]
+    branches: [dev, main]
   push:
     branches: [feature/**]
   workflow_dispatch:
@@ -23,7 +19,8 @@ on:
         required: false
         type: string
 
-# pull_request_target 需要 write 权限才能 createReview + createComment
+# pull_request 触发器：用 PAT 发真 review (counts as branch protection approval)
+# GITHUB_TOKEN 权限是 read-only，createReview 必须用 PAT
 permissions:
   contents: read
   pull-requests: write
@@ -36,8 +33,8 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      # 关键：pull_request_target 不能 checkout PR head（untrusted）。
-      # 改为 checkout base 分支；diff 通过 gh CLI API 拿。
+      # 改用 checkout base 分支（不接触 PR head 非信任代码），满足 CodeQL
+      # untrusted-checkout 要求 + PR head 不可信场景安全
       - name: Checkout (base branch, full history)
         uses: actions/checkout@v4
         with:
@@ -167,7 +164,7 @@ jobs:
         with:
           github-token: "${{ secrets.REVIEW_BOT_TOKEN || secrets.GITHUB_TOKEN }}"
           script: |
-            // 重要：从文件读取模型 body 而非 ${{ <expressions> }} 插值
+            // 重要：从文件读取模型 body 而非 GitHub 表达式插值
             // 后者会引入模板注入（模型输出含反引号会破坏 JS template literal）
             const fs = require('fs');
             const verdict = '${{ steps.parse.outputs.verdict }}' === 'APPROVE' ? 'APPROVE' : 'REQUEST_CHANGES';
