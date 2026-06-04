@@ -4,10 +4,12 @@ on:
   pull_request:
     types: [opened, synchronize]
     branches: [dev, main]
+  push:
+    branches: [feature/**]
 
 permissions:
   contents: read
-  pull-requests: write
+  pull-requests: read
   issues: read
 
 jobs:
@@ -35,7 +37,7 @@ jobs:
           git diff origin/${{ github.base_ref }}...HEAD > /tmp/pr-diff.txt
           echo "Diff size: $(wc -c < /tmp/pr-diff.txt) bytes"
 
-      - name: Run Code Review
+      - name: Run Code Review (Qwen)
         id: review
         continue-on-error: true
         env:
@@ -64,28 +66,111 @@ jobs:
             - 🟡 Suggestion: Recommended improvement
             - 🟢 Nit: Optional polish
 
-            If no issues found, confirm the PR looks good with a brief summary." \
+            If no issues found, confirm the PR looks good with a brief summary.
+
+            ============================================================
+            VERDICT RULE (重要，输出末尾必须给单行 verdict):
+            - 没有 🔴 Critical → 输出 'VERDICT: APPROVE'
+            - 任何 🔴 Critical → 输出 'VERDICT: REQUEST_CHANGES'
+            - 不确定 / 解析失败 → 输出 'VERDICT: REQUEST_CHANGES'（保守）
+            ============================================================" \
             > /tmp/review-output.txt 2>&1
 
-          echo "Review output:"
-          cat /tmp/review-output.txt
+          echo "Review output saved."
 
-      - name: Post Review Comment
+      - name: Parse verdict
+        id: parse
+        if: always()
+        run: |
+          set +e
+          OUTPUT=""
+          if [ -s /tmp/review-output.txt ]; then
+            OUTPUT=$(cat /tmp/review-output.txt)
+          fi
+
+          # 1) 优先看 Qwen 显式输出 VERDICT 行
+          VERDICT=$(printf '%s\n' "$OUTPUT" | grep -oE "VERDICT:[[:space:]]*(APPROVE|REQUEST_CHANGES)" | tail -1 | awk '{print $2}')
+
+          # 2) Fallback：扫 🔴 Critical 段
+          if [ -z "$VERDICT" ]; then
+            if printf '%s' "$OUTPUT" | grep -q "🔴 Critical"; then
+              CRIT_CONTENT=$(printf '%s\n' "$OUTPUT" | awk '/🔴 Critical/{flag=1; next} /^$/{flag=0} flag' | wc -l)
+              if [ "$CRIT_CONTENT" -gt 0 ]; then
+                VERDICT="REQUEST_CHANGES"
+              else
+                VERDICT="APPROVE"
+              fi
+            else
+              VERDICT="APPROVE"
+            fi
+          fi
+
+          # 3) 输出为空 → 保守 REQUEST_CHANGES
+          if [ -z "$OUTPUT" ]; then
+            VERDICT="REQUEST_CHANGES"
+            OUTPUT="⚠️ Review workflow 异常退出（无输出）。为安全起见拒绝合并，请人工 review。"
+          fi
+
+          # 4) 截断 body（GitHub review body 上限 65536，留点余量）
+          if [ ${#OUTPUT} -gt 60000 ]; then
+            OUTPUT=$(printf '%s' "$OUTPUT" | head -c 60000)
+            OUTPUT="${OUTPUT}\n\n...(truncated, see workflow run log for full output)..."
+          fi
+
+          {
+            echo "verdict=$VERDICT"
+            echo "body<<EOF_BODY"
+            echo "$OUTPUT"
+            echo "EOF_BODY"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "==== Verdict: $VERDICT ===="
+          echo "==== Output (first 500 chars) ===="
+          printf '%s\n' "$OUTPUT" | head -c 500
+
+      - name: Post Review (PAT if available, else comment fallback)
         if: always()
         uses: actions/github-script@v7
         with:
+          github-token: ${{ secrets.REVIEW_BOT_TOKEN || secrets.GITHUB_TOKEN }}
           script: |
+            // 重要：从文件读取 Qwen body 而非 ${{ }} 插值
+            // 后者会引入模板注入（Qwen 输出含反引号会破坏 JS template literal）
             const fs = require('fs');
-            let review = 'Review completed but no output captured.';
+            const verdict = '${{ steps.parse.outputs.verdict }}' === 'APPROVE' ? 'APPROVE' : 'REQUEST_CHANGES';
+            let qwenBody = '';
             try {
-              review = fs.readFileSync('/tmp/review-output.txt', 'utf8');
-              if (!review.trim()) review = 'Review produced empty output. Check workflow logs.';
+              qwenBody = fs.readFileSync('/tmp/review-output.txt', 'utf8');
             } catch (e) {
-              review = 'Review failed to produce output. Check workflow logs.';
+              qwenBody = '⚠️ Review output file missing. See workflow logs.';
             }
+            // 用 + 拼接（单引号字符串）而非 template literal → Qwen body 含反引号 / ${ 也不会破坏 JS 解析
+            const body = '## 🤖 Qwen Code Review\n\nVerdict: **' + verdict + '**\n\n---\n\n' + qwenBody;
+
+            const usingPat = !!'${{ secrets.REVIEW_BOT_TOKEN }}';
+            const prNumber = context.issue.number;
+            const { owner, repo } = context.repo;
+
+            // If PAT is available, post a real review (counts as approval)
+            if (usingPat && (verdict === 'APPROVE' || verdict === 'REQUEST_CHANGES')) {
+              try {
+                await github.rest.pulls.createReview({
+                  owner, repo, pull_number: prNumber,
+                  event: verdict,
+                  body: body
+                });
+                core.info('Posted ' + verdict + ' review via PAT');
+                return;
+              } catch (e) {
+                core.warning('PAT review failed: ' + e.message + '. Falling back to comment.');
+              }
+            }
+
+            // Fallback: post as comment (does NOT count as approval)
+            const warning = usingPat ? '' : '\n\n---\n⚠️ `REVIEW_BOT_TOKEN` secret 未配置，本次仅作 comment，**不计入 branch protection 批准**。';
             await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              body: `## 🤖 Code Review\n\n${review}`
+              owner, repo, issue_number: prNumber,
+              body: body + warning
             });
+            core.info('Posted comment fallback (verdict=' + verdict + ', counts_as_approval=false)');
+# test comment
