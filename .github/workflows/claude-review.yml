@@ -132,9 +132,18 @@ jobs:
         with:
           github-token: ${{ secrets.REVIEW_BOT_TOKEN || secrets.GITHUB_TOKEN }}
           script: |
+            // 重要：从文件读取 Qwen body 而非 ${{ }} 插值
+            // 后者会引入模板注入（Qwen 输出含反引号会破坏 JS template literal）
             const fs = require('fs');
             const verdict = '${{ steps.parse.outputs.verdict }}' === 'APPROVE' ? 'APPROVE' : 'REQUEST_CHANGES';
-            let body = `## 🤖 Qwen Code Review\n\nVerdict: **${verdict}**\n\n---\n\n${{ steps.parse.outputs.body }}`;
+            let qwenBody = '';
+            try {
+              qwenBody = fs.readFileSync('/tmp/review-output.txt', 'utf8');
+            } catch (e) {
+              qwenBody = '⚠️ Review output file missing. See workflow logs.';
+            }
+            // 用 + 拼接（单引号字符串）而非 template literal → Qwen body 含反引号 / ${ 也不会破坏 JS 解析
+            const body = '## 🤖 Qwen Code Review\n\nVerdict: **' + verdict + '**\n\n---\n\n' + qwenBody;
 
             const usingPat = !!'${{ secrets.REVIEW_BOT_TOKEN }}';
             const prNumber = context.issue.number;
@@ -148,10 +157,10 @@ jobs:
                   event: verdict,
                   body: body
                 });
-                core.info(`✅ Posted ${verdict} review via PAT`);
+                core.info('Posted ' + verdict + ' review via PAT');
                 return;
               } catch (e) {
-                core.warning(`PAT review failed: ${e.message}. Falling back to comment.`);
+                core.warning('PAT review failed: ' + e.message + '. Falling back to comment.');
               }
             }
 
@@ -161,4 +170,4 @@ jobs:
               owner, repo, issue_number: prNumber,
               body: body + warning
             });
-            core.info(`📝 Posted comment fallback (verdict=${verdict}, counts_as_approval=false)`);
+            core.info('Posted comment fallback (verdict=' + verdict + ', counts_as_approval=false)');
