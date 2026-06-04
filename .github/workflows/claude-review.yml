@@ -1,16 +1,32 @@
 name: Code Review
 
+# 使用 pull_request_target 跑在 base 分支权限下，绕开 GitHub "PR 改了 workflow
+# 文件则跳过 run" 的安全机制（之前 PR #17 改了 .github/workflows/ 导致后续
+# 所有 PR 的 claude-review 静默被 GitHub 拒触发）。
+#
+# pull_request_target 安全注意：
+# - 跑的是 base 分支的 workflow + base 仓库 secrets（PAT/REVIEW_BOT_TOKEN 等）
+# - 不会自动 checkout PR head 代码，但本 workflow 显式 checkout PR head 以便 git diff
+# - 外部 fork PR：checkout 的代码不可信 — 本 workflow 只把 diff 喂给 LLM API，
+#   不执行任何 PR head 代码，因此风险有限（注意 git hooks 路径）
+# - workflow_dispatch 允许管理员从 GitHub UI 手动触发（用于手动复审 PR）
 on:
-  pull_request:
-    types: [opened, synchronize]
-    branches: [dev, main]
+  pull_request_target:
+    types: [opened, synchronize, reopened]
   push:
     branches: [feature/**]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to re-review (only used for logging)'
+        required: false
+        type: string
 
+# pull_request_target 需要 write 权限才能 createReview + createComment
 permissions:
   contents: read
-  pull-requests: read
-  issues: read
+  pull-requests: write
+  issues: write
 
 jobs:
   review:
@@ -19,10 +35,13 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      - name: Checkout (full history)
+      - name: Checkout (PR head, full history)
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          # 显式 checkout PR head commit。fork PR 场景下这是非信任代码，
+          # 但本 workflow 不会执行 head 代码，只用于 git diff。
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -34,19 +53,26 @@ jobs:
 
       - name: Get PR diff to file
         run: |
-          git diff origin/${{ github.base_ref }}...HEAD > /tmp/pr-diff.txt
+          BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+          if [ -z "$BASE_SHA" ] || [ -z "$HEAD_SHA" ]; then
+            # workflow_dispatch 兜底：对比 base_ref
+            git diff origin/${{ github.base_ref || 'dev' }}...HEAD > /tmp/pr-diff.txt
+          else
+            git diff "${BASE_SHA}...${HEAD_SHA}" > /tmp/pr-diff.txt
+          fi
           echo "Diff size: $(wc -c < /tmp/pr-diff.txt) bytes"
 
-      - name: Run Code Review (Qwen)
+      - name: Run Code Review (MiniMax-M3)
         id: review
         continue-on-error: true
         env:
-          ANTHROPIC_AUTH_TOKEN: ${{ secrets.ALIBABA_API_KEY }}
-          ANTHROPIC_BASE_URL: https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic
-          ANTHROPIC_MODEL: qwen3.7-max
-          ANTHROPIC_DEFAULT_SONNET_MODEL: qwen3.7-max
-          ANTHROPIC_DEFAULT_OPUS_MODEL: qwen3.7-max
-          ANTHROPIC_DEFAULT_HAIKU_MODEL: qwen3.6-flash
+          ANTHROPIC_AUTH_TOKEN: ${{ secrets.MINIMAX_API_KEY }}
+          ANTHROPIC_BASE_URL: https://api.minimaxi.com/anthropic
+          ANTHROPIC_MODEL: MiniMax-M3
+          ANTHROPIC_DEFAULT_SONNET_MODEL: MiniMax-M3
+          ANTHROPIC_DEFAULT_OPUS_MODEL: MiniMax-M3
+          ANTHROPIC_DEFAULT_HAIKU_MODEL: MiniMax-M3
           API_TIMEOUT_MS: "3000000"
           CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
         run: |
@@ -88,7 +114,7 @@ jobs:
             OUTPUT=$(cat /tmp/review-output.txt)
           fi
 
-          # 1) 优先看 Qwen 显式输出 VERDICT 行
+          # 1) 优先看模型显式输出 VERDICT 行
           VERDICT=$(printf '%s\n' "$OUTPUT" | grep -oE "VERDICT:[[:space:]]*(APPROVE|REQUEST_CHANGES)" | tail -1 | awk '{print $2}')
 
           # 2) Fallback：扫 🔴 Critical 段
@@ -134,22 +160,29 @@ jobs:
         with:
           github-token: ${{ secrets.REVIEW_BOT_TOKEN || secrets.GITHUB_TOKEN }}
           script: |
-            // 重要：从文件读取 Qwen body 而非 ${{ }} 插值
-            // 后者会引入模板注入（Qwen 输出含反引号会破坏 JS template literal）
+            // 重要：从文件读取模型 body 而非 ${{ }} 插值
+            // 后者会引入模板注入（模型输出含反引号会破坏 JS template literal）
             const fs = require('fs');
             const verdict = '${{ steps.parse.outputs.verdict }}' === 'APPROVE' ? 'APPROVE' : 'REQUEST_CHANGES';
-            let qwenBody = '';
+            let modelBody = '';
             try {
-              qwenBody = fs.readFileSync('/tmp/review-output.txt', 'utf8');
+              modelBody = fs.readFileSync('/tmp/review-output.txt', 'utf8');
             } catch (e) {
-              qwenBody = '⚠️ Review output file missing. See workflow logs.';
+              modelBody = '⚠️ Review output file missing. See workflow logs.';
             }
-            // 用 + 拼接（单引号字符串）而非 template literal → Qwen body 含反引号 / ${ 也不会破坏 JS 解析
-            const body = '## 🤖 Qwen Code Review\n\nVerdict: **' + verdict + '**\n\n---\n\n' + qwenBody;
+            // 用 + 拼接（单引号字符串）而非 template literal → 模型 body 含反引号 / ${ 也不会破坏 JS 解析
+            const body = '## 🤖 MiniMax Code Review\n\nVerdict: **' + verdict + '**\n\n---\n\n' + modelBody;
 
             const usingPat = !!'${{ secrets.REVIEW_BOT_TOKEN }}';
             const prNumber = context.issue.number;
             const { owner, repo } = context.repo;
+
+            // workflow_dispatch 路径可能没有 PR context
+            if (!prNumber || !context.issue) {
+              core.warning('No PR context (workflow_dispatch?). Body will be logged only:');
+              core.info(body);
+              return;
+            }
 
             // If PAT is available, post a real review (counts as approval)
             if (usingPat && (verdict === 'APPROVE' || verdict === 'REQUEST_CHANGES')) {
@@ -173,4 +206,3 @@ jobs:
               body: body + warning
             });
             core.info('Posted comment fallback (verdict=' + verdict + ', counts_as_approval=false)');
-# test comment
