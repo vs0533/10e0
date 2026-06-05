@@ -69,8 +69,74 @@ builder.Services.AddTenE0JwtAuth<TUser, TContext>(jwt =>
 | `SigningKey` | 必填 | HS256 签名密钥，至少 32 字节 |
 | `AccessTokenLifetime` | 30 分钟 | 短生命周期，便于撤销 |
 | `RefreshTokenLifetime` | 14 天 | 长期令牌，减少重新登录 |
+| `RefreshTokenRotationEnabled` | `true` | OWASP 推荐，开启后每次 refresh 旧 token 失效 |
+| `SlidingRefreshExpiration` | `true` | 滑动过期，新 token expires = now + RefreshTokenLifetime |
 
 > **生产环境**：`SigningKey` 必须从环境变量或密钥管理服务读取，禁止硬编码。
+
+---
+
+## Refresh Token Rotation
+
+### OWASP 旋转模式
+
+每次成功调用 `POST /auth/refresh` 时：
+
+1. 旧 refresh token 标记 `RevokedAt = now` + `RevokedReason = "rotated"`
+2. 新 refresh token 写入数据库
+3. 新 access token + refresh token 返回客户端
+
+窃取方持有旧 token 在网络上被重放时，服务端检测到 token 已 revoked，触发 **reuse detection**。
+
+### Sliding Expiration（滑动过期）
+
+当 `SlidingRefreshExpiration = true`（默认）时：
+
+```
+新 refresh token ExpiresAt = now + RefreshTokenLifetime
+```
+
+用户持续活跃则 token 永不过期；连续 14 天（默认）不活动才过期。
+
+> Sliding 独立于 Rotation 生效：关闭 rotation 时新 token 仍按 sliding 规则计算 expires（但旧 token 不过期，存在安全风险，不推荐）。
+
+### Reuse Detection（重放检测）
+
+当呈现一个已 revoked 的 refresh token 时：
+
+1. 无论 `RefreshTokenRotationEnabled` 状态如何，立即撤销该用户**全部** active token
+2. 被重放的 token 标记 `RevokedReason = "token_reuse_detected"`
+3. 客户端收到 `TOKEN_REVOKED`，需重新登录
+
+```
+攻击场景：
+1. 用户正常刷新 → 旧 token A 被 revoke，新 token B 生效
+2. 攻击者窃取 token A（已 revoked）→ 检测到重放
+3. 用户所有设备强制下线 → 需重新登录
+```
+
+### 配置开关
+
+```csharp
+builder.Services.AddTenE0Identity<DemoDbContext>(opt =>
+{
+    opt.Jwt.RefreshTokenRotationEnabled = true;   // 强烈建议保持 true
+    opt.Jwt.SlidingRefreshExpiration = true;       // 强烈建议保持 true
+});
+```
+
+### Schema 变更
+
+`TenE0RefreshToken` 表新增 `RevokedReason` 列（`nvarchar(64)`，可空）：
+
+| 值 | 含义 |
+|----|------|
+| `rotated` | 正常刷新轮换，旧 token 失效 |
+| `token_reuse_detected` | 检测到 token 重放攻击，用户全部 token 被撤销 |
+| `logout` | 用户主动登出 |
+| `null` | 未撤销，仍有效 |
+
+> EF Core 迁移：业务方需执行 `Add-Migration AddRefreshTokenRevokedReason` 升级数据库。
 
 ---
 

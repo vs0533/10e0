@@ -25,6 +25,15 @@ public sealed class TenE0RefreshToken : AuditedEntity
     /// <summary>撤销时间（null = 仍有效）。</summary>
     public DateTimeOffset? RevokedAt { get; set; }
 
+    /// <summary>
+    /// 撤销原因（审计用）。
+    /// - <c>"rotated"</c>：正常刷新轮换，旧 token 失效
+    /// - <c>"logout"</c>：用户主动登出
+    /// - <c>"token_reuse_detected"</c>：检测到重放攻击，强制下线
+    /// - <c>"user_disabled"</c>（预留）：账号被禁用
+    /// </summary>
+    public string? RevokedReason { get; set; }
+
     /// <summary>被哪个 token 替代（链式追踪，便于检测 token 重放）。</summary>
     public string? ReplacedByTokenHash { get; set; }
 

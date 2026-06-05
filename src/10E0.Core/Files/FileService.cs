@@ -1,39 +1,30 @@
 using System.Security.Cryptography;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
-using TenE0.Core.DataContext;
 using TenE0.Core.Files.Storage;
 
 namespace TenE0.Core.Files;
 
 /// <summary>
-/// 文件服务实现
+/// 文件服务实现。
+///
+/// 泛型化设计：TContext 仅需是 <see cref="DbContext"/>，实体 <c>TenE0FileAttachment</c>
+/// 通过 <see cref="Storage.FileModelBuilderExtensions.ConfigureTenE0FileAttachmentTables"/>
+/// 在 DbContext 的 OnModelCreating 中注册即可。
 /// </summary>
-public class FileService : IFileService
+public class FileService<TContext>(
+    IDbContextFactory<TContext> contextFactory,
+    IFileStorage storage,
+    IImageProcessor imageProcessor,
+    ILogger<FileService<TContext>> logger) : IFileService
+    where TContext : DbContext
 {
-    private readonly IDbContextFactory<TenE0SystemDbContext> _contextFactory;
-    private readonly IFileStorage _storage;
-    private readonly IImageProcessor _imageProcessor;
-    private readonly ILogger<FileService> _logger;
-
-    public FileService(
-        IDbContextFactory<TenE0SystemDbContext> contextFactory,
-        IFileStorage storage,
-        IImageProcessor imageProcessor,
-        ILogger<FileService> logger)
-    {
-        _contextFactory = contextFactory;
-        _storage = storage;
-        _imageProcessor = imageProcessor;
-        _logger = logger;
-    }
-
     public async Task<UploadResponse> UploadAsync(Stream stream, string fileName, string contentType, UploadRequest? request = null, CancellationToken ct = default)
     {
         request ??= new UploadRequest();
 
         // 存储文件
-        var storageResult = await _storage.StoreAsync(stream, fileName, contentType, ct);
+        var storageResult = await storage.StoreAsync(stream, fileName, contentType, ct);
         if (!storageResult.Success)
         {
             throw new InvalidOperationException($"文件存储失败: {storageResult.ErrorMessage}");
@@ -48,7 +39,7 @@ public class FileService : IFileService
         if (contentType.StartsWith("image/"))
         {
             stream.Position = 0;
-            var dims = await _imageProcessor.GetDimensionsAsync(stream, ct);
+            var dims = await imageProcessor.GetDimensionsAsync(stream, ct);
             width = dims.Width;
             height = dims.Height;
         }
@@ -69,8 +60,8 @@ public class FileService : IFileService
             RelatedEntityType = request.RelatedEntityType
         };
 
-        await using var context = await _contextFactory.CreateDbContextAsync(ct);
-        context.FileAttachments.Add(attachment);
+        await using var context = await contextFactory.CreateDbContextAsync(ct);
+        context.Set<TenE0FileAttachment>().Add(attachment);
         await context.SaveChangesAsync(ct);
 
         return new UploadResponse(
@@ -88,7 +79,7 @@ public class FileService : IFileService
         if (options != null)
         {
             // 处理图片
-            var processResult = await _imageProcessor.ProcessAsync(stream, options, ct);
+            var processResult = await imageProcessor.ProcessAsync(stream, options, ct);
             if (!processResult.Success)
             {
                 throw new InvalidOperationException($"图片处理失败: {processResult.ErrorMessage}");
@@ -101,13 +92,16 @@ public class FileService : IFileService
             if (options.GenerateThumbnail)
             {
                 stream.Position = 0;
-                var thumbnailStream = await _imageProcessor.GenerateThumbnailAsync(stream, options.ThumbnailWidth, options.ThumbnailHeight, ct);
-                var thumbnailResult = await _storage.StoreAsync(thumbnailStream, $"thumb_{fileName}", "image/jpeg", ct);
+                var thumbnailStream = await imageProcessor.GenerateThumbnailAsync(stream, options.ThumbnailWidth, options.ThumbnailHeight, ct);
+                // 缩略图文件名：原名 + "_thumb" 后缀（避免 thumb.jpg → thumb_thumb.jpg 的前缀重复，
+                // 也让缩略图与原图在文件列表中相邻排序）。
+                var thumbnailName = $"{Path.GetFileNameWithoutExtension(fileName)}_thumb{Path.GetExtension(fileName)}";
+                var thumbnailResult = await storage.StoreAsync(thumbnailStream, thumbnailName, "image/jpeg", ct);
 
                 if (thumbnailResult.Success)
                 {
-                    await using var context = await _contextFactory.CreateDbContextAsync(ct);
-                    var attachment = await context.FileAttachments.FindAsync(new object[] { response.Id }, ct);
+                    await using var context = await contextFactory.CreateDbContextAsync(ct);
+                    var attachment = await context.Set<TenE0FileAttachment>().FindAsync(new object[] { response.Id }, ct);
                     if (attachment != null)
                     {
                         attachment.ThumbnailPath = thumbnailResult.StoragePath;
@@ -125,37 +119,37 @@ public class FileService : IFileService
 
     public async Task<(Stream? Stream, TenE0FileAttachment? Metadata)> DownloadAsync(string fileId, CancellationToken ct = default)
     {
-        await using var context = await _contextFactory.CreateDbContextAsync(ct);
-        var attachment = await context.FileAttachments.FindAsync(new object[] { fileId }, ct);
+        await using var context = await contextFactory.CreateDbContextAsync(ct);
+        var attachment = await context.Set<TenE0FileAttachment>().FindAsync(new object[] { fileId }, ct);
         if (attachment == null || attachment.IsDeleted)
         {
             return (null, null);
         }
 
-        var stream = await _storage.RetrieveAsync(attachment.StoragePath, ct);
+        var stream = await storage.RetrieveAsync(attachment.StoragePath, ct);
         return (stream, attachment);
     }
 
     public async Task<bool> DeleteAsync(string fileId, CancellationToken ct = default)
     {
-        await using var context = await _contextFactory.CreateDbContextAsync(ct);
-        var attachment = await context.FileAttachments.FindAsync(new object[] { fileId }, ct);
+        await using var context = await contextFactory.CreateDbContextAsync(ct);
+        var attachment = await context.Set<TenE0FileAttachment>().FindAsync(new object[] { fileId }, ct);
         if (attachment == null || attachment.IsDeleted)
         {
             return false;
         }
 
         // 从存储中删除
-        var deleted = await _storage.DeleteAsync(attachment.StoragePath, ct);
+        var deleted = await storage.DeleteAsync(attachment.StoragePath, ct);
         if (!deleted)
         {
-            _logger.LogWarning("文件存储删除失败: {StoragePath}", attachment.StoragePath);
+            logger.LogWarning("文件存储删除失败: {StoragePath}", attachment.StoragePath);
         }
 
         // 删除缩略图
         if (!string.IsNullOrEmpty(attachment.ThumbnailPath))
         {
-            await _storage.DeleteAsync(attachment.ThumbnailPath, ct);
+            await storage.DeleteAsync(attachment.ThumbnailPath, ct);
         }
 
         // 软删除元数据
@@ -167,8 +161,8 @@ public class FileService : IFileService
 
     public async Task<TenE0FileAttachment?> GetMetadataAsync(string fileId, CancellationToken ct = default)
     {
-        await using var context = await _contextFactory.CreateDbContextAsync(ct);
-        return await context.FileAttachments.FirstOrDefaultAsync(a => a.Id == fileId && !a.IsDeleted, ct);
+        await using var context = await contextFactory.CreateDbContextAsync(ct);
+        return await context.Set<TenE0FileAttachment>().FirstOrDefaultAsync(a => a.Id == fileId && !a.IsDeleted, ct);
     }
 
     public async Task<string?> GetAccessUrlAsync(string fileId, CancellationToken ct = default)
@@ -176,7 +170,7 @@ public class FileService : IFileService
         var attachment = await GetMetadataAsync(fileId, ct);
         if (attachment == null) return null;
 
-        return _storage.GetAccessUrl(attachment.StoragePath);
+        return storage.GetAccessUrl(attachment.StoragePath);
     }
 
     private static async Task<string> ComputeHashAsync(Stream stream, CancellationToken ct = default)

@@ -1,5 +1,8 @@
+using System.Collections.Concurrent;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.Logging.Abstractions;
 using TenE0.Core.Abstractions;
 using TenE0.Core.Cqrs.Behaviors;
@@ -114,5 +117,254 @@ public sealed class TransactionBehaviorTests
             CancellationToken.None);
 
         nextCalled.Should().BeTrue();
+    }
+
+    // ========================================================================================
+    // Savepoint 嵌套边界测试 (P1: 修复 BUG-001 后的回归保护)
+    //
+    // 真实场景下 BeginTransaction 路径在 EF Core InMemory provider 中也被接受 (no-op)，
+    // 但 Database.CurrentTransaction 在 InMemory 永远为 null —— 走不到 Savepoint 分支。
+    // 因此 Savepoint 路径用 Mock<IDbContextTransaction> + Mock<DatabaseFacade> 验证调用序列。
+    // ========================================================================================
+
+    private sealed class SavepointTracker
+    {
+        public ConcurrentQueue<string> Created { get; } = new();
+        public ConcurrentQueue<string> Released { get; } = new();
+        public ConcurrentQueue<string> RolledBackTo { get; } = new();
+    }
+
+    private sealed class BeginTxTracker
+    {
+        public int BeginCount { get; set; }
+        public int CommitCount { get; set; }
+        public int RollbackCount { get; set; }
+    }
+
+    /// <summary>
+    /// 构建一个"已经有外层事务"的工厂：Database.CurrentTransaction 返回严格 mock。
+    /// 行为应走 Savepoint 分支 (CreateSavepointAsync / ReleaseSavepointAsync / RollbackToSavepointAsync)。
+    /// </summary>
+    private static (IDbContextFactory<DbContext> Factory, Mock<IDbContextTransaction> Tx, SavepointTracker Tracker)
+        CreateFactoryWithExistingTransaction()
+    {
+        var tracker = new SavepointTracker();
+        var txMock = new Mock<IDbContextTransaction>(MockBehavior.Strict);
+        txMock.Setup(t => t.CreateSavepointAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+              .Callback<string, CancellationToken>((sp, _) => tracker.Created.Enqueue(sp))
+              .Returns(Task.CompletedTask);
+        txMock.Setup(t => t.ReleaseSavepointAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+              .Callback<string, CancellationToken>((sp, _) => tracker.Released.Enqueue(sp))
+              .Returns(Task.CompletedTask);
+        txMock.Setup(t => t.RollbackToSavepointAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+              .Callback<string, CancellationToken>((sp, _) => tracker.RolledBackTo.Enqueue(sp))
+              .Returns(Task.CompletedTask);
+        txMock.Setup(t => t.Dispose()).Verifiable();
+        txMock.Setup(t => t.DisposeAsync()).Returns(ValueTask.CompletedTask);
+
+        // DatabaseFacade 构造有 Check.NotNull(context)，必须传一个真实 DbContext。
+        var realContext = new TestDbContext(new DbContextOptionsBuilder<TestDbContext>()
+            .UseInMemoryDatabase($"savepoint-exists-{Guid.NewGuid():N}")
+            .ConfigureWarnings(w => w.Ignore(InMemoryEventId.TransactionIgnoredWarning))
+            .Options);
+
+        var dbMock = new Mock<DatabaseFacade>(realContext);
+        dbMock.SetupGet(d => d.CurrentTransaction).Returns(txMock.Object);
+
+        var ctxMock = new Mock<DbContext>();
+        ctxMock.SetupGet(c => c.Database).Returns(dbMock.Object);
+        ctxMock.Setup(c => c.Dispose()).Verifiable();
+        ctxMock.Setup(c => c.DisposeAsync()).Returns(ValueTask.CompletedTask);
+
+        var factoryMock = new Mock<IDbContextFactory<DbContext>>(MockBehavior.Strict);
+        factoryMock.Setup(f => f.CreateDbContextAsync(It.IsAny<CancellationToken>()))
+                   .ReturnsAsync(ctxMock.Object);
+
+        return (factoryMock.Object, txMock, tracker);
+    }
+
+    /// <summary>
+    /// 构建一个"没有外层事务"的工厂：Database.CurrentTransaction 返回 null，
+    /// Database.BeginTransactionAsync 返回一个严格 mock。行为应走 Begin 分支。
+    /// </summary>
+    private static (IDbContextFactory<DbContext> Factory, Mock<IDbContextTransaction> NewTx, BeginTxTracker Tracker)
+        CreateFactoryWithoutTransaction()
+    {
+        var tracker = new BeginTxTracker();
+        var newTxMock = new Mock<IDbContextTransaction>(MockBehavior.Strict);
+        newTxMock.Setup(t => t.CommitAsync(It.IsAny<CancellationToken>()))
+                 .Callback<CancellationToken>(_ => tracker.CommitCount++)
+                 .Returns(Task.CompletedTask);
+        newTxMock.Setup(t => t.RollbackAsync(It.IsAny<CancellationToken>()))
+                 .Callback<CancellationToken>(_ => tracker.RollbackCount++)
+                 .Returns(Task.CompletedTask);
+        newTxMock.Setup(t => t.Dispose()).Verifiable();
+        newTxMock.Setup(t => t.DisposeAsync()).Returns(ValueTask.CompletedTask);
+
+        var realContext = new TestDbContext(new DbContextOptionsBuilder<TestDbContext>()
+            .UseInMemoryDatabase($"savepoint-missing-{Guid.NewGuid():N}")
+            .ConfigureWarnings(w => w.Ignore(InMemoryEventId.TransactionIgnoredWarning))
+            .Options);
+
+        var dbMock = new Mock<DatabaseFacade>((DbContext)realContext);
+        dbMock.SetupGet(d => d.CurrentTransaction).Returns((IDbContextTransaction?)null);
+        dbMock.Setup(d => d.BeginTransactionAsync(It.IsAny<CancellationToken>()))
+              .Callback<CancellationToken>(_ => tracker.BeginCount++)
+              .ReturnsAsync(newTxMock.Object);
+
+        var ctxMock = new Mock<DbContext>();
+        ctxMock.SetupGet(c => c.Database).Returns(dbMock.Object);
+        ctxMock.Setup(c => c.Dispose()).Verifiable();
+        ctxMock.Setup(c => c.DisposeAsync()).Returns(ValueTask.CompletedTask);
+
+        var factoryMock = new Mock<IDbContextFactory<DbContext>>(MockBehavior.Strict);
+        factoryMock.Setup(f => f.CreateDbContextAsync(It.IsAny<CancellationToken>()))
+                   .ReturnsAsync(ctxMock.Object);
+
+        return (factoryMock.Object, newTxMock, tracker);
+    }
+
+    [Fact]
+    public async Task NoOuterTransaction_BeginsNewTransaction_AndCommitsOnSuccess()
+    {
+        var (factory, _, tracker) = CreateFactoryWithoutTransaction();
+        var logger = NullLogger<TransactionBehavior<TransactionalCmd, Unit, DbContext>>.Instance;
+        var behavior = new TransactionBehavior<TransactionalCmd, Unit, DbContext>(factory, logger);
+        var nextCalled = false;
+
+        await behavior.HandleAsync(
+            new TransactionalCmd(),
+            _ => { nextCalled = true; return Unit.Task; },
+            CancellationToken.None);
+
+        nextCalled.Should().BeTrue();
+        tracker.BeginCount.Should().Be(1);
+        tracker.CommitCount.Should().Be(1);
+        tracker.RollbackCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task OuterTransactionExists_CreatesUniqueSavepoint_AndReleasesOnSuccess()
+    {
+        var (factory, _, tracker) = CreateFactoryWithExistingTransaction();
+        var logger = NullLogger<TransactionBehavior<TransactionalCmd, Unit, DbContext>>.Instance;
+        var behavior = new TransactionBehavior<TransactionalCmd, Unit, DbContext>(factory, logger);
+
+        await behavior.HandleAsync(
+            new TransactionalCmd(),
+            _ => Unit.Task,
+            CancellationToken.None);
+
+        // 恰好 1 个 savepoint 被创建、1 个被 release，0 个被回滚
+        tracker.Created.Should().HaveCount(1);
+        tracker.Released.Should().HaveCount(1);
+        tracker.RolledBackTo.Should().BeEmpty();
+
+        // 名字符合 "sp_{Guid:N}" 格式 (32 位无连字符 GUID)
+        var createdName = tracker.Created.Single();
+        createdName.Should().StartWith("sp_");
+        createdName.Length.Should().Be("sp_".Length + 32);
+
+        // Create 和 Release 用的是同一个名字 (这是设计意图：回滚到同名 savepoint)
+        tracker.Released.Single().Should().Be(createdName);
+    }
+
+    [Fact]
+    public async Task InnerCommandFails_RollbacksOnlySavepoint_OuterTransactionStaysAlive()
+    {
+        var (factory, _, tracker) = CreateFactoryWithExistingTransaction();
+        var logger = NullLogger<TransactionBehavior<FaultyTransactionalCmd, Unit, DbContext>>.Instance;
+        var behavior = new TransactionBehavior<FaultyTransactionalCmd, Unit, DbContext>(factory, logger);
+
+        var act = () => behavior.HandleAsync(
+            new FaultyTransactionalCmd(),
+            _ => throw new InvalidOperationException("inner handler failure"),
+            CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("inner handler failure");
+
+        // 创建了 savepoint，但回滚到它（不是 Release）
+        tracker.Created.Should().HaveCount(1);
+        tracker.RolledBackTo.Should().HaveCount(1);
+        tracker.Released.Should().BeEmpty();
+
+        // RollbackToSavepoint 用的就是创建的同名 savepoint
+        tracker.RolledBackTo.Single().Should().Be(tracker.Created.Single());
+
+        // 关键断言：外层事务本身没有被 Rollback —— 它还在外层管理者的控制下
+        // (CreateSavepoint/RollbackToSavepoint 都不影响外层事务生命周期)
+        factory.Should().NotBeNull(); // 工厂本身是存根；存在性作为 sanity check
+    }
+
+    [Fact]
+    public async Task OuterCommandFails_BeginBranch_RollsBackAllChanges_NoSavepointInvoked()
+    {
+        var (factory, _, tracker) = CreateFactoryWithoutTransaction();
+        var logger = NullLogger<TransactionBehavior<FaultyTransactionalCmd, Unit, DbContext>>.Instance;
+        var behavior = new TransactionBehavior<FaultyTransactionalCmd, Unit, DbContext>(factory, logger);
+
+        var act = () => behavior.HandleAsync(
+            new FaultyTransactionalCmd(),
+            _ => throw new InvalidOperationException("outer handler failure"),
+            CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("outer handler failure");
+
+        // Begin 分支在失败时调用 RollbackAsync，绝不调用 CreateSavepointAsync
+        tracker.BeginCount.Should().Be(1);
+        tracker.RollbackCount.Should().Be(1);
+        tracker.CommitCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ConcurrentNestedCommands_AllGeneratedSavepointNamesAreUnique()
+    {
+        // 模拟 N 个并发请求，每个都嵌在一个外层事务中跑 TransactionBehavior。
+        // 验证：所有 savepoint 名字都遵循 "sp_<guid>" 格式且互不重复。
+        const int concurrentCount = 64;
+        var tasks = new Task[concurrentCount];
+        var trackers = new SavepointTracker[concurrentCount];
+
+        for (var i = 0; i < concurrentCount; i++)
+        {
+            var (factory, _, tracker) = CreateFactoryWithExistingTransaction();
+            trackers[i] = tracker;
+            var logger = NullLogger<TransactionBehavior<TransactionalCmd, Unit, DbContext>>.Instance;
+            var behavior = new TransactionBehavior<TransactionalCmd, Unit, DbContext>(factory, logger);
+            tasks[i] = behavior.HandleAsync(
+                new TransactionalCmd(),
+                _ => Unit.Task,
+                CancellationToken.None);
+        }
+
+        await Task.WhenAll(tasks);
+
+        var allNames = trackers.SelectMany(t => t.Created).ToList();
+        allNames.Should().HaveCount(concurrentCount);
+        allNames.Should().OnlyContain(n => n.StartsWith("sp_"));
+        allNames.Should().OnlyHaveUniqueItems(
+            "GUID-based savepoint names must not collide under concurrent invocations");
+    }
+
+    [Fact]
+    public async Task NonTransactionalCommand_NeverInvokesFactory()
+    {
+        // 严格 mock 工厂 + 非事务命令：CreateDbContextAsync 必须 0 次被调用。
+        // (与 "NonTransactional_SkipsDbContextCreation_WhenStrictMockUsed" 互补，
+        //  这里用显式 Times.Never 断言保留回归意图。)
+        var strictFactory = new Mock<IDbContextFactory<DbContext>>(MockBehavior.Strict);
+        var logger = NullLogger<TransactionBehavior<NonTransactionalCmd, Unit, DbContext>>.Instance;
+        var behavior = new TransactionBehavior<NonTransactionalCmd, Unit, DbContext>(strictFactory.Object, logger);
+        var nextCalled = false;
+
+        await behavior.HandleAsync(
+            new NonTransactionalCmd(),
+            _ => { nextCalled = true; return Unit.Task; },
+            CancellationToken.None);
+
+        nextCalled.Should().BeTrue();
+        strictFactory.Verify(
+            f => f.CreateDbContextAsync(It.IsAny<CancellationToken>()),
+            Times.Never);
     }
 }

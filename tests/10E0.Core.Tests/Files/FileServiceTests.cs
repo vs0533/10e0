@@ -1,46 +1,51 @@
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
-using TenE0.Core.Abstractions;
-using TenE0.Core.DataContext;
-using TenE0.Core.DynamicFilters;
 using TenE0.Core.Files;
-using TenE0.Core.Permissions.DataFilter;
 
 namespace TenE0.Core.Tests.Files;
 
 [Trait("Category", "Unit")]
 public sealed class FileServiceTests
 {
-    private sealed class TestSystemDbContext : TenE0SystemDbContext
+    /// <summary>
+    /// 测试用 DbContext — 仅注册 TenE0FileAttachment 实体，避免引入框架基类。
+    /// 验证 FileService&lt;TContext&gt; 真的只依赖 DbContext + 实体已注册。
+    /// </summary>
+    private sealed class TestFileDbContext(DbContextOptions<TestFileDbContext> options) : DbContext(options)
     {
-        public TestSystemDbContext(DbContextOptions options, ICurrentUserContext currentUser, IDataAccessPolicy accessPolicy)
-            : base(options, currentUser, accessPolicy, Enumerable.Empty<IEntityFilterContributor>(), Mock.Of<IDynamicFilterProvider>())
-        {
-        }
+        public DbSet<TenE0FileAttachment> FileAttachments => Set<TenE0FileAttachment>();
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
-            // Don't call base — we don't need all framework tables
-            modelBuilder.Entity<TenE0FileAttachment>(entity =>
+            modelBuilder.Entity<TenE0FileAttachment>(b =>
             {
-                entity.HasKey(e => e.Id);
-                entity.Property(e => e.Id).ValueGeneratedOnAdd();
+                b.HasKey(e => e.Id);
+                b.Property(e => e.Id).ValueGeneratedOnAdd();
             });
+        }
+
+        protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
+        {
+            base.OnConfiguring(optionsBuilder);
+            optionsBuilder.ConfigureWarnings(w => w.Ignore(InMemoryEventId.TransactionIgnoredWarning));
         }
     }
 
-    private static TestSystemDbContext CreateDbContext(string dbName)
+    private sealed class TestDbContextFactory(DbContextOptions<TestFileDbContext> options)
+        : IDbContextFactory<TestFileDbContext>
     {
-        var currentUser = new Mock<ICurrentUserContext>();
-        currentUser.SetupGet(c => c.IsAuthenticated).Returns(true);
-        currentUser.SetupGet(c => c.UserCode).Returns("test-user");
-        currentUser.SetupGet(c => c.RoleIds).Returns([]);
-        var accessPolicy = new Mock<IDataAccessPolicy>();
-        accessPolicy.SetupGet(p => p.BypassFilters).Returns(false);
-        var options = new DbContextOptionsBuilder<TestSystemDbContext>()
+        public TestFileDbContext CreateDbContext() => new(options);
+    }
+
+    private static IDbContextFactory<TestFileDbContext> CreateFactory(string dbName)
+    {
+        var options = new DbContextOptionsBuilder<TestFileDbContext>()
             .UseInMemoryDatabase(dbName)
+            .ConfigureWarnings(w => w.Ignore(InMemoryEventId.TransactionIgnoredWarning))
             .Options;
-        return new TestSystemDbContext(options, currentUser.Object, accessPolicy.Object);
+        return new TestDbContextFactory(options);
     }
 
     // ──────────────────────────────────────────
@@ -51,21 +56,19 @@ public sealed class FileServiceTests
     public async Task UploadAsync_ValidStream_StoresFileAndReturnsMetadata()
     {
         // Arrange
-        var dbName = Guid.NewGuid().ToString();
+        var dbName = Guid.NewGuid().ToString("N");
         var storage = new Mock<IFileStorage>(MockBehavior.Loose);
         var storageResult = new StorageResult("/files/test.txt", "http://test/test.txt", true);
         storage.Setup(s => s.StoreAsync(It.IsAny<Stream>(), "test.txt", "text/plain", It.IsAny<CancellationToken>()))
                .ReturnsAsync(storageResult);
 
-        var contextFactory = new Mock<IDbContextFactory<TenE0SystemDbContext>>();
-        contextFactory.Setup(f => f.CreateDbContextAsync(It.IsAny<CancellationToken>()))
-                      .ReturnsAsync(() => CreateDbContext(dbName));
+        var factory = CreateFactory(dbName);
 
-        var sut = new FileService(
-            contextFactory.Object,
+        var sut = new FileService<TestFileDbContext>(
+            factory,
             storage.Object,
             Mock.Of<IImageProcessor>(),
-            NullLogger<FileService>.Instance);
+            NullLogger<FileService<TestFileDbContext>>.Instance);
 
         var stream = new MemoryStream("test content"u8.ToArray());
 
@@ -80,8 +83,8 @@ public sealed class FileServiceTests
         response.FileSize.Should().Be(12);
         response.Id.Should().NotBeNullOrEmpty();
 
-        using var verifyCtx = CreateDbContext(dbName);
-        var attachments = await verifyCtx.FileAttachments.ToListAsync();
+        await using var verifyCtx = factory.CreateDbContext();
+        var attachments = verifyCtx.FileAttachments.ToList();
         attachments.Should().HaveCount(1);
         attachments[0].FileName.Should().Be("test.txt");
         attachments[0].StoragePath.Should().Be("/files/test.txt");
@@ -92,20 +95,18 @@ public sealed class FileServiceTests
     public async Task UploadAsync_StorageFailure_ThrowsInvalidOperationException()
     {
         // Arrange
-        var dbName = Guid.NewGuid().ToString();
+        var dbName = Guid.NewGuid().ToString("N");
         var storage = new Mock<IFileStorage>(MockBehavior.Loose);
         storage.Setup(s => s.StoreAsync(It.IsAny<Stream>(), "fail.txt", "text/plain", It.IsAny<CancellationToken>()))
                .ReturnsAsync(new StorageResult("", "", false, "磁盘空间不足"));
 
-        var contextFactory = new Mock<IDbContextFactory<TenE0SystemDbContext>>();
-        contextFactory.Setup(f => f.CreateDbContextAsync(It.IsAny<CancellationToken>()))
-                      .ReturnsAsync(() => CreateDbContext(dbName));
+        var factory = CreateFactory(dbName);
 
-        var sut = new FileService(
-            contextFactory.Object,
+        var sut = new FileService<TestFileDbContext>(
+            factory,
             storage.Object,
             Mock.Of<IImageProcessor>(),
-            NullLogger<FileService>.Instance);
+            NullLogger<FileService<TestFileDbContext>>.Instance);
 
         var stream = new MemoryStream("test"u8.ToArray());
 
@@ -121,7 +122,7 @@ public sealed class FileServiceTests
     public async Task UploadAsync_ImageContentType_SetsWidthAndHeight()
     {
         // Arrange
-        var dbName = Guid.NewGuid().ToString();
+        var dbName = Guid.NewGuid().ToString("N");
         var storage = new Mock<IFileStorage>(MockBehavior.Loose);
         storage.Setup(s => s.StoreAsync(It.IsAny<Stream>(), "photo.png", "image/png", It.IsAny<CancellationToken>()))
                .ReturnsAsync(new StorageResult("/files/photo.png", "http://test/photo.png", true));
@@ -130,15 +131,13 @@ public sealed class FileServiceTests
         imageProcessor.Setup(p => p.GetDimensionsAsync(It.IsAny<Stream>(), It.IsAny<CancellationToken>()))
                       .ReturnsAsync((100, 50));
 
-        var contextFactory = new Mock<IDbContextFactory<TenE0SystemDbContext>>();
-        contextFactory.Setup(f => f.CreateDbContextAsync(It.IsAny<CancellationToken>()))
-                      .ReturnsAsync(() => CreateDbContext(dbName));
+        var factory = CreateFactory(dbName);
 
-        var sut = new FileService(
-            contextFactory.Object,
+        var sut = new FileService<TestFileDbContext>(
+            factory,
             storage.Object,
             imageProcessor.Object,
-            NullLogger<FileService>.Instance);
+            NullLogger<FileService<TestFileDbContext>>.Instance);
 
         var stream = new MemoryStream("fake image data"u8.ToArray());
 
@@ -148,8 +147,8 @@ public sealed class FileServiceTests
         // Assert
         imageProcessor.Verify(p => p.GetDimensionsAsync(It.IsAny<Stream>(), It.IsAny<CancellationToken>()), Times.Once);
 
-        using var verifyCtx = CreateDbContext(dbName);
-        var attachment = await verifyCtx.FileAttachments.FirstAsync();
+        await using var verifyCtx = factory.CreateDbContext();
+        var attachment = verifyCtx.FileAttachments.First();
         attachment.Width.Should().Be(100);
         attachment.Height.Should().Be(50);
     }
@@ -158,22 +157,20 @@ public sealed class FileServiceTests
     public async Task UploadAsync_NonImageContentType_DoesNotCallGetDimensions()
     {
         // Arrange
-        var dbName = Guid.NewGuid().ToString();
+        var dbName = Guid.NewGuid().ToString("N");
         var storage = new Mock<IFileStorage>(MockBehavior.Loose);
         storage.Setup(s => s.StoreAsync(It.IsAny<Stream>(), "doc.pdf", "application/pdf", It.IsAny<CancellationToken>()))
                .ReturnsAsync(new StorageResult("/files/doc.pdf", "http://test/doc.pdf", true));
 
         var imageProcessor = new Mock<IImageProcessor>(MockBehavior.Loose);
 
-        var contextFactory = new Mock<IDbContextFactory<TenE0SystemDbContext>>();
-        contextFactory.Setup(f => f.CreateDbContextAsync(It.IsAny<CancellationToken>()))
-                      .ReturnsAsync(() => CreateDbContext(dbName));
+        var factory = CreateFactory(dbName);
 
-        var sut = new FileService(
-            contextFactory.Object,
+        var sut = new FileService<TestFileDbContext>(
+            factory,
             storage.Object,
             imageProcessor.Object,
-            NullLogger<FileService>.Instance);
+            NullLogger<FileService<TestFileDbContext>>.Instance);
 
         var stream = new MemoryStream("fake pdf"u8.ToArray());
 
@@ -192,7 +189,7 @@ public sealed class FileServiceTests
     public async Task UploadImageAsync_WithOptions_ProcessesAndUploadsImage()
     {
         // Arrange
-        var dbName = Guid.NewGuid().ToString();
+        var dbName = Guid.NewGuid().ToString("N");
         var storage = new Mock<IFileStorage>(MockBehavior.Loose);
         storage.Setup(s => s.StoreAsync(It.IsAny<Stream>(), "photo.jpg", "image/jpeg", It.IsAny<CancellationToken>()))
                .ReturnsAsync(new StorageResult("/files/photo.jpg", "http://test/photo.jpg", true));
@@ -202,15 +199,13 @@ public sealed class FileServiceTests
         imageProcessor.Setup(p => p.ProcessAsync(It.IsAny<Stream>(), It.IsAny<ImageProcessOptions>(), It.IsAny<CancellationToken>()))
                       .ReturnsAsync(new ImageProcessResult(processedStream, 200, 200, 15, true));
 
-        var contextFactory = new Mock<IDbContextFactory<TenE0SystemDbContext>>();
-        contextFactory.Setup(f => f.CreateDbContextAsync(It.IsAny<CancellationToken>()))
-                      .ReturnsAsync(() => CreateDbContext(dbName));
+        var factory = CreateFactory(dbName);
 
-        var sut = new FileService(
-            contextFactory.Object,
+        var sut = new FileService<TestFileDbContext>(
+            factory,
             storage.Object,
             imageProcessor.Object,
-            NullLogger<FileService>.Instance);
+            NullLogger<FileService<TestFileDbContext>>.Instance);
 
         var stream = new MemoryStream("original"u8.ToArray());
         var options = new ImageProcessOptions { Width = 200, Height = 200 };
@@ -229,7 +224,7 @@ public sealed class FileServiceTests
     public async Task UploadImageAsync_GenerateThumbnail_StoresThumbnailAndUpdatesPath()
     {
         // Arrange
-        var dbName = Guid.NewGuid().ToString();
+        var dbName = Guid.NewGuid().ToString("N");
         var storage = new Mock<IFileStorage>(MockBehavior.Loose);
         storage.Setup(s => s.StoreAsync(It.IsAny<Stream>(), "thumb.jpg", "image/jpeg", It.IsAny<CancellationToken>()))
                .ReturnsAsync(new StorageResult("/files/thumb.jpg", "http://test/thumb.jpg", true));
@@ -244,15 +239,13 @@ public sealed class FileServiceTests
         imageProcessor.Setup(p => p.GenerateThumbnailAsync(It.IsAny<Stream>(), 200, 200, It.IsAny<CancellationToken>()))
                       .ReturnsAsync(thumbnailStream);
 
-        var contextFactory = new Mock<IDbContextFactory<TenE0SystemDbContext>>();
-        contextFactory.Setup(f => f.CreateDbContextAsync(It.IsAny<CancellationToken>()))
-                      .ReturnsAsync(() => CreateDbContext(dbName));
+        var factory = CreateFactory(dbName);
 
-        var sut = new FileService(
-            contextFactory.Object,
+        var sut = new FileService<TestFileDbContext>(
+            factory,
             storage.Object,
             imageProcessor.Object,
-            NullLogger<FileService>.Instance);
+            NullLogger<FileService<TestFileDbContext>>.Instance);
 
         var stream = new MemoryStream("original image"u8.ToArray());
         var options = new ImageProcessOptions { GenerateThumbnail = true, ThumbnailWidth = 200, ThumbnailHeight = 200 };
@@ -264,8 +257,8 @@ public sealed class FileServiceTests
         imageProcessor.Verify(p => p.GenerateThumbnailAsync(It.IsAny<Stream>(), 200, 200, It.IsAny<CancellationToken>()), Times.Once);
         storage.Verify(s => s.StoreAsync(It.IsAny<Stream>(), "thumb_thumb.jpg", "image/jpeg", It.IsAny<CancellationToken>()), Times.Once);
 
-        using var verifyCtx = CreateDbContext(dbName);
-        var attachment = await verifyCtx.FileAttachments.FirstAsync();
+        await using var verifyCtx = factory.CreateDbContext();
+        var attachment = verifyCtx.FileAttachments.First();
         attachment.ThumbnailPath.Should().Be("/files/thumb_thumb.jpg");
     }
 
@@ -273,21 +266,19 @@ public sealed class FileServiceTests
     public async Task UploadImageAsync_ProcessFailure_ThrowsInvalidOperationException()
     {
         // Arrange
-        var dbName = Guid.NewGuid().ToString();
+        var dbName = Guid.NewGuid().ToString("N");
         var storage = new Mock<IFileStorage>(MockBehavior.Loose);
         var imageProcessor = new Mock<IImageProcessor>(MockBehavior.Loose);
         imageProcessor.Setup(p => p.ProcessAsync(It.IsAny<Stream>(), It.IsAny<ImageProcessOptions>(), It.IsAny<CancellationToken>()))
                       .ReturnsAsync(new ImageProcessResult(Stream.Null, 0, 0, 0, false, "不支持的图片格式"));
 
-        var contextFactory = new Mock<IDbContextFactory<TenE0SystemDbContext>>();
-        contextFactory.Setup(f => f.CreateDbContextAsync(It.IsAny<CancellationToken>()))
-                      .ReturnsAsync(() => CreateDbContext(dbName));
+        var factory = CreateFactory(dbName);
 
-        var sut = new FileService(
-            contextFactory.Object,
+        var sut = new FileService<TestFileDbContext>(
+            factory,
             storage.Object,
             imageProcessor.Object,
-            NullLogger<FileService>.Instance);
+            NullLogger<FileService<TestFileDbContext>>.Instance);
 
         var stream = new MemoryStream("bad image"u8.ToArray());
         var options = new ImageProcessOptions { Width = 100, Height = 100 };
@@ -304,22 +295,20 @@ public sealed class FileServiceTests
     public async Task UploadImageAsync_NullOptions_BehavesLikeRegularUpload()
     {
         // Arrange
-        var dbName = Guid.NewGuid().ToString();
+        var dbName = Guid.NewGuid().ToString("N");
         var storage = new Mock<IFileStorage>(MockBehavior.Loose);
         storage.Setup(s => s.StoreAsync(It.IsAny<Stream>(), "plain.jpg", "image/jpeg", It.IsAny<CancellationToken>()))
                .ReturnsAsync(new StorageResult("/files/plain.jpg", "http://test/plain.jpg", true));
 
         var imageProcessor = new Mock<IImageProcessor>(MockBehavior.Loose);
 
-        var contextFactory = new Mock<IDbContextFactory<TenE0SystemDbContext>>();
-        contextFactory.Setup(f => f.CreateDbContextAsync(It.IsAny<CancellationToken>()))
-                      .ReturnsAsync(() => CreateDbContext(dbName));
+        var factory = CreateFactory(dbName);
 
-        var sut = new FileService(
-            contextFactory.Object,
+        var sut = new FileService<TestFileDbContext>(
+            factory,
             storage.Object,
             imageProcessor.Object,
-            NullLogger<FileService>.Instance);
+            NullLogger<FileService<TestFileDbContext>>.Instance);
 
         var stream = new MemoryStream("raw image"u8.ToArray());
 
@@ -341,7 +330,7 @@ public sealed class FileServiceTests
     public async Task DownloadAsync_ExistingFile_ReturnsStreamAndMetadata()
     {
         // Arrange
-        var dbName = Guid.NewGuid().ToString();
+        var dbName = Guid.NewGuid().ToString("N");
         var fileId = Guid.NewGuid().ToString("N");
         var attachment = new TenE0FileAttachment
         {
@@ -352,7 +341,9 @@ public sealed class FileServiceTests
             StorageBackend = "Local",
             FileSize = 100
         };
-        using (var seedCtx = CreateDbContext(dbName))
+
+        var factory = CreateFactory(dbName);
+        await using (var seedCtx = factory.CreateDbContext())
         {
             seedCtx.FileAttachments.Add(attachment);
             await seedCtx.SaveChangesAsync();
@@ -363,15 +354,11 @@ public sealed class FileServiceTests
         storage.Setup(s => s.RetrieveAsync("/files/download.txt", It.IsAny<CancellationToken>()))
                .ReturnsAsync(retrieveStream);
 
-        var contextFactory = new Mock<IDbContextFactory<TenE0SystemDbContext>>();
-        contextFactory.Setup(f => f.CreateDbContextAsync(It.IsAny<CancellationToken>()))
-                      .ReturnsAsync(() => CreateDbContext(dbName));
-
-        var sut = new FileService(
-            contextFactory.Object,
+        var sut = new FileService<TestFileDbContext>(
+            factory,
             storage.Object,
             Mock.Of<IImageProcessor>(),
-            NullLogger<FileService>.Instance);
+            NullLogger<FileService<TestFileDbContext>>.Instance);
 
         // Act
         var (stream, metadata) = await sut.DownloadAsync(fileId);
@@ -387,18 +374,16 @@ public sealed class FileServiceTests
     public async Task DownloadAsync_MissingFile_ReturnsNullTuple()
     {
         // Arrange
-        var dbName = Guid.NewGuid().ToString();
+        var dbName = Guid.NewGuid().ToString("N");
         var storage = new Mock<IFileStorage>(MockBehavior.Loose);
 
-        var contextFactory = new Mock<IDbContextFactory<TenE0SystemDbContext>>();
-        contextFactory.Setup(f => f.CreateDbContextAsync(It.IsAny<CancellationToken>()))
-                      .ReturnsAsync(() => CreateDbContext(dbName));
+        var factory = CreateFactory(dbName);
 
-        var sut = new FileService(
-            contextFactory.Object,
+        var sut = new FileService<TestFileDbContext>(
+            factory,
             storage.Object,
             Mock.Of<IImageProcessor>(),
-            NullLogger<FileService>.Instance);
+            NullLogger<FileService<TestFileDbContext>>.Instance);
 
         // Act
         var (stream, metadata) = await sut.DownloadAsync("nonexistent");
@@ -412,7 +397,7 @@ public sealed class FileServiceTests
     public async Task DownloadAsync_SoftDeletedFile_ReturnsNullTuple()
     {
         // Arrange
-        var dbName = Guid.NewGuid().ToString();
+        var dbName = Guid.NewGuid().ToString("N");
         var fileId = Guid.NewGuid().ToString("N");
         var attachment = new TenE0FileAttachment
         {
@@ -424,7 +409,9 @@ public sealed class FileServiceTests
             FileSize = 50,
             IsDeleted = true
         };
-        using (var seedCtx = CreateDbContext(dbName))
+
+        var factory = CreateFactory(dbName);
+        await using (var seedCtx = factory.CreateDbContext())
         {
             seedCtx.FileAttachments.Add(attachment);
             await seedCtx.SaveChangesAsync();
@@ -432,15 +419,11 @@ public sealed class FileServiceTests
 
         var storage = new Mock<IFileStorage>(MockBehavior.Loose);
 
-        var contextFactory = new Mock<IDbContextFactory<TenE0SystemDbContext>>();
-        contextFactory.Setup(f => f.CreateDbContextAsync(It.IsAny<CancellationToken>()))
-                      .ReturnsAsync(() => CreateDbContext(dbName));
-
-        var sut = new FileService(
-            contextFactory.Object,
+        var sut = new FileService<TestFileDbContext>(
+            factory,
             storage.Object,
             Mock.Of<IImageProcessor>(),
-            NullLogger<FileService>.Instance);
+            NullLogger<FileService<TestFileDbContext>>.Instance);
 
         // Act
         var (stream, metadata) = await sut.DownloadAsync(fileId);
@@ -458,7 +441,7 @@ public sealed class FileServiceTests
     public async Task DeleteAsync_ExistingFile_SoftDeletesAndReturnsTrue()
     {
         // Arrange
-        var dbName = Guid.NewGuid().ToString();
+        var dbName = Guid.NewGuid().ToString("N");
         var fileId = Guid.NewGuid().ToString("N");
         var attachment = new TenE0FileAttachment
         {
@@ -469,7 +452,9 @@ public sealed class FileServiceTests
             StorageBackend = "Local",
             FileSize = 42
         };
-        using (var seedCtx = CreateDbContext(dbName))
+
+        var factory = CreateFactory(dbName);
+        await using (var seedCtx = factory.CreateDbContext())
         {
             seedCtx.FileAttachments.Add(attachment);
             await seedCtx.SaveChangesAsync();
@@ -479,15 +464,11 @@ public sealed class FileServiceTests
         storage.Setup(s => s.DeleteAsync("/files/to-delete.txt", It.IsAny<CancellationToken>()))
                .ReturnsAsync(true);
 
-        var contextFactory = new Mock<IDbContextFactory<TenE0SystemDbContext>>();
-        contextFactory.Setup(f => f.CreateDbContextAsync(It.IsAny<CancellationToken>()))
-                      .ReturnsAsync(() => CreateDbContext(dbName));
-
-        var sut = new FileService(
-            contextFactory.Object,
+        var sut = new FileService<TestFileDbContext>(
+            factory,
             storage.Object,
             Mock.Of<IImageProcessor>(),
-            NullLogger<FileService>.Instance);
+            NullLogger<FileService<TestFileDbContext>>.Instance);
 
         // Act
         var result = await sut.DeleteAsync(fileId);
@@ -495,8 +476,8 @@ public sealed class FileServiceTests
         // Assert
         result.Should().BeTrue();
 
-        using var verifyCtx = CreateDbContext(dbName);
-        var deleted = await verifyCtx.FileAttachments.FindAsync(new object[] { fileId });
+        await using var verifyCtx = factory.CreateDbContext();
+        var deleted = await verifyCtx.FileAttachments.FindAsync(fileId);
         deleted.Should().NotBeNull();
         deleted!.IsDeleted.Should().BeTrue();
     }
@@ -505,18 +486,16 @@ public sealed class FileServiceTests
     public async Task DeleteAsync_MissingFile_ReturnsFalse()
     {
         // Arrange
-        var dbName = Guid.NewGuid().ToString();
+        var dbName = Guid.NewGuid().ToString("N");
         var storage = new Mock<IFileStorage>(MockBehavior.Loose);
 
-        var contextFactory = new Mock<IDbContextFactory<TenE0SystemDbContext>>();
-        contextFactory.Setup(f => f.CreateDbContextAsync(It.IsAny<CancellationToken>()))
-                      .ReturnsAsync(() => CreateDbContext(dbName));
+        var factory = CreateFactory(dbName);
 
-        var sut = new FileService(
-            contextFactory.Object,
+        var sut = new FileService<TestFileDbContext>(
+            factory,
             storage.Object,
             Mock.Of<IImageProcessor>(),
-            NullLogger<FileService>.Instance);
+            NullLogger<FileService<TestFileDbContext>>.Instance);
 
         // Act
         var result = await sut.DeleteAsync("nonexistent");
@@ -530,7 +509,7 @@ public sealed class FileServiceTests
     public async Task DeleteAsync_AlreadyDeletedFile_ReturnsFalse()
     {
         // Arrange
-        var dbName = Guid.NewGuid().ToString();
+        var dbName = Guid.NewGuid().ToString("N");
         var fileId = Guid.NewGuid().ToString("N");
         var attachment = new TenE0FileAttachment
         {
@@ -542,7 +521,9 @@ public sealed class FileServiceTests
             FileSize = 10,
             IsDeleted = true
         };
-        using (var seedCtx = CreateDbContext(dbName))
+
+        var factory = CreateFactory(dbName);
+        await using (var seedCtx = factory.CreateDbContext())
         {
             seedCtx.FileAttachments.Add(attachment);
             await seedCtx.SaveChangesAsync();
@@ -550,15 +531,11 @@ public sealed class FileServiceTests
 
         var storage = new Mock<IFileStorage>(MockBehavior.Loose);
 
-        var contextFactory = new Mock<IDbContextFactory<TenE0SystemDbContext>>();
-        contextFactory.Setup(f => f.CreateDbContextAsync(It.IsAny<CancellationToken>()))
-                      .ReturnsAsync(() => CreateDbContext(dbName));
-
-        var sut = new FileService(
-            contextFactory.Object,
+        var sut = new FileService<TestFileDbContext>(
+            factory,
             storage.Object,
             Mock.Of<IImageProcessor>(),
-            NullLogger<FileService>.Instance);
+            NullLogger<FileService<TestFileDbContext>>.Instance);
 
         // Act
         var result = await sut.DeleteAsync(fileId);
@@ -572,7 +549,7 @@ public sealed class FileServiceTests
     public async Task DeleteAsync_StorageDeleteFailure_StillMarksDeleted()
     {
         // Arrange
-        var dbName = Guid.NewGuid().ToString();
+        var dbName = Guid.NewGuid().ToString("N");
         var fileId = Guid.NewGuid().ToString("N");
         var attachment = new TenE0FileAttachment
         {
@@ -583,7 +560,9 @@ public sealed class FileServiceTests
             StorageBackend = "Local",
             FileSize = 30
         };
-        using (var seedCtx = CreateDbContext(dbName))
+
+        var factory = CreateFactory(dbName);
+        await using (var seedCtx = factory.CreateDbContext())
         {
             seedCtx.FileAttachments.Add(attachment);
             await seedCtx.SaveChangesAsync();
@@ -593,16 +572,15 @@ public sealed class FileServiceTests
         storage.Setup(s => s.DeleteAsync("/files/storage-fail.txt", It.IsAny<CancellationToken>()))
                .ReturnsAsync(false);
 
-        var contextFactory = new Mock<IDbContextFactory<TenE0SystemDbContext>>();
-        contextFactory.Setup(f => f.CreateDbContextAsync(It.IsAny<CancellationToken>()))
-                      .ReturnsAsync(() => CreateDbContext(dbName));
+        // 不使用 Mock<ILogger<...>>：Castle.DynamicProxy 在 DynamicProxyGenAssembly2 中生成代理类，
+        // 看不到本测试的私有 TestFileDbContext，会抛 "type ... is not accessible"。NullLogger<T> 是具体类，无需代理。
+        var logger = NullLogger<FileService<TestFileDbContext>>.Instance;
 
-        var logger = new Mock<ILogger<FileService>>();
-        var sut = new FileService(
-            contextFactory.Object,
+        var sut = new FileService<TestFileDbContext>(
+            factory,
             storage.Object,
             Mock.Of<IImageProcessor>(),
-            logger.Object);
+            logger);
 
         // Act
         var result = await sut.DeleteAsync(fileId);
@@ -610,8 +588,8 @@ public sealed class FileServiceTests
         // Assert
         result.Should().BeTrue();
 
-        using var verifyCtx = CreateDbContext(dbName);
-        var deleted = await verifyCtx.FileAttachments.FindAsync(new object[] { fileId });
+        await using var verifyCtx = factory.CreateDbContext();
+        var deleted = await verifyCtx.FileAttachments.FindAsync(fileId);
         deleted!.IsDeleted.Should().BeTrue();
     }
 
@@ -619,7 +597,7 @@ public sealed class FileServiceTests
     public async Task DeleteAsync_FileWithThumbnail_DeletesBothFromStorage()
     {
         // Arrange
-        var dbName = Guid.NewGuid().ToString();
+        var dbName = Guid.NewGuid().ToString("N");
         var fileId = Guid.NewGuid().ToString("N");
         var attachment = new TenE0FileAttachment
         {
@@ -631,7 +609,9 @@ public sealed class FileServiceTests
             FileSize = 200,
             ThumbnailPath = "/files/thumb_with-thumb.jpg"
         };
-        using (var seedCtx = CreateDbContext(dbName))
+
+        var factory = CreateFactory(dbName);
+        await using (var seedCtx = factory.CreateDbContext())
         {
             seedCtx.FileAttachments.Add(attachment);
             await seedCtx.SaveChangesAsync();
@@ -643,15 +623,11 @@ public sealed class FileServiceTests
         storage.Setup(s => s.DeleteAsync("/files/thumb_with-thumb.jpg", It.IsAny<CancellationToken>()))
                .ReturnsAsync(true);
 
-        var contextFactory = new Mock<IDbContextFactory<TenE0SystemDbContext>>();
-        contextFactory.Setup(f => f.CreateDbContextAsync(It.IsAny<CancellationToken>()))
-                      .ReturnsAsync(() => CreateDbContext(dbName));
-
-        var sut = new FileService(
-            contextFactory.Object,
+        var sut = new FileService<TestFileDbContext>(
+            factory,
             storage.Object,
             Mock.Of<IImageProcessor>(),
-            NullLogger<FileService>.Instance);
+            NullLogger<FileService<TestFileDbContext>>.Instance);
 
         // Act
         var result = await sut.DeleteAsync(fileId);
@@ -670,7 +646,7 @@ public sealed class FileServiceTests
     public async Task GetMetadataAsync_ExistingFile_ReturnsAttachment()
     {
         // Arrange
-        var dbName = Guid.NewGuid().ToString();
+        var dbName = Guid.NewGuid().ToString("N");
         var fileId = Guid.NewGuid().ToString("N");
         var attachment = new TenE0FileAttachment
         {
@@ -681,21 +657,19 @@ public sealed class FileServiceTests
             StorageBackend = "Local",
             FileSize = 88
         };
-        using (var seedCtx = CreateDbContext(dbName))
+
+        var factory = CreateFactory(dbName);
+        await using (var seedCtx = factory.CreateDbContext())
         {
             seedCtx.FileAttachments.Add(attachment);
             await seedCtx.SaveChangesAsync();
         }
 
-        var contextFactory = new Mock<IDbContextFactory<TenE0SystemDbContext>>();
-        contextFactory.Setup(f => f.CreateDbContextAsync(It.IsAny<CancellationToken>()))
-                      .ReturnsAsync(() => CreateDbContext(dbName));
-
-        var sut = new FileService(
-            contextFactory.Object,
+        var sut = new FileService<TestFileDbContext>(
+            factory,
             Mock.Of<IFileStorage>(),
             Mock.Of<IImageProcessor>(),
-            NullLogger<FileService>.Instance);
+            NullLogger<FileService<TestFileDbContext>>.Instance);
 
         // Act
         var result = await sut.GetMetadataAsync(fileId);
@@ -710,16 +684,15 @@ public sealed class FileServiceTests
     public async Task GetMetadataAsync_MissingFile_ReturnsNull()
     {
         // Arrange
-        var dbName = Guid.NewGuid().ToString();
-        var contextFactory = new Mock<IDbContextFactory<TenE0SystemDbContext>>();
-        contextFactory.Setup(f => f.CreateDbContextAsync(It.IsAny<CancellationToken>()))
-                      .ReturnsAsync(() => CreateDbContext(dbName));
+        var dbName = Guid.NewGuid().ToString("N");
 
-        var sut = new FileService(
-            contextFactory.Object,
+        var factory = CreateFactory(dbName);
+
+        var sut = new FileService<TestFileDbContext>(
+            factory,
             Mock.Of<IFileStorage>(),
             Mock.Of<IImageProcessor>(),
-            NullLogger<FileService>.Instance);
+            NullLogger<FileService<TestFileDbContext>>.Instance);
 
         // Act
         var result = await sut.GetMetadataAsync("nonexistent");
@@ -732,7 +705,7 @@ public sealed class FileServiceTests
     public async Task GetMetadataAsync_SoftDeletedFile_ReturnsNull()
     {
         // Arrange
-        var dbName = Guid.NewGuid().ToString();
+        var dbName = Guid.NewGuid().ToString("N");
         var fileId = Guid.NewGuid().ToString("N");
         var attachment = new TenE0FileAttachment
         {
@@ -744,21 +717,19 @@ public sealed class FileServiceTests
             FileSize = 33,
             IsDeleted = true
         };
-        using (var seedCtx = CreateDbContext(dbName))
+
+        var factory = CreateFactory(dbName);
+        await using (var seedCtx = factory.CreateDbContext())
         {
             seedCtx.FileAttachments.Add(attachment);
             await seedCtx.SaveChangesAsync();
         }
 
-        var contextFactory = new Mock<IDbContextFactory<TenE0SystemDbContext>>();
-        contextFactory.Setup(f => f.CreateDbContextAsync(It.IsAny<CancellationToken>()))
-                      .ReturnsAsync(() => CreateDbContext(dbName));
-
-        var sut = new FileService(
-            contextFactory.Object,
+        var sut = new FileService<TestFileDbContext>(
+            factory,
             Mock.Of<IFileStorage>(),
             Mock.Of<IImageProcessor>(),
-            NullLogger<FileService>.Instance);
+            NullLogger<FileService<TestFileDbContext>>.Instance);
 
         // Act
         var result = await sut.GetMetadataAsync(fileId);
@@ -775,7 +746,7 @@ public sealed class FileServiceTests
     public async Task GetAccessUrlAsync_ExistingFile_ReturnsCorrectUrl()
     {
         // Arrange
-        var dbName = Guid.NewGuid().ToString();
+        var dbName = Guid.NewGuid().ToString("N");
         var fileId = Guid.NewGuid().ToString("N");
         var attachment = new TenE0FileAttachment
         {
@@ -786,7 +757,9 @@ public sealed class FileServiceTests
             StorageBackend = "Local",
             FileSize = 64
         };
-        using (var seedCtx = CreateDbContext(dbName))
+
+        var factory = CreateFactory(dbName);
+        await using (var seedCtx = factory.CreateDbContext())
         {
             seedCtx.FileAttachments.Add(attachment);
             await seedCtx.SaveChangesAsync();
@@ -795,15 +768,11 @@ public sealed class FileServiceTests
         var storage = new Mock<IFileStorage>(MockBehavior.Loose);
         storage.Setup(s => s.GetAccessUrl("/files/url-test.txt")).Returns("https://cdn.example.com/files/url-test.txt");
 
-        var contextFactory = new Mock<IDbContextFactory<TenE0SystemDbContext>>();
-        contextFactory.Setup(f => f.CreateDbContextAsync(It.IsAny<CancellationToken>()))
-                      .ReturnsAsync(() => CreateDbContext(dbName));
-
-        var sut = new FileService(
-            contextFactory.Object,
+        var sut = new FileService<TestFileDbContext>(
+            factory,
             storage.Object,
             Mock.Of<IImageProcessor>(),
-            NullLogger<FileService>.Instance);
+            NullLogger<FileService<TestFileDbContext>>.Instance);
 
         // Act
         var url = await sut.GetAccessUrlAsync(fileId);
@@ -816,18 +785,16 @@ public sealed class FileServiceTests
     public async Task GetAccessUrlAsync_MissingFile_ReturnsNull()
     {
         // Arrange
-        var dbName = Guid.NewGuid().ToString();
+        var dbName = Guid.NewGuid().ToString("N");
         var storage = new Mock<IFileStorage>(MockBehavior.Loose);
 
-        var contextFactory = new Mock<IDbContextFactory<TenE0SystemDbContext>>();
-        contextFactory.Setup(f => f.CreateDbContextAsync(It.IsAny<CancellationToken>()))
-                      .ReturnsAsync(() => CreateDbContext(dbName));
+        var factory = CreateFactory(dbName);
 
-        var sut = new FileService(
-            contextFactory.Object,
+        var sut = new FileService<TestFileDbContext>(
+            factory,
             storage.Object,
             Mock.Of<IImageProcessor>(),
-            NullLogger<FileService>.Instance);
+            NullLogger<FileService<TestFileDbContext>>.Instance);
 
         // Act
         var url = await sut.GetAccessUrlAsync("nonexistent");
