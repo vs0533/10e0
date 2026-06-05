@@ -54,6 +54,7 @@ StructuredOutput(input: { id: 7, type: 'issue', ... })
 
 **PR 处理时的判定**：
 - PR target = main → P0 异常（必须改 base 为 dev 后才能合并）
+- **同步 PR**（`base=main && head=dev`，标题常含 "sync:" / "merge dev to main"）→ **P1 例外**：target main 是合理的，但**必须**用 **"Create a merge commit"** 合并，**禁止** "Squash and merge"。squash 会破坏 main/dev 血缘关系，下一次同步会报 ~30 个假冲突（add/add 冲突，文件内容其实一致）。处理建议栏必须写明合并按钮，参考 `docs/18-sync-pr-strategy.md`
 - PR target = dev + source = feature/* → 正常
 - 看到 direct commit 到 dev/main → 报告"违反保护规则"（不计入待办，但告知用户手动处理）
 
@@ -115,6 +116,7 @@ gh api graphql -F query='{ repository(owner:"OWNER", name:"REPO") { pullRequests
 | ⚫ **Stale draft** | `isDraft == true && age > 3 天` | 需明确方向或转为 ready |
 | 🔵 **待审 + 24h 新评论** | 24h 内有 `commented`/`changes_requested` review | 需及时处理 |
 | 🟣 **Base 分支异常** | `baseRefName != "dev"` | 需调整 PR 目标分支 |
+| 🔶 **同步 PR 合并方式** | `base="main" && head="dev"` 且未合并 | 在处理建议里提醒：用 **Create a merge commit**，**禁止** Squash |
 
 **输出格式**：每条 PR 给出 `number`, `title`, `reviewDecision`, `ciStatus`, `mergeable`, `未解决评论数`, `draft 状态`, `base 分支`, `年龄`。
 

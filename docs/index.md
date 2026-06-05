@@ -38,6 +38,7 @@
 | [15-sequences](15-sequences.md) | 流水号生成器，自定义编号规则 |
 | [16-dynamic-queries](16-dynamic-queries.md) | 动态查询与分页，表达式树查询 |
 | [17-deployment](17-deployment.md) | 部署与 CI/CD 配置 |
+| [18-sync-pr-strategy](18-sync-pr-strategy.md) | dev → main 同步 PR 合并策略（为何禁 Squash） |
 
 ---
 
