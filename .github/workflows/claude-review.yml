@@ -65,12 +65,20 @@ jobs:
 
       - name: Get PR diff via API (no untrusted checkout)
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           PR_NUMBER="${{ github.event.pull_request.number }}"
           if [ -n "$PR_NUMBER" ]; then
-            # pull_request_target: 通过 GitHub API 拿 PR diff，不 checkout 非信任代码
-            gh pr diff "$PR_NUMBER" > /tmp/pr-diff.txt
+            # 直接用 curl 拉 PR diff（@GPT 建议）：
+            # - 不依赖 gh CLI 认证
+            # - 不走 gh GraphQL
+            # - 认证更直接，问题面更小，更适合 CI
+            curl -fsSL \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github.v3.diff" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/repos/${{ github.repository }}/pulls/$PR_NUMBER" \
+              > /tmp/pr-diff.txt
           else
             # workflow_dispatch / push 兜底：用本地 git diff
             git diff origin/${{ github.base_ref || 'dev' }}...HEAD > /tmp/pr-diff.txt
