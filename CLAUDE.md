@@ -25,7 +25,7 @@ tests/
 
 .github/workflows/
 ├── pr-build.yml        — PR 构建测试 + 覆盖率
-├── claude-review.yml   — Claude Code (Qwen) 自动审查
+├── claude-review.yml   — Claude Code (MiniMax-M3) 自动审查
 └── release.yml         — 自动发版（SemVer + GitHub Release + NuGet）
 ```
 
@@ -68,7 +68,7 @@ dotnet run --project src/10E0.Api
 | Workflow | 触发 | 说明 |
 |----------|------|------|
 | `pr-build.yml` | PR 到 dev/main | restore → build → test + coverage |
-| `claude-review.yml` | PR opened/synchronize | 阿里云百炼 API (Qwen 3.7-max) headless 审查 |
+| `claude-review.yml` | PR opened/synchronize | 阿里云百炼 API (MiniMax-M3) headless 审查 |
 | `release.yml` | push 到 main | 自动 patch+1 → tag → Release → NuGet pack |
 
 ### Code Review 配置
