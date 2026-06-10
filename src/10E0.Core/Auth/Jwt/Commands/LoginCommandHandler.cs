@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using TenE0.Core.Abstractions;
 using TenE0.Core.Auth.Jwt.Services;
 using TenE0.Core.Auth.Jwt.Storage;
+using TenE0.Core.Permissions.Storage;
 
 namespace TenE0.Core.Auth.Jwt.Commands;
 
@@ -46,7 +47,15 @@ public sealed class LoginCommandHandler<TUser, TContext>(
             .Select(ur => ur.RoleCode)
             .ToListAsync(ct);
 
-        var tokens = tokenService.Issue(user.UserCode, user.DisplayName, user.UserType, roles);
+        // #7: 取每个 role 的当前 version，嵌入 JWT（detached 读 + 显式 select）
+        var roleVersions = roles.Count == 0
+            ? new Dictionary<string, long>()
+            : await dc.Set<TenE0Role>()
+                .AsNoTracking()
+                .Where(r => roles.Contains(r.Code))
+                .ToDictionaryAsync(r => r.Code, r => r.Version, StringComparer.Ordinal, ct);
+
+        var tokens = tokenService.Issue(user.UserCode, user.DisplayName, user.UserType, roles, roleVersions);
 
         dc.Set<TenE0RefreshToken>().Add(new TenE0RefreshToken
         {

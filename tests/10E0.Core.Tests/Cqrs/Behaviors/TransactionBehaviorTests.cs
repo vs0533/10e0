@@ -321,23 +321,28 @@ public sealed class TransactionBehaviorTests
     {
         // 模拟 N 个并发请求，每个都嵌在一个外层事务中跑 TransactionBehavior。
         // 验证：所有 savepoint 名字都遵循 "sp_<guid>" 格式且互不重复。
+        //
+        // 用 Task.Run 强制把每个行为执行推送到 ThreadPool，否则在同步的 HandleAsync 路径
+        // 上 64 个 task 全在同一条调用栈上顺序执行 —— 根本不并发，GUID 也根本不会撞。
         const int concurrentCount = 64;
-        var tasks = new Task[concurrentCount];
-        var trackers = new SavepointTracker[concurrentCount];
+        var tasks = new Task<SavepointTracker>[concurrentCount];
 
         for (var i = 0; i < concurrentCount; i++)
         {
-            var (factory, _, tracker) = CreateFactoryWithExistingTransaction();
-            trackers[i] = tracker;
-            var logger = NullLogger<TransactionBehavior<TransactionalCmd, Unit, DbContext>>.Instance;
-            var behavior = new TransactionBehavior<TransactionalCmd, Unit, DbContext>(factory, logger);
-            tasks[i] = behavior.HandleAsync(
-                new TransactionalCmd(),
-                _ => Unit.Task,
-                CancellationToken.None);
+            tasks[i] = Task.Run(async () =>
+            {
+                var (factory, _, tracker) = CreateFactoryWithExistingTransaction();
+                var logger = NullLogger<TransactionBehavior<TransactionalCmd, Unit, DbContext>>.Instance;
+                var behavior = new TransactionBehavior<TransactionalCmd, Unit, DbContext>(factory, logger);
+                await behavior.HandleAsync(
+                    new TransactionalCmd(),
+                    _ => Unit.Task,
+                    CancellationToken.None);
+                return tracker;
+            });
         }
 
-        await Task.WhenAll(tasks);
+        var trackers = await Task.WhenAll(tasks);
 
         var allNames = trackers.SelectMany(t => t.Created).ToList();
         allNames.Should().HaveCount(concurrentCount);
@@ -366,5 +371,43 @@ public sealed class TransactionBehaviorTests
         strictFactory.Verify(
             f => f.CreateDbContextAsync(It.IsAny<CancellationToken>()),
             Times.Never);
+    }
+
+    // Issue #10 acceptance: 100 consecutive runs of ConcurrentNestedCommands on
+    // multi-core hardware must remain deterministic — GUID generation must not collide.
+    // We can't run "100" in a single xUnit Fact and stay under reasonable time budgets,
+    // so we loop the inner concurrent-batch 100x and assert no collisions across all batches.
+    [Fact]
+    public async Task ConcurrentNestedCommands_100Batches_AllSavepointNamesUnique()
+    {
+        const int batchSize = 16;
+        const int totalBatches = 100;
+        var allNames = new List<string>(batchSize * totalBatches);
+
+        for (var batch = 0; batch < totalBatches; batch++)
+        {
+            var tasks = new Task<SavepointTracker>[batchSize];
+            for (var i = 0; i < batchSize; i++)
+            {
+                tasks[i] = Task.Run(async () =>
+                {
+                    var (factory, _, tracker) = CreateFactoryWithExistingTransaction();
+                    var logger = NullLogger<TransactionBehavior<TransactionalCmd, Unit, DbContext>>.Instance;
+                    var behavior = new TransactionBehavior<TransactionalCmd, Unit, DbContext>(factory, logger);
+                    await behavior.HandleAsync(
+                        new TransactionalCmd(),
+                        _ => Unit.Task,
+                        CancellationToken.None);
+                    return tracker;
+                });
+            }
+
+            var trackers = await Task.WhenAll(tasks);
+            allNames.AddRange(trackers.SelectMany(t => t.Created));
+        }
+
+        allNames.Should().HaveCount(batchSize * totalBatches);
+        allNames.Should().OnlyHaveUniqueItems(
+            $"across {totalBatches} consecutive concurrent batches (size {batchSize} each), GUIDs must never collide");
     }
 }

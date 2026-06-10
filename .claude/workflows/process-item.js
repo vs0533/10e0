@@ -69,17 +69,36 @@ if (!item) throw new Error('process-item: args.item 必填')
 
 // —— preflight：分支策略校验（防止 agent 在 main/dev 上直接开发）
 // 规则：本仓库 main 仅用于发版，dev 是集成分支，所有 feature 必须在 feature/* 分支上开发并开 PR 到 dev
+//
+// 修复：原版用 free-text 回报，agent 在 w7bu0omg2 误报"在 dev 分支"导致误 throw。
+// 改用 schema 强制 currentBranch 是非空字符串（agent 不许省略 / 写 undefined）。
+// 同时给 agent 加 "精确读 git 输出，不要猜" 的硬指令。
+const BRANCHCHECK_SCHEMA = {
+  type: 'object',
+  required: ['currentBranch', 'isFeature', 'worktreeClean'],
+  properties: {
+    currentBranch: { type: 'string', minLength: 1 },
+    isFeature: { type: 'boolean' },
+    worktreeClean: { type: 'boolean' },
+    createdBranch: { type: 'string' },
+    error: { type: 'string' },
+  },
+}
 const branchCheck = await agent(
   `执行 \`git rev-parse --abbrev-ref HEAD\` 和 \`git status --porcelain\`。\n\n` +
   `**硬性规则**：\n` +
-  `1. 当前分支**禁止**是 main 或 dev。如果在 main/dev，立即 throw，错误信息："agentic 禁止在 main/dev 直接开发！请创建 feature/* 分支"\n` +
-  `2. 当前分支应是 feature/issue-N-slug 格式（slug 是 issue 标题的 kebab-case）。如果不是，**自动创建**：\n` +
-  `   \`git checkout -b feature/${item.id}-${(item.title || 'fix').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0,40)}\`\n` +
-  `3. 工作区必须干净（无未提交改动）。如果有未提交改动，throw 让上层处理。\n\n` +
-  `回报：{ currentBranch, isFeature, worktreeClean, createdBranch? }`,
-  { phase: 'BranchCheck', agentType: 'general-purpose' }
+  `1. 如果当前分支是 main 或 dev，立即 throw，错误信息："agentic 禁止在 main/dev 直接开发！请创建 feature/* 分支"\n` +
+  `2. 如果当前分支已是 feature/issue-N-* 格式，跳过创建\n` +
+  `3. 否则自动创建：\`git checkout -b feature/${item.id}-${(item.title || 'fix').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0,40)}\`\n` +
+  `4. 工作区必须干净（无提交改动）。如果有未提交改动，throw 让上层处理。\n\n` +
+  `**重要**：精确读 git 输出，**不要猜**。如果命令报 fatal error，原样回报 error 字段。\n` +
+  `branch 名字以 git 实际输出为准，不接受"应该是 / 看起来像"。\n\n` +
+  `回报字段（schema 必填，currentBranch 必须是非空字符串，不能是 undefined / null）：\n` +
+  `{ currentBranch: string, isFeature: boolean, worktreeClean: boolean, createdBranch?: string, error?: string }`,
+  { phase: 'BranchCheck', agentType: 'general-purpose', schema: BRANCHCHECK_SCHEMA }
 )
 log(`分支 preflight: ${JSON.stringify(branchCheck)}`)
+if (branchCheck.error) throw new Error(`BranchCheck failed: ${branchCheck.error}`)
 
 const kind = dispatchKind(item)
 log(`#${item.id} 派单: ${kind} (${item.title})`)
@@ -121,6 +140,12 @@ if (NEEDS_PLANNER_KINDS.has(kind)) {
 //   2. 实现（handler/service/evaluator 改写）—— 改动 < 5 文件
 //   3. 单元测试补全（覆盖边界条件）+ 跑全 suite
 // 每步独立 agent，靠文件系统接力；如果上一步没产出，本步就少干点
+//
+// 关于 needsDownstream：小 issue（无新 schema/无新接口）Step 1 会返回
+// { needsDownstream: true, reason } —— 这是**正常**流，不是错误。
+// Step 2 接力做完整实现。Step 1 的硬约束是" < 5 文件 + 不改 handler/service"，
+// 不是"必须改 schema"。w7bu0omg2 #10 案例：Step 1 零文件改动（internal 可见性
+// 不属于 schema），Step 2 接力做完所有工作。
 await agent(
   `TDD Step 1/3 (schema & interfaces) for #${item.id} "${item.title}"\n\n` +
   `Issue body:\n${item.body}\n\n` +
@@ -128,7 +153,7 @@ await agent(
   `**硬约束**：\n` +
   `- 改动 < 5 个文件，超了就 throw 退出，让上层拆 issue\n` +
   `- 不写 handler、不写 service、不写 tests\n` +
-  `- 完成后 \`dotnet build 10e0.slnx 2>&1 | tail -10\`，必须通过（已有 RED 测试无所谓）\n` +
+  `- 完成后 \`DOTNET_CLI_UI_LANGUAGE=en-US dotnet build 10e0.slnx 2>&1 | tail -10\`，必须通过（已有 RED 测试无所谓）\n` +
   `- 回报：{ filesChanged, buildOk, newInterfaces } 结构化数据\n\n` +
   `如果发现本步需要改 handler/service（说明 issue 拆得不够细），回报 { needsDownstream: true, reason } 并退出。`,
   { phase: 'TDD-Schema', agentType: 'tdd-guide' }
@@ -140,7 +165,7 @@ await agent(
   `范围：让 RED 验收测试和已有所有测试全 GREEN——改 handler/service/evaluator。\n` +
   `**硬约束**：\n` +
   `- 改动 < 5 个文件\n` +
-  `- 跑 \`dotnet test 10e0.slnx --nologo 2>&1 | tail -30\` 必须显示 "Failed: 0"（既有测试不许破）\n` +
+  `- 跑 \`DOTNET_CLI_UI_LANGUAGE=en-US dotnet test 10e0.slnx --nologo 2>&1 | tail -30\` 必须显示 "Failed: 0"（既有测试不许破）\n` +
   `- 写必要的新单元测试覆盖边界（但 < 3 个测试文件）\n` +
   `- 回报：{ filesChanged, testsPass, newUnitTests, remainingRed } 结构化数据\n\n` +
   `如果本步跑超过 30 分钟还没 GREEN，先 commit 当前进度，回报 { stalled: true, partialFiles, remainingFails } 退出。`,
@@ -150,22 +175,66 @@ await agent(
 await agent(
   `TDD Step 3/3 (full verification) for #${item.id} "${item.title}"\n\n` +
   `**前置条件**：Step 2 已完成。最后兜底：\n` +
-  `1. \`dotnet build 10e0.slnx 2>&1 | tail -5\` 必须 0 警告 0 错误\n` +
-  `2. \`dotnet test 10e0.slnx --nologo 2>&1 | tail -10\` 必须全绿\n` +
-  `3. \`dotnet test 10e0.slnx --collect:"XPlat Code Coverage" 2>&1 | tail -5\` 报告覆盖率数字\n` +
+  `1. \`DOTNET_CLI_UI_LANGUAGE=en-US dotnet build 10e0.slnx 2>&1 | tail -5\` 必须 0 警告 0 错误\n` +
+  `2. \`DOTNET_CLI_UI_LANGUAGE=en-US dotnet test 10e0.slnx --nologo 2>&1 | tail -10\` 必须全绿\n` +
+  `3. \`DOTNET_CLI_UI_LANGUAGE=en-US dotnet test 10e0.slnx --collect:"XPlat Code Coverage" 2>&1 | tail -5\` 报告覆盖率数字\n` +
+  `4. \`DOTNET_CLI_UI_LANGUAGE=en-US dotnet format 10e0.slnx --verify-no-changes --severity warn 2>&1 | tail -5\` 必须 exit 0（PR #27 WHITESPACE 教训：commit 前必须 format 干净，否则 CI 卡门禁）\n` +
   `**只跑命令 + 报告数字**，不写新代码、不修任何东西。如果不绿就 throw 让上层 fail。\n` +
-  `回报：{ buildOk, testsOk, coverage } 结构化数据。`,
+  `回报：{ buildOk, testsOk, coverage, formatOk } 结构化数据。
+
+**所有 dotnet 命令必须加 \`DOTNET_CLI_UI_LANGUAGE=en-US\` 前缀**，否则在 zh_CN locale 下 CLI 输出中文"已通过!"，"Passed!" 匹配不到，下游 regex 误判失败。`,
   { phase: 'TDD-Verify', agentType: 'general-purpose' }
 )
 
-// 3. tests (红就回 TDD)
+// 3. tests (红就回 TDD) — schema 验证
+//
+// 修复：原版用 /Passed!|Test execution time|tests? passed|已通过/ 正则匹配 agent 的
+// 自然语言回报，但 agent 返回的是 "**结果：全部通过**" / "Passed: 625" 之类的结构化文本，
+// 永远匹配不到 → 误报 fail（w7bu0omg2 失败根因）。改用 schema 让 agent 报数字，process-item
+// 直接看 failed 字段，不依赖正则。
+const TESTS_SCHEMA = {
+  type: 'object',
+  required: ['buildOk', 'testsOk', 'failed', 'passed', 'skipped', 'formatOk'],
+  properties: {
+    buildOk: { type: 'boolean' },
+    testsOk: { type: 'boolean' },
+    failed: { type: 'number' },
+    passed: { type: 'number' },
+    skipped: { type: 'number' },
+    formatOk: { type: 'boolean' },
+    raw: { type: 'string' },
+  },
+}
 const testResult = await agent(
-  `执行 dotnet build 10e0.slnx 2>&1 | tail -20，然后 dotnet test 10e0.slnx --nologo 2>&1 | tail -30。` +
-  `回报：是否 build 成功、所有测试是否通过、覆盖率数字。`,
-  { phase: 'Tests', agentType: 'general-purpose' }
+  `执行以下 dotnet 命令并回报**结构化结果**（不要只说"全部通过"或"全绿"）：\n\n` +
+  `1. \`DOTNET_CLI_UI_LANGUAGE=en-US dotnet build 10e0.slnx 2>&1 | tail -20\`\n` +
+  `   → buildOk = exit code 0 AND 输出无 'Error(' 子串\n` +
+  `2. \`DOTNET_CLI_UI_LANGUAGE=en-US dotnet test 10e0.slnx --nologo 2>&1 | tail -30\`\n` +
+  `   → testsOk = exit code 0 AND 'Failed: 0' 子串存在\n` +
+  `   → 从输出 grep 数字: Passed: <n>, Failed: <n>, Skipped: <n>\n` +
+  `3. \`DOTNET_CLI_UI_LANGUAGE=en-US dotnet format 10e0.slnx --verify-no-changes --severity warn 2>&1 | tail -5\`\n` +
+  `   → formatOk = exit code 0\n\n` +
+  `**DOTNET_CLI_UI_LANGUAGE=en-US 必须带**，否则 zh_CN locale 下 CLI 输出"已通过!"，` +
+  `grep 不到 'Passed:' 数字。\n\n` +
+  `**严格按 schema 返回**（字段名拼写、大小写必须一致，failed/passed/skipped 是 number 不是 string）：\n` +
+  `{\n` +
+  `  "buildOk": true,\n` +
+  `  "testsOk": true,\n` +
+  `  "failed": 0,\n` +
+  `  "passed": 629,\n` +
+  `  "skipped": 1,\n` +
+  `  "formatOk": true,\n` +
+  `  "raw": "<build+test+format 原始 tail 输出的拼接，用于调试>"\n` +
+  `}`,
+  { phase: 'Tests', agentType: 'general-purpose', schema: TESTS_SCHEMA }
 )
-if (!/Passed!|Test execution time|tests? passed/i.test(testResult) || /Failed!/i.test(testResult)) {
-  throw new Error(`#${item.id} tests failed: ${testResult.slice(0, 500)}`)
+// 字段判断（替代旧的正则）：3 个 boolean 都 true 且 failed === 0
+if (!testResult?.buildOk || !testResult?.testsOk || !testResult?.formatOk || (testResult?.failed ?? 0) > 0) {
+  throw new Error(
+    `#${item.id} tests failed: buildOk=${testResult?.buildOk} testsOk=${testResult?.testsOk} ` +
+    `formatOk=${testResult?.formatOk} failed=${testResult?.failed ?? '?'} passed=${testResult?.passed ?? '?'} ` +
+    `| ${(testResult?.raw || '').slice(0, 500)}`
+  )
 }
 
 // 4. local review
@@ -205,13 +274,46 @@ const prNumber = prInfo.prNumber
 const prUrl = prInfo.prUrl
 if (!prNumber) throw new Error(`#${item.id} PR 创建失败: ${JSON.stringify(prInfo)}`)
 
-// 6. 盯自动 review（子工作流轮询 claude-review.yml）
-const reviews = await workflow('wait-for-pr-review', {
-  prNumber,
-  prUrl,
-  timeoutMs: args.reviewTimeoutMs ?? 900000,  // 默认 15 分钟
-})
-
+// 6. 盯自动 review（inline agent 轮询 claude-review.yml）
+//    修复：原本调 workflow('wait-for-pr-review', ...)，但 harness 限制 child workflow 内
+//    不能再调 workflow（nesting limited to 1 level）。把 wait-for-pr-review.js 的逻辑
+//    inline 进来：1 个 agent 内部轮询 Actions + 拉所有 review。
+const reviewTimeoutMs = args.reviewTimeoutMs ?? 900000  // 默认 15 分钟
+const REVIEW_SCHEMA = {
+  type: 'object',
+  required: ['items'],
+  properties: {
+    items: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['id', 'user', 'body', 'state'],
+        properties: {
+          id: { type: 'number' },
+          user: { type: 'string' },
+          body: { type: 'string' },
+          path: { type: 'string' },
+          line: { type: 'number' },
+          state: { type: 'string', enum: ['COMMENTED', 'APPROVED', 'CHANGES_REQUESTED', 'PENDING', 'DISMISSED'] },
+        },
+      },
+    },
+  },
+}
+const reviewResult = await agent(
+  `盯 PR #${prNumber} (${prUrl}) 的 .github/workflows/claude-review.yml 自动 review。\n\n` +
+  `步骤：\n` +
+  `1. 用 mcp__github__get_pull_request_status 查 Actions 状态\n` +
+  `2. 如果还在 running/queued，sleep 30s 后重试（最多 ${Math.floor(reviewTimeoutMs / 30000)} 次）\n` +
+  `3. 一旦 completed，用 mcp__github__get_pull_request_reviews 拉所有 review\n` +
+  `   也用 mcp__github__get_pull_request_comments 拉行内评论\n` +
+  `4. 把所有评论合并为结构化数组返回\n\n` +
+  `返回 schema: { items: [{ id, user, body, path?, line?, state }] }\n` +
+  `（注意：数组必须放在 items 字段下，不是顶层数组）\n` +
+  `如果超时还没完成，也返回 { items: [] } 并说明原因。`,
+  { phase: 'Watch Review', schema: REVIEW_SCHEMA, agentType: 'general-purpose' }
+)
+const reviews = reviewResult?.items ?? []
 log(`PR #${prNumber} 收到 ${reviews.length} 条 review`)
 
 // 7. 分类处理 review

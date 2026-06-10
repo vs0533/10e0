@@ -1,17 +1,20 @@
 name: Code Review
 
-# 触发器：pull_request (branches: dev/main) + push (feature/**) + workflow_dispatch
+# 触发器：pull_request (branches: dev/main) + workflow_dispatch
 # - pull_request: 跟 qwen 时代一样，PR opened/synchronize 到 dev/main 时跑
 # - checkout base 分支 + gh pr diff API: 满足 CodeQL untrusted-checkout
 #   安全要求（不接触 PR head 非信任代码）
 # - REVIEW_BOT_TOKEN (PAT) 调 pulls.createReview 发真 review (算 branch
 #   protection approval)；fallback 走 issues.createComment
+#
+# 移除 push: branches: [feature/**] 触发器（@GPT 建议）：
+# - feature/** push 没 PR context，step 8 走 `if (!prNumber || !context.issue) return;` 早退
+# - 重复跑但无实际产出，浪费 CI 时间
+# - workflow_dispatch 保留作手动手动触发（应急）
 on:
   pull_request:
     types: [opened, synchronize]
     branches: [dev, main]
-  push:
-    branches: [feature/**]
   workflow_dispatch:
     inputs:
       pr_number:
@@ -21,10 +24,21 @@ on:
 
 # pull_request 触发器：用 PAT 发真 review (counts as branch protection approval)
 # GITHUB_TOKEN 权限是 read-only，createReview 必须用 PAT
+#
+# security-events: write — GitHub auto-injects "Perform CodeQL Analysis" step 到所有
+# workflow；该 step 需要这个权限才能 upload SARIF 结果到 Security tab。缺它会报：
+#   "Error: Please check that your token is valid and has the required permissions:
+#    contents: read, security-events: write"
+# (PR #31 / #32 时偶发失败，rerun 偶然能过，根因是 token 临时刷新)
+#
+# 注意：CodeQL 数据库本身由 GitHub default setup 管理 (.github/CLAUDE.md "CodeQL 安全扫描" 段)，
+# 仓库**不能**再加 .github/workflows/codeql.yml advanced workflow（与 default setup 冲突）。
+# 这里只**补** permission 让 auto-injected step 跑通，**不**改变 CodeQL 配置。
 permissions:
   contents: read
   pull-requests: write
   issues: write
+  security-events: write
 
 jobs:
   review:
@@ -51,12 +65,20 @@ jobs:
 
       - name: Get PR diff via API (no untrusted checkout)
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           PR_NUMBER="${{ github.event.pull_request.number }}"
           if [ -n "$PR_NUMBER" ]; then
-            # pull_request_target: 通过 GitHub API 拿 PR diff，不 checkout 非信任代码
-            gh pr diff "$PR_NUMBER" > /tmp/pr-diff.txt
+            # 直接用 curl 拉 PR diff（@GPT 建议）：
+            # - 不依赖 gh CLI 认证
+            # - 不走 gh GraphQL
+            # - 认证更直接，问题面更小，更适合 CI
+            curl -fsSL \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github.v3.diff" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/repos/${{ github.repository }}/pulls/$PR_NUMBER" \
+              > /tmp/pr-diff.txt
           else
             # workflow_dispatch / push 兜底：用本地 git diff
             git diff origin/${{ github.base_ref || 'dev' }}...HEAD > /tmp/pr-diff.txt
@@ -162,7 +184,10 @@ jobs:
         if: always()
         uses: actions/github-script@v7
         with:
-          github-token: "${{ secrets.REVIEW_BOT_TOKEN || secrets.GITHUB_TOKEN }}"
+          # 用 github.token (runtime context) 而非 secrets.GITHUB_TOKEN (secret lookup)
+          # ——runtime reference 自动继承 workflow-level permissions，且绕过
+          # secret 解析 timing 问题。
+          github-token: ${{ github.token }}
           script: |
             // 重要：从文件读取模型 body 而非 GitHub 表达式插值
             // 后者会引入模板注入（模型输出含反引号会破坏 JS template literal）
@@ -177,7 +202,8 @@ jobs:
             // 用 + 拼接（单引号字符串）而非 template literal → 模型 body 含反引号 / ${ 也不会破坏 JS 解析
             const body = '## 🤖 MiniMax Code Review\n\nVerdict: **' + verdict + '**\n\n---\n\n' + modelBody;
 
-            const usingPat = !!'${{ secrets.REVIEW_BOT_TOKEN }}';
+            const pat = ('${{ secrets.REVIEW_BOT_TOKEN }}' || '').trim();
+            const hasPat = pat.length > 0;
             const prNumber = context.issue.number;
             const { owner, repo } = context.repo;
 
@@ -188,23 +214,67 @@ jobs:
               return;
             }
 
-            // If PAT is available, post a real review (counts as approval)
-            if (usingPat && (verdict === 'APPROVE' || verdict === 'REQUEST_CHANGES')) {
+            // Self-approve 检测：PAT 账号 == PR 作者时 GitHub 会拒绝 "can not
+            // approve your own pull request"，直接走 fallback 避免无谓的 PAT 调用
+            let prAuthor = null;
+            try {
+              const pr = await github.rest.pulls.get({ owner, repo, pull_number: prNumber });
+              prAuthor = pr.data.user?.login;
+            } catch (e) {
+              core.warning('PR author fetch failed: ' + e.message);
+            }
+
+            // 显式用 fetch + PAT header 调 pulls.createReview（不走 github client，
+            // 跟 GITHUB_TOKEN client 完全隔离）
+            // 之前用 new GitHub(pat) + @actions/github require 失败：actions/github-script
+            // 不暴露 @actions/github require 路径。fetch 是 Node 22 内建，无 import 问题。
+            if (hasPat && (verdict === 'APPROVE' || verdict === 'REQUEST_CHANGES')) {
               try {
-                await github.rest.pulls.createReview({
-                  owner, repo, pull_number: prNumber,
-                  event: verdict,
-                  body: body
+                // 先验证 PAT 自身账号（探测 PAT 是否有效 + 拿 PAT login）
+                const meResp = await fetch('https://api.github.com/user', {
+                  headers: {
+                    'Authorization': `Bearer ${pat}`,
+                    'Accept': 'application/vnd.github+json',
+                    'X-GitHub-Api-Version': '2022-11-28',
+                    'User-Agent': '10E0-claude-review-workflow'
+                  }
                 });
-                core.info('Posted ' + verdict + ' review via PAT');
-                return;
+                if (!meResp.ok) {
+                  throw new Error(`PAT auth check HTTP ${meResp.status}: ${await meResp.text()}`);
+                }
+                const me = await meResp.json();
+                const patLogin = me.login;
+
+                if (prAuthor && patLogin === prAuthor) {
+                  core.warning('PAT account (' + patLogin + ') equals PR author (' + prAuthor + ') — skipping pulls.createReview (self-approve forbidden by GitHub). Falling back to comment.');
+                } else {
+                  const reviewResp = await fetch(`https://api.github.com/repos/${owner}/${repo}/pulls/${prNumber}/reviews`, {
+                    method: 'POST',
+                    headers: {
+                      'Authorization': `Bearer ${pat}`,
+                      'Accept': 'application/vnd.github+json',
+                      'X-GitHub-Api-Version': '2022-11-28',
+                      'User-Agent': '10E0-claude-review-workflow',
+                      'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ event: verdict, body: body })
+                  });
+                  if (!reviewResp.ok) {
+                    throw new Error(`pulls.createReview HTTP ${reviewResp.status}: ${await reviewResp.text()}`);
+                  }
+                  core.info('Posted ' + verdict + ' review via PAT (login=' + patLogin + ')');
+                  return;
+                }
               } catch (e) {
                 core.warning('PAT review failed: ' + e.message + '. Falling back to comment.');
               }
             }
 
-            // Fallback: post as comment (does NOT count as approval)
-            const warning = usingPat ? '' : '\n\n---\n⚠️ `REVIEW_BOT_TOKEN` secret 未配置，本次仅作 comment，**不计入 branch protection 批准**。';
+            // Fallback: 用 GITHUB_TOKEN client (`github`) 发 comment
+            // —— 跟上面 PAT 路径**完全隔离**，即使 PAT 状态被污染也不影响
+            const warning = hasPat
+              ? '\n\n---\n⚠️ 正式 review 提交失败或被跳过（self-approve），已自动降级为 comment，**不计入 branch protection 批准**。'
+              : '\n\n---\n⚠️ `REVIEW_BOT_TOKEN` secret 未配置，本次仅作 comment，**不计入 branch protection 批准**。';
             await github.rest.issues.createComment({
               owner, repo, issue_number: prNumber,
               body: body + warning

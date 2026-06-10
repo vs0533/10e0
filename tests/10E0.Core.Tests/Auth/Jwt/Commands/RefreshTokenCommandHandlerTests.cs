@@ -8,6 +8,7 @@ using TenE0.Core.Auth.Jwt.Commands;
 using TenE0.Core.Auth.Jwt.Services;
 using TenE0.Core.Auth.Jwt.Storage;
 using TenE0.Core.Errors;
+using TenE0.Core.Permissions.Storage;
 using Microsoft.Extensions.Time.Testing;
 using Moq;
 
@@ -29,6 +30,8 @@ public sealed class RefreshTokenCommandHandlerTests
             modelBuilder.Entity<TestUser>(b => { b.HasKey(e => e.Id); b.Property(e => e.UserCode); });
             modelBuilder.Entity<TenE0UserRole>(b => b.HasKey(nameof(TenE0UserRole.UserCode), nameof(TenE0UserRole.RoleCode)));
             modelBuilder.Entity<TenE0RefreshToken>(b => b.HasKey(e => e.Id));
+            // #7: role version 需要 TenE0Role 注册才能查询
+            modelBuilder.Entity<TenE0Role>(b => b.HasKey(r => r.Code));
         }
         protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
         {
@@ -88,7 +91,7 @@ public sealed class RefreshTokenCommandHandlerTests
         var tokenMock = new Mock<IJwtTokenService>();
         tokenMock.Setup(t => t.HashRefreshToken("valid-refresh")).Returns("oldhash");
         var expiresAt = now.AddHours(2);
-        tokenMock.Setup(t => t.Issue("u001", "张三", UserType.Person, It.IsAny<IReadOnlyList<string>>()))
+        tokenMock.Setup(t => t.Issue("u001", "张三", UserType.Person, It.IsAny<IReadOnlyList<string>>(), It.IsAny<IReadOnlyDictionary<string, long>>()))
             .Returns(new IssuedTokens("newacc", expiresAt, "newref", "newhash", expiresAt.AddDays(7)));
 
         var errs = new Errs();
@@ -242,7 +245,7 @@ public sealed class RefreshTokenCommandHandlerTests
 
         var tokenMock = new Mock<IJwtTokenService>();
         tokenMock.Setup(t => t.HashRefreshToken("old-token")).Returns("old-hash");
-        tokenMock.Setup(t => t.Issue("u001", "Alice", UserType.Person, It.IsAny<IReadOnlyList<string>>()))
+        tokenMock.Setup(t => t.Issue("u001", "Alice", UserType.Person, It.IsAny<IReadOnlyList<string>>(), It.IsAny<IReadOnlyDictionary<string, long>>()))
             .Returns(new IssuedTokens("new-acc", now.AddDays(1).AddHours(2), "new-ref", "new-hash", now.AddDays(1).AddDays(14)));
 
         var errs = new Errs();
@@ -388,7 +391,7 @@ public sealed class RefreshTokenCommandHandlerTests
         var lifetime = TimeSpan.FromDays(14);
         var tokenMock = new Mock<IJwtTokenService>();
         tokenMock.Setup(t => t.HashRefreshToken("valid")).Returns("old-hash");
-        tokenMock.Setup(t => t.Issue("u001", "Alice", UserType.Person, It.IsAny<IReadOnlyList<string>>()))
+        tokenMock.Setup(t => t.Issue("u001", "Alice", UserType.Person, It.IsAny<IReadOnlyList<string>>(), It.IsAny<IReadOnlyDictionary<string, long>>()))
             .Returns(new IssuedTokens("acc", now.AddHours(1), "ref", "new-hash", now.Add(lifetime)));
 
         var errs = new Errs();
@@ -439,7 +442,7 @@ public sealed class RefreshTokenCommandHandlerTests
         var lifetime = TimeSpan.FromDays(14);
         var tokenMock = new Mock<IJwtTokenService>();
         tokenMock.Setup(t => t.HashRefreshToken("valid")).Returns("old-hash");
-        tokenMock.Setup(t => t.Issue("u001", "Alice", UserType.Person, It.IsAny<IReadOnlyList<string>>()))
+        tokenMock.Setup(t => t.Issue("u001", "Alice", UserType.Person, It.IsAny<IReadOnlyList<string>>(), It.IsAny<IReadOnlyDictionary<string, long>>()))
             .Returns(new IssuedTokens("acc", now.AddHours(1), "ref", "new-hash", now.Add(lifetime)));
 
         var errs = new Errs();
@@ -486,7 +489,7 @@ public sealed class RefreshTokenCommandHandlerTests
 
         var tokenMock = new Mock<IJwtTokenService>();
         tokenMock.Setup(t => t.HashRefreshToken("valid")).Returns("old-hash");
-        tokenMock.Setup(t => t.Issue("u001", "Alice", UserType.Person, It.IsAny<IReadOnlyList<string>>()))
+        tokenMock.Setup(t => t.Issue("u001", "Alice", UserType.Person, It.IsAny<IReadOnlyList<string>>(), It.IsAny<IReadOnlyDictionary<string, long>>()))
             .Returns(new IssuedTokens("acc", now.AddHours(1), "ref", "new-hash", now.AddDays(14)));
 
         var errs = new Errs();

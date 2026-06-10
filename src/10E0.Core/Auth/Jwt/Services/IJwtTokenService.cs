@@ -10,7 +10,18 @@ public interface IJwtTokenService
     /// <param name="displayName">用户显示名（写入 name claim）。</param>
     /// <param name="userType">用户类型（个人/单位）。</param>
     /// <param name="roles">用户拥有的角色 code 列表。</param>
-    IssuedTokens Issue(string userCode, string displayName, TenE0.Core.Abstractions.UserType userType, IReadOnlyList<string> roles);
+    /// <param name="roleVersions">
+    /// 各角色当前的版本号快照（#7 instant revocation）。会序列化为
+    /// <see cref="TenE0.Core.Abstractions.JwtClaims.RoleVersion"/> claim，
+    /// <see cref="TenE0.Core.Permissions.IPermissionEvaluator"/> 用来对比 DB 检测权限变更。
+    /// 传空字典表示该用户没有角色（或 legacy 调用方），签发的 token 不带该 claim。
+    /// </param>
+    IssuedTokens Issue(
+        string userCode,
+        string displayName,
+        TenE0.Core.Abstractions.UserType userType,
+        IReadOnlyList<string> roles,
+        IReadOnlyDictionary<string, long> roleVersions);
 
     /// <summary>
     /// 生成一个新的 refresh token 字符串和其 SHA-256 哈希。

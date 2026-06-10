@@ -20,7 +20,12 @@ public sealed class JwtTokenService(IOptions<JwtOptions> options, TimeProvider t
     private readonly JwtOptions _options = options.Value;
     private readonly SymmetricSecurityKey _key = new(Encoding.UTF8.GetBytes(options.Value.SigningKey));
 
-    public IssuedTokens Issue(string userCode, string displayName, UserType userType, IReadOnlyList<string> roles)
+    public IssuedTokens Issue(
+        string userCode,
+        string displayName,
+        UserType userType,
+        IReadOnlyList<string> roles,
+        IReadOnlyDictionary<string, long> roleVersions)
     {
         var now = timeProvider.GetUtcNow();
         var accessExpires = now.Add(_options.AccessTokenLifetime);
@@ -39,6 +44,13 @@ public sealed class JwtTokenService(IOptions<JwtOptions> options, TimeProvider t
         };
         foreach (var role in roles)
             claims.Add(new Claim(JwtClaims.Role, role));
+
+        // #7: 嵌入角色版本号快照（紧凑 JSON claim）
+        if (roleVersions is { Count: > 0 })
+        {
+            var json = System.Text.Json.JsonSerializer.Serialize(roleVersions);
+            claims.Add(new Claim(JwtClaims.RoleVersion, json));
+        }
 
         var token = new JwtSecurityToken(
             issuer: _options.Issuer,

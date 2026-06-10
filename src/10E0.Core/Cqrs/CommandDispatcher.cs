@@ -16,8 +16,14 @@ namespace TenE0.Core.Cqrs;
 /// </summary>
 internal sealed class CommandDispatcher(IServiceProvider serviceProvider) : ICommandDispatcher
 {
-    // 静态缓存：同一命令类型在进程级只构造一次 wrapper 实例
-    private static readonly ConcurrentDictionary<Type, object> WrapperCache = new();
+    /// <summary>
+    /// 静态缓存：同一命令类型在进程级只构造一次 wrapper 实例。
+    /// </summary>
+    /// <remarks>
+    /// 标注为 <c>internal</c> 而非 <c>private</c> 仅供 10E0.Core.Tests 反射-free 验证缓存行为。
+    /// 不要在生产代码里读/写这个字段——它是 dispatcher 内部实现细节。
+    /// </remarks>
+    internal static readonly ConcurrentDictionary<Type, object> WrapperCache = new();
 
     public Task<TResult> SendAsync<TResult>(ICommand<TResult> command, CancellationToken cancellationToken = default)
     {

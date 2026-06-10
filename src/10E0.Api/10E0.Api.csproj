@@ -18,4 +18,9 @@
     <ProjectReference Include="..\10E0.Core\10E0.Core.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- 集成测试可访问 internal 类型（如 DemoDbContext），避免每个测试都用反射 -->
+    <InternalsVisibleTo Include="10E0.Api.Tests" />
+  </ItemGroup>
+
 </Project>

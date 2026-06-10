@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Reflection;
 using Microsoft.Extensions.DependencyInjection;
 using TenE0.Core.Abstractions;
@@ -367,30 +366,74 @@ public sealed class CommandDispatcherTests
         services.AddSingleton<ICommandHandler<TestCmd, string>>(handler);
         var dispatcher = new CommandDispatcher(services.BuildServiceProvider());
 
-        // Inspect the static WrapperCache via reflection (the field is private static)
-        var cacheField = typeof(CommandDispatcher).GetField(
-            "WrapperCache",
-            BindingFlags.NonPublic | BindingFlags.Static);
-        cacheField.Should().NotBeNull("CommandDispatcher should expose a static WrapperCache field");
-
-        var cache = (ConcurrentDictionary<Type, object>)cacheField!.GetValue(null)!;
-
         // Start with a clean slate for this command type so we observe only this test's behavior
-        cache.TryRemove(typeof(TestCmd), out _);
+        CommandDispatcher.WrapperCache.TryRemove(typeof(TestCmd), out _);
 
         _ = await dispatcher.SendAsync(new TestCmd("first"));
-        var wrapperAfterFirst = cache[typeof(TestCmd)];
+        var wrapperAfterFirst = CommandDispatcher.WrapperCache[typeof(TestCmd)];
 
         _ = await dispatcher.SendAsync(new TestCmd("second"));
-        var wrapperAfterSecond = cache[typeof(TestCmd)];
+        var wrapperAfterSecond = CommandDispatcher.WrapperCache[typeof(TestCmd)];
 
         _ = await dispatcher.SendAsync(new TestCmd("third"));
-        var wrapperAfterThird = cache[typeof(TestCmd)];
+        var wrapperAfterThird = CommandDispatcher.WrapperCache[typeof(TestCmd)];
 
         // The same wrapper instance should be returned from the cache for every subsequent call
         wrapperAfterFirst.Should().BeSameAs(wrapperAfterSecond);
         wrapperAfterFirst.Should().BeSameAs(wrapperAfterThird);
         handler.CallCount.Should().Be(3);
+    }
+
+    #endregion
+
+    #region 13. WrapperCache_IsInternalStatic_ForTestVisibility
+
+    // Issue #10 acceptance: WrapperCache should be internal (not private) so tests can
+    // verify cache behavior without reflection. This test guards that contract.
+    [Fact]
+    public void WrapperCache_IsInternalStatic_ForTestVisibility()
+    {
+        // Locate the field. InternalsVisibleTo("10E0.Core.Tests") lets us see the field
+        // without reflection, but we still go through GetField to assert the *contract*
+        // (visibility) is what we promise the test suite.
+        var cacheField = typeof(CommandDispatcher).GetField(
+            "WrapperCache",
+            BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+
+        cacheField.Should().NotBeNull("WrapperCache field must exist for the dispatcher to cache wrappers");
+        cacheField!.IsStatic.Should().BeTrue("the cache is process-wide");
+        cacheField.IsAssembly.Should().BeTrue(
+            "WrapperCache must be internal (assembly-visible) so tests in 10E0.Core.Tests can read it without reflection");
+    }
+
+    #endregion
+
+    #region 14. SendAsync_100Iterations_StableWrapperCache
+
+    // Issue #10 acceptance: 100 consecutive runs of the dispatcher must remain stable.
+    // Validates that the static cache never leaks wrong wrapper instances and the
+    // dispatcher is deterministic across many invocations.
+    [Fact]
+    public async Task SendAsync_100Iterations_StableWrapperCache()
+    {
+        var handler = new HandlerA();
+        var services = new ServiceCollection();
+        services.AddSingleton<ICommandHandler<TestCmd, string>>(handler);
+        var dispatcher = new CommandDispatcher(services.BuildServiceProvider());
+
+        CommandDispatcher.WrapperCache.TryRemove(typeof(TestCmd), out _);
+
+        object? firstWrapper = null;
+        for (var i = 0; i < 100; i++)
+        {
+            _ = await dispatcher.SendAsync(new TestCmd($"iter-{i}"));
+            var currentWrapper = CommandDispatcher.WrapperCache[typeof(TestCmd)];
+            firstWrapper ??= currentWrapper;
+            currentWrapper.Should().BeSameAs(firstWrapper,
+                $"iteration {i} must reuse the same wrapper instance from the static cache");
+        }
+
+        handler.CallCount.Should().Be(100);
     }
 
     #endregion

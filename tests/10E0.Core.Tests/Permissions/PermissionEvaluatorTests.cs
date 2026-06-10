@@ -11,6 +11,8 @@ public sealed class PermissionEvaluatorTests
         var mock = new Mock<ICurrentUserContext>();
         mock.Setup(u => u.IsAuthenticated).Returns(isAuthenticated);
         mock.Setup(u => u.RoleIds).Returns(roleIds ?? Array.Empty<string>());
+        // #7: 旧测试模拟 legacy token — 无 role_versions claim → 走兼容路径放行
+        mock.Setup(u => u.RoleVersions).Returns(new Dictionary<string, long>());
         return mock;
     }
 
@@ -23,7 +25,7 @@ public sealed class PermissionEvaluatorTests
         var mockOptions = new Mock<IOptions<PermissionsOptions>>();
         mockOptions.Setup(o => o.Value).Returns(new PermissionsOptions());
 
-        var sut = new PermissionEvaluator(mockUser.Object, mockStore.Object, mockCache.Object, mockOptions.Object);
+        var sut = new PermissionEvaluator(mockUser.Object, mockStore.Object, mockCache.Object, Mock.Of<IRoleVersionStore>(), mockOptions.Object);
 
         var result = await sut.HasAsync("demo.view");
 
@@ -40,7 +42,7 @@ public sealed class PermissionEvaluatorTests
         mockOptions.Setup(o => o.Value)
             .Returns(new PermissionsOptions { SuperUserRoles = new HashSet<string> { "super_admin" } });
 
-        var sut = new PermissionEvaluator(mockUser.Object, mockStore.Object, mockCache.Object, mockOptions.Object);
+        var sut = new PermissionEvaluator(mockUser.Object, mockStore.Object, mockCache.Object, Mock.Of<IRoleVersionStore>(), mockOptions.Object);
 
         var result = await sut.HasAsync("any.key");
 
@@ -61,7 +63,7 @@ public sealed class PermissionEvaluatorTests
         var mockOptions = new Mock<IOptions<PermissionsOptions>>();
         mockOptions.Setup(o => o.Value).Returns(new PermissionsOptions());
 
-        var sut = new PermissionEvaluator(mockUser.Object, mockStore.Object, mockCache.Object, mockOptions.Object);
+        var sut = new PermissionEvaluator(mockUser.Object, mockStore.Object, mockCache.Object, Mock.Of<IRoleVersionStore>(), mockOptions.Object);
 
         var result = await sut.HasAsync("demo.view");
 
@@ -84,7 +86,7 @@ public sealed class PermissionEvaluatorTests
         var mockOptions = new Mock<IOptions<PermissionsOptions>>();
         mockOptions.Setup(o => o.Value).Returns(new PermissionsOptions());
 
-        var sut = new PermissionEvaluator(mockUser.Object, mockStore.Object, mockCache.Object, mockOptions.Object);
+        var sut = new PermissionEvaluator(mockUser.Object, mockStore.Object, mockCache.Object, Mock.Of<IRoleVersionStore>(), mockOptions.Object);
 
         var result = await sut.HasAsync("demo.create");
 
@@ -104,7 +106,7 @@ public sealed class PermissionEvaluatorTests
         var mockOptions = new Mock<IOptions<PermissionsOptions>>();
         mockOptions.Setup(o => o.Value).Returns(new PermissionsOptions());
 
-        var sut = new PermissionEvaluator(mockUser.Object, mockStore.Object, mockCache.Object, mockOptions.Object);
+        var sut = new PermissionEvaluator(mockUser.Object, mockStore.Object, mockCache.Object, Mock.Of<IRoleVersionStore>(), mockOptions.Object);
 
         var result = await sut.HasAsync("demo.delete");
 
@@ -120,7 +122,7 @@ public sealed class PermissionEvaluatorTests
         var mockOptions = new Mock<IOptions<PermissionsOptions>>();
         mockOptions.Setup(o => o.Value).Returns(new PermissionsOptions());
 
-        var sut = new PermissionEvaluator(mockUser.Object, mockStore.Object, mockCache.Object, mockOptions.Object);
+        var sut = new PermissionEvaluator(mockUser.Object, mockStore.Object, mockCache.Object, Mock.Of<IRoleVersionStore>(), mockOptions.Object);
 
         var result = await sut.HasAnyAsync(Array.Empty<string>());
 
@@ -139,7 +141,7 @@ public sealed class PermissionEvaluatorTests
         var mockOptions = new Mock<IOptions<PermissionsOptions>>();
         mockOptions.Setup(o => o.Value).Returns(new PermissionsOptions());
 
-        var sut = new PermissionEvaluator(mockUser.Object, mockStore.Object, mockCache.Object, mockOptions.Object);
+        var sut = new PermissionEvaluator(mockUser.Object, mockStore.Object, mockCache.Object, Mock.Of<IRoleVersionStore>(), mockOptions.Object);
 
         var result = await sut.HasAnyAsync(new[] { "demo.update", "demo.delete" });
 
@@ -158,7 +160,7 @@ public sealed class PermissionEvaluatorTests
         var mockOptions = new Mock<IOptions<PermissionsOptions>>();
         mockOptions.Setup(o => o.Value).Returns(new PermissionsOptions());
 
-        var sut = new PermissionEvaluator(mockUser.Object, mockStore.Object, mockCache.Object, mockOptions.Object);
+        var sut = new PermissionEvaluator(mockUser.Object, mockStore.Object, mockCache.Object, Mock.Of<IRoleVersionStore>(), mockOptions.Object);
 
         var result = await sut.HasAnyAsync(new[] { "demo.create", "demo.delete" });
 
@@ -177,7 +179,7 @@ public sealed class PermissionEvaluatorTests
         var mockOptions = new Mock<IOptions<PermissionsOptions>>();
         mockOptions.Setup(o => o.Value).Returns(new PermissionsOptions());
 
-        var sut = new PermissionEvaluator(mockUser.Object, mockStore.Object, mockCache.Object, mockOptions.Object);
+        var sut = new PermissionEvaluator(mockUser.Object, mockStore.Object, mockCache.Object, Mock.Of<IRoleVersionStore>(), mockOptions.Object);
 
         var result = await sut.HasAllAsync(new[] { "demo.view", "demo.create" });
 
@@ -199,7 +201,7 @@ public sealed class PermissionEvaluatorTests
         var mockOptions = new Mock<IOptions<PermissionsOptions>>();
         mockOptions.Setup(o => o.Value).Returns(new PermissionsOptions());
 
-        var sut = new PermissionEvaluator(mockUser.Object, mockStore.Object, mockCache.Object, mockOptions.Object);
+        var sut = new PermissionEvaluator(mockUser.Object, mockStore.Object, mockCache.Object, Mock.Of<IRoleVersionStore>(), mockOptions.Object);
 
         var result = await sut.HasAllAsync(new[] { "demo.create", "demo.delete" });
 
@@ -224,7 +226,7 @@ public sealed class PermissionEvaluatorTests
         var mockOptions = new Mock<IOptions<PermissionsOptions>>();
         mockOptions.Setup(o => o.Value).Returns(new PermissionsOptions());
 
-        var sut = new PermissionEvaluator(mockUser.Object, mockStore.Object, mockCache.Object, mockOptions.Object);
+        var sut = new PermissionEvaluator(mockUser.Object, mockStore.Object, mockCache.Object, Mock.Of<IRoleVersionStore>(), mockOptions.Object);
 
         var hasView = await sut.HasAsync("demo.view");
         var hasUpdate = await sut.HasAsync("demo.update");
@@ -243,7 +245,7 @@ public sealed class PermissionEvaluatorTests
         mockOptions.Setup(o => o.Value)
             .Returns(new PermissionsOptions { SuperUserRoles = new HashSet<string> { "super_admin" } });
 
-        var sut = new PermissionEvaluator(mockUser.Object, mockStore.Object, mockCache.Object, mockOptions.Object);
+        var sut = new PermissionEvaluator(mockUser.Object, mockStore.Object, mockCache.Object, Mock.Of<IRoleVersionStore>(), mockOptions.Object);
 
         var result = await sut.HasAnyAsync(new[] { "nonexistent.key" });
 

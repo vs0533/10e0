@@ -17,6 +17,15 @@ public class TenE0Role : AuditedEntity
 
     public required string Name { get; set; }
     public string? Description { get; set; }
+
+    /// <summary>
+    /// 角色版本号（#7 instant permission revocation）：
+    /// 每次 <c>PermissionGrantService</c> 实际变更该角色的 grant 集合时自增。
+    /// JWT 签发时把当前所有版本快照嵌进 <c>role_versions</c> claim；
+    /// <c>PermissionEvaluator.HasAsync</c> 通过比对 token vs DB 检测到版本错位，
+    /// 立即判定权限已被撤销。
+    /// </summary>
+    public long Version { get; set; } = 1L;
 }
 
 /// <summary>
