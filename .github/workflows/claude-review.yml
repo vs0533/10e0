@@ -21,10 +21,21 @@ on:
 
 # pull_request 触发器：用 PAT 发真 review (counts as branch protection approval)
 # GITHUB_TOKEN 权限是 read-only，createReview 必须用 PAT
+#
+# security-events: write — GitHub auto-injects "Perform CodeQL Analysis" step 到所有
+# workflow；该 step 需要这个权限才能 upload SARIF 结果到 Security tab。缺它会报：
+#   "Error: Please check that your token is valid and has the required permissions:
+#    contents: read, security-events: write"
+# (PR #31 / #32 时偶发失败，rerun 偶然能过，根因是 token 临时刷新)
+#
+# 注意：CodeQL 数据库本身由 GitHub default setup 管理 (.github/CLAUDE.md "CodeQL 安全扫描" 段)，
+# 仓库**不能**再加 .github/workflows/codeql.yml advanced workflow（与 default setup 冲突）。
+# 这里只**补** permission 让 auto-injected step 跑通，**不**改变 CodeQL 配置。
 permissions:
   contents: read
   pull-requests: write
   issues: write
+  security-events: write
 
 jobs:
   review:
