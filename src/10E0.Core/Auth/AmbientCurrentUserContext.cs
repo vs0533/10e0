@@ -44,6 +44,27 @@ public sealed class AmbientCurrentUserContext : ICurrentUserContext, ICurrentUse
     public IReadOnlyList<string> RoleIds =>
         Current.Value?.FindAll(JwtClaims.Role).Select(c => c.Value).ToList() ?? [];
 
+    public IReadOnlyDictionary<string, long> RoleVersions
+    {
+        get
+        {
+            var raw = Current.Value?.FindFirstValue(JwtClaims.RoleVersion);
+            if (string.IsNullOrWhiteSpace(raw)) return EmptyRoleVersions;
+            try
+            {
+                return System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, long>>(raw)
+                    ?? EmptyRoleVersions;
+            }
+            catch (System.Text.Json.JsonException)
+            {
+                return EmptyRoleVersions;
+            }
+        }
+    }
+
+    private static readonly IReadOnlyDictionary<string, long> EmptyRoleVersions =
+        new Dictionary<string, long>(StringComparer.Ordinal);
+
     public ValueTask<ICurrentUserInfo?> GetUserInfoAsync(CancellationToken cancellationToken = default)
         => ValueTask.FromResult<ICurrentUserInfo?>(null);
 

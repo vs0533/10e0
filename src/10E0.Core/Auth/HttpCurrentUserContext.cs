@@ -34,6 +34,29 @@ internal sealed class HttpCurrentUserContext(
     public IReadOnlyList<string> RoleIds =>
         Principal?.FindAll(JwtClaims.Role).Select(c => c.Value).ToList() ?? [];
 
+    public IReadOnlyDictionary<string, long> RoleVersions
+    {
+        get
+        {
+            // 懒解析：每次访问读 claim。claim 是 JWT 注入的不可变数据，无需缓存。
+            var raw = Principal?.FindFirstValue(JwtClaims.RoleVersion);
+            if (string.IsNullOrWhiteSpace(raw)) return EmptyRoleVersions;
+            try
+            {
+                return System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, long>>(raw)
+                    ?? EmptyRoleVersions;
+            }
+            catch (System.Text.Json.JsonException)
+            {
+                // 损坏的 claim 当作 legacy token 处理 — 不 deny
+                return EmptyRoleVersions;
+            }
+        }
+    }
+
+    private static readonly IReadOnlyDictionary<string, long> EmptyRoleVersions =
+        new Dictionary<string, long>(StringComparer.Ordinal);
+
     public async ValueTask<ICurrentUserInfo?> GetUserInfoAsync(CancellationToken cancellationToken = default)
     {
         if (!IsAuthenticated || UserCode is null)

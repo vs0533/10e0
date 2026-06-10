@@ -4,6 +4,7 @@ using Microsoft.Extensions.Options;
 using TenE0.Core.Abstractions;
 using TenE0.Core.Auth.Jwt.Services;
 using TenE0.Core.Auth.Jwt.Storage;
+using TenE0.Core.Permissions.Storage;
 
 namespace TenE0.Core.Auth.Jwt.Commands;
 
@@ -91,7 +92,15 @@ public sealed class RefreshTokenCommandHandler<TUser, TContext>(
             .Select(ur => ur.RoleCode)
             .ToListAsync(ct);
 
-        var tokens = tokenService.Issue(user.UserCode, user.DisplayName, user.UserType, roles);
+        // #7: 刷新必须用 latest version（不能在旧 token 的 version 上签发）
+        var roleVersions = roles.Count == 0
+            ? new Dictionary<string, long>()
+            : await dc.Set<TenE0Role>()
+                .AsNoTracking()
+                .Where(r => roles.Contains(r.Code))
+                .ToDictionaryAsync(r => r.Code, r => r.Version, StringComparer.Ordinal, ct);
+
+        var tokens = tokenService.Issue(user.UserCode, user.DisplayName, user.UserType, roles, roleVersions);
 
         // 滑动过期：新 refresh token 的过期时间刷新为 now + RefreshTokenLifetime
         // 关闭滑动时保留原 token 的剩余有效期；按 JWT 'exp' 语义 record.ExpiresAt == now 视为已到期，

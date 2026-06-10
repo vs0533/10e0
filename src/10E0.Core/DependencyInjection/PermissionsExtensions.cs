@@ -51,6 +51,15 @@ public static class PermissionsExtensions
     {
         services.Replace(ServiceDescriptor.Scoped<IPermissionStore, EfPermissionStore<TContext>>());
         services.TryAddScoped<IPermissionGrantService, PermissionGrantService<TContext>>();
+
+        // #7: 角色版本号存储（IMemoryCache L1 + EF 拉取）
+        // Singleton：纯读 + 5 秒 TTL；不依赖 scoped ICurrentUserContext
+        services.TryAddSingleton<Microsoft.Extensions.Caching.Memory.IMemoryCache>(
+            _ => new Microsoft.Extensions.Caching.Memory.MemoryCache(
+                new Microsoft.Extensions.Caching.Memory.MemoryCacheOptions()));
+        services.TryAddSingleton(TimeProvider.System);
+        services.TryAddSingleton<IRoleVersionStore, EfRoleVersionStore<TContext>>();
+
         return services;
     }
 

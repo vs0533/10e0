@@ -1006,9 +1006,12 @@ internal sealed class AuthSeeder(
             });
 
             // 角色绑定
+            // alice 同时拥有 viewer + editor — 用于 #7 E2E 测试（revoke viewer/permissions/demo.view 后 alice 立即 403）
+            // editor 角色用于 CreateDemoCommand（demo.create）和 UpdateDemoCommand（demo.update）
             dc.UserRoles.AddRange(
                 new TenE0UserRole { UserCode = "admin", RoleCode = "super_admin" },
                 new TenE0UserRole { UserCode = "admin", RoleCode = "manager" },
+                new TenE0UserRole { UserCode = "alice", RoleCode = "viewer" },
                 new TenE0UserRole { UserCode = "alice", RoleCode = "editor" });
 
             await dc.SaveChangesAsync(ct);

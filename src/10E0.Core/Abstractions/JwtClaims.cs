@@ -9,6 +9,13 @@ public static class JwtClaims
     public const string Name = "name";
     public const string Role = "role";
     public const string UserType = "user_type";
+
+    /// <summary>
+    /// 角色版本号快照 claim（#7 instant permission revocation）。
+    /// 值是 JSON 序列化的 <c>Dictionary&lt;string, long&gt;</c>，key 为 roleCode、value 为签发时
+    /// 的 <c>TenE0Role.Version</c>。例：<c>{"editor":7,"viewer":12}</c>。
+    /// </summary>
+    public const string RoleVersion = "role_versions";
 }
 
 /// <summary>

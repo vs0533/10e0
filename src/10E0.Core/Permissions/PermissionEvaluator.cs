@@ -10,11 +10,21 @@ namespace TenE0.Core.Permissions;
 /// - 缓存粒度按角色（IPermissionCache）— grant/revoke 时精准失效该角色
 /// - 用户的最终权限 = 其所有角色权限的并集，每角色独立缓存
 /// - 超管判断改为 SuperUserRoles（基于 JWT role claim），更符合 RBAC
+///
+/// #7 增量：role version 检查（instant permission revocation）
+/// - 在聚合前对比 token 携带的 role_versions vs DB 当前 version
+/// - 任一角色 db_version &gt; token_version → 调 IPermissionCache.InvalidateRoleAsync + 绕过该角色 cache
+///   直接走 IPermissionStore 重读。这样：
+///     * revoke 后 store 不含该权限 → 下次 HasAsync 自然 false
+///     * grant 后 store 含该权限 → 下次 HasAsync 自然 true
+/// - token 中没有 role_versions claim（legacy token）→ 放行，不查 version store
+/// - super_user 短路 + 未认证短路都在 version check 之前
 /// </summary>
 internal sealed class PermissionEvaluator(
     ICurrentUserContext currentUser,
     IPermissionStore store,
     IPermissionCache cache,
+    IRoleVersionStore roleVersions,
     IOptions<PermissionsOptions> options) : IPermissionEvaluator
 {
     private readonly PermissionsOptions _options = options.Value;
@@ -23,8 +33,9 @@ internal sealed class PermissionEvaluator(
     {
         if (!currentUser.IsAuthenticated) return false;
         if (IsSuperUser()) return true;
+        var stale = await DetectStaleRolesAsync(cancellationToken);
 
-        var granted = await GetGrantedAsync(cancellationToken);
+        var granted = await GetGrantedAsync(stale, cancellationToken);
         return granted.Contains(permissionKey);
     }
 
@@ -34,8 +45,9 @@ internal sealed class PermissionEvaluator(
         if (list.Count == 0) return true;
         if (!currentUser.IsAuthenticated) return false;
         if (IsSuperUser()) return true;
+        var stale = await DetectStaleRolesAsync(cancellationToken);
 
-        var granted = await GetGrantedAsync(cancellationToken);
+        var granted = await GetGrantedAsync(stale, cancellationToken);
         return list.Any(granted.Contains);
     }
 
@@ -45,8 +57,9 @@ internal sealed class PermissionEvaluator(
         if (list.Count == 0) return true;
         if (!currentUser.IsAuthenticated) return false;
         if (IsSuperUser()) return true;
+        var stale = await DetectStaleRolesAsync(cancellationToken);
 
-        var granted = await GetGrantedAsync(cancellationToken);
+        var granted = await GetGrantedAsync(stale, cancellationToken);
         return list.All(granted.Contains);
     }
 
@@ -54,21 +67,61 @@ internal sealed class PermissionEvaluator(
     private bool IsSuperUser()
         => currentUser.RoleIds.Any(r => _options.SuperUserRoles.Contains(r));
 
+    /// <summary>
+    /// #7 增量：检测 token 中的 role_versions 是否落后于 DB。
+    /// 返回本调用周期内被检测为 stale 的角色集合。stale 角色在同周期的
+    /// <see cref="GetGrantedAsync"/> 中会绕过 cache 直接走 store。
+    /// 副作用：每个 stale role 还会调 <see cref="IPermissionCache.InvalidateRoleAsync"/>。
+    /// 空 RoleVersions 视为 legacy token，返回空 set。
+    /// </summary>
+    private async Task<HashSet<string>> DetectStaleRolesAsync(CancellationToken cancellationToken)
+    {
+        var stale = new HashSet<string>(StringComparer.Ordinal);
+        var tokenVersions = currentUser.RoleVersions;
+        if (tokenVersions.Count == 0) return stale;
+
+        var distinctRoles = currentUser.RoleIds.Distinct(StringComparer.Ordinal).ToList();
+        if (distinctRoles.Count == 0) return stale;
+
+        var current = await roleVersions.GetCurrentVersionsAsync(distinctRoles, cancellationToken);
+
+        foreach (var role in distinctRoles)
+        {
+            var tokenV = tokenVersions.TryGetValue(role, out var tv) ? tv : 0L;
+            if (current.TryGetValue(role, out var dbV) && dbV > tokenV)
+            {
+                stale.Add(role);
+                await cache.InvalidateRoleAsync(role, cancellationToken);
+            }
+        }
+
+        return stale;
+    }
+
     /// <summary>聚合当前用户所有角色的权限快照（按角色 cache，逐个合并）。</summary>
-    private async Task<HashSet<string>> GetGrantedAsync(CancellationToken cancellationToken)
+    private async Task<HashSet<string>> GetGrantedAsync(HashSet<string> staleRoles, CancellationToken cancellationToken)
     {
         var union = new HashSet<string>(StringComparer.Ordinal);
 
-        foreach (var roleCode in currentUser.RoleIds.Distinct())
+        foreach (var roleCode in currentUser.RoleIds.Distinct(StringComparer.Ordinal))
         {
-            var rolePerms = await cache.GetRolePermissionsAsync(roleCode, cancellationToken);
-            if (rolePerms is null)
+            IReadOnlySet<string>? rolePerms;
+            if (staleRoles.Contains(roleCode))
             {
-                // 未命中：到 Store 取该单一角色的权限
+                // 强制走 store（绕过被失效的 cache）— 真实反映最新授权
                 rolePerms = await store.GetGrantedPermissionsAsync([roleCode], cancellationToken);
-                await cache.SetRolePermissionsAsync(roleCode, rolePerms, cancellationToken);
             }
-            union.UnionWith(rolePerms);
+            else
+            {
+                rolePerms = await cache.GetRolePermissionsAsync(roleCode, cancellationToken);
+                if (rolePerms is null)
+                {
+                    rolePerms = await store.GetGrantedPermissionsAsync([roleCode], cancellationToken);
+                    await cache.SetRolePermissionsAsync(roleCode, rolePerms, cancellationToken);
+                }
+            }
+            // Store mock 或 NaN 实现可能返 null — 降级为空集（对 revoke 路径很关键：让 union 不含该 key）
+            union.UnionWith(rolePerms ?? (IReadOnlySet<string>)new HashSet<string>(StringComparer.Ordinal));
         }
 
         return union;
