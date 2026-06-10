@@ -9,17 +9,22 @@
 
 ### Added
 
-- 暂无
+- `IRoleVersionStore` 接口（`GetCurrentVersionsAsync`）+ `EfRoleVersionStore` 实现（EF Core + IMemoryCache L1，5s TTL），用于按角色版本号快速检测权限变更（[#27](https://github.com/vs0533/10e0/pull/27)）
+- `TenE0Role.Version` 字段（`long`，默认 1）：`PermissionGrantService.GrantAsync` / `RevokeAsync` / `SetGrantsAsync` 实际变更时自增（[#27](https://github.com/vs0533/10e0/pull/27)）
+- `JwtClaims.RoleVersion` 常量（`"role_versions"`）与 `ICurrentUserContext.RoleVersions` 属性：JWT 签发时把当前用户的 `{roleCode: version}` 快照写入 token；评估时按角色比对 token 快照 vs DB（[#27](https://github.com/vs0533/10e0/pull/27)）
 
 ### Changed
 
 - `FileService` 泛型化为 `FileService<TContext>`（不再硬绑定 `TenE0SystemDbContext`），调用方需用 `AddTenE0Files<YourDbContext>()` 显式指定（见 [#6](https://github.com/vs0533/10e0/pull/6)）
 - OSS / S3 Options 在构造期校验凭据（拒绝 `TODO`、`CHANGE_ME`、`PLACEHOLDER` 等占位符），错误消息指向环境变量名和 IAM / RAM Role 文档（[#6](https://github.com/vs0533/10e0/pull/6)）
 - 缩略图命名从 `thumb_{file}` 改为 `{name}_thumb{ext}`，避免上传 `thumb.jpg` 时出现 `thumb_thumb.jpg` 这类前缀重复，且让缩略图与原图在文件列表中相邻排序（[#6](https://github.com/vs0533/10e0/pull/6)）
+- `IJwtTokenService.Issue` 新增 `roleVersions` 参数；`LoginCommandHandler` / `RefreshTokenCommandHandler` 在签发/刷新时查 `IRoleVersionStore` 拿当前快照写入 `role_versions` claim（[#27](https://github.com/vs0533/10e0/pull/27)）
+- `PermissionEvaluator` 在 super-user 短路后插入 `DetectStaleRolesAsync`：对比 token vs DB，任一角色 `dbVersion > tokenVersion` 即视为 stale，绕过 `IPermissionCache` 走 `IPermissionStore` 重读（[#27](https://github.com/vs0533/10e0/pull/27)）
 
 ### Security
 
 - Refresh Token Rotation（OWASP 模式）：每次成功 refresh 旧 token 同事务撤销，新 token 写入；检测到旧 token 重放则撤销该用户全部活跃 token；新增 `JwtOptions.RefreshTokenRotationEnabled` 与 `SlidingRefreshExpiration`（默认均为 true）；`TenE0RefreshToken` 新增 `RevokedReason` 列（length 64）。需要 EF migration 升级 schema（[#6](https://github.com/vs0533/10e0/pull/6)）
+- **Role version check（instant permission revocation）**：撤销某用户角色权限后，**下一个 HTTP 请求立即返回 403**（无需等待 access token 过期）。`HasAsync` 开销 < 5ms（5s L1 cache 命中）。关闭 #7 安全 HIGH-4 风险（撤销后 30 分钟权限仍可用的安全空窗）（[#27](https://github.com/vs0533/10e0/pull/27)）
 
 ### Dependencies
 
@@ -38,6 +43,7 @@
 
 - 行覆盖率 78.18% → 83.48%；新增 41 个测试覆盖 CQRS 并发 / Savepoint 嵌套 / Refresh Token 旋转 / DI 扩展契约 / DynamicFilterProvider / BaseDataContext OnModelCreating（[#6](https://github.com/vs0533/10e0/pull/6)）
 - 测试依赖新增 `Microsoft.Data.Sqlite 10.0.0`（[#6](https://github.com/vs0533/10e0/pull/6)）
+- 新增 4 个 BDD acceptance suite（874 行）覆盖 #7 role version 全链路：`RoleVersionJwtClaimAcceptanceTests`（JWT sign/verify round-trip）/ `RoleVersionBumpAcceptanceTests`（EF InMemory 验证 grant/revoke bump）/ `RoleVersionCheckAcceptanceTests`（evaluator stale 检测 + legacy token + super-admin bypass）/ `RoleRevocationEndToEndAcceptanceTests`（WAF 端到端：admin revoke 后原 token 立即 403）（[#27](https://github.com/vs0533/10e0/pull/27)）
 
 ## [0.0.1] - 2026-06-02
 
