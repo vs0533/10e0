@@ -40,21 +40,24 @@ StructuredOutput(input: { id: 7, type: 'issue', ... })
 
 GitHub 2024-05 推出 Sub-Issues UI 关联（API 形式：`sub_issue` / `parent_issue` 字段），但**纯文字** `> Part of #N` / `Depends on #N` / `Blocks #N` 不会被自动识别。issue-prioritizer 必须**自己解析** body 文字以构建关系图。
 
-### 三种关系模式
+### 四种关系模式
 
 | 文字模式 | 语义 | 排序影响 |
 |---------|------|---------|
 | `Part of #N` / `Child of #N` / `子 issue：#N` | 当前 issue 是 #N 的子任务 | #N 必须**先**或**同时**处理 |
+| `Sub-tasks: #N` / `Children: #N` / `子任务：#N` | 当前 issue **自报**子任务清单（#N 是当前 issue 的子） | #N 必须**先**或**同时**处理（与 `Part of` 互为反向） |
 | `Depends on #N` / `Blocked by #N` / `依赖 #N` | 当前 issue 阻塞于 #N | #N 必须**先**完成 |
 | `Blocks #N` / `阻塞 #N` | 当前 issue 阻塞 #N | 当前 issue 必须**先**完成 |
 
 **解析规则**：
-1. 扫每个 issue body，用正则 `/(?:Part of|Child of|Depends on|Blocked by|Blocks|子 issue|依赖|阻塞)\s*#?(\d+)/gi` 提取关系
-2. 解析后的关系存到 issue 的 `relationships: { parent: N[], dependsOn: N[], blocks: N[] }` 字段（即使 schema 没要求，也存到本地计算变量）
+1. 扫每个 issue body，用正则 `/(?:Part of|Child of|Sub-tasks?|Children|Depends on|Blocked by|Blocks|子 issue|子任务|依赖|阻塞)\s*:?\s*#?(\d+)/gi` 提取关系
+2. 解析后的关系存到 issue 的 `relationships: { parent: N[], children: N[], dependsOn: N[], blocks: N[] }` 字段（即使 schema 没要求，也存到本地计算变量）
 3. 同样用 `gh issue view <N> --json body,state` 验证 #N 的 `state`（OPEN / CLOSED）
+4. **冲突处理**：若 #X 既在 #A.children 也在 #X.parent 指向同一个 #B（自报 + 反向自报），以 `Sub-tasks` 为准（更显式的人类声明）
 
 **排序应用**（见"合并顺序调整规则"）：
 - `parent`（Part of）#N 未关闭 → 当前 issue 排在 #N 之后；#N 已关闭 → 当前 issue 照常排序（视为独立）
+- `children`（Sub-tasks）#N 未关闭 → #N 排在当前 issue 之后（与 parent 互为反向）
 - `dependsOn`（Depends on）#N 未关闭 → 当前 issue 排在 #N 之后
 - `blocks`（Blocks）#N 未关闭 → 当前 issue 排在 #N 之前
 
@@ -72,6 +75,11 @@ gh issue list --state open --limit 200 --json number,body \
 - 文字解析不是 GitHub 原生关联，GitHub UI 不渲染父子树；要做 UI 关联需要额外调 `POST /repos/{owner}/{repo}/issues/{parent}/sub_issues` API
 - 但本 agent 的"排序"目的已足够——保证反序派单不会发生
 - Sub-Issues API 关联由用户手动 / 工具脚本完成，不由本 agent 负责
+- **`Sub-tasks` vs `Part of` 互补使用**：
+  - 子 issue 用 `Part of #N`（自下而上声明）
+  - 父 issue 用 `Sub-tasks: #N`（自上而下声明）
+  - 同一对父子关系可双向都写（冗余但清晰）；agent 解析时去重
+- **不调 Sub-Issues API 的核心理由**：父 issue 关闭会自动 close 所有未关闭的子 issue，**误关风险**。当前仓库 #13 ↔ #43 即此情况：#13 先关会误关 #43
 
 ---
 
@@ -244,6 +252,7 @@ gh issue list --state open --limit 200 --json number,title,body \
    - stale 越久的权重越高（避免长期挂起）
    - **Issue 父子/依赖关系**（见"Issue 间关系解析"段）：
      - `Part of #N`（#N 未关闭）→ 排到 #N 之后；#N 已关闭 → 照常排
+     - `Sub-tasks: #N`（#N 未关闭）→ #N 排到当前 issue 之后（与 Part of 互为反向）
      - `Depends on #N`（#N 未关闭）→ 排到 #N 之后
      - `Blocks #N`（#N 未关闭）→ 排到 #N 之前
      - 跨 P-tier 同样适用（高 tier 子 issue 不能反序插队到低 tier 父 issue 前）
