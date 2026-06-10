@@ -1,15 +1,17 @@
-// 单 issue/PR 完整 7 步工作流
-// 1. BDD      bdd-guide  写验收测试 (RED)
-// 2. TDD      tdd-guide   实现让测试 GREEN
-// 3. tests    general-purpose 跑 dotnet build/test
-// 4. review   code-reviewer / simplify  本地扫一遍
-// 5. open PR  general-purpose  开 PR 到 dev
-// 6. watch    wait-for-pr-review 子工作流
-// 7. handle   general-purpose 分类处理 review
+// 单 issue/PR 完整 9 步工作流
+// 1. BranchCheck general-purpose  schema 化 preflight（currentBranch/isFeature/worktreeClean）
+// 2. BDD          bdd-guide        写验收测试 (RED)
+// 3. Plan         planner          写 plan markdown（仅 feature）
+// 4. TDD          tdd-guide        实现让测试 GREEN
+// 5. Tests        general-purpose  schema 化报数字（buildOk/testsOk/failed/passed/formatOk）
+// 6. Review       code-reviewer    本地扫一遍（CRITICAL/HIGH 处理）
+// 7. Open PR      general-purpose  开 PR 到 dev
+// 8. Watch        general-purpose  inline agent 轮询 claude-review.yml
+// 9. Handle       general-purpose  分类处理 review
 //
 // 设计：worktree 由 process-item 顶层创建（isolation: 'worktree'），
-//       内部 7 步全部接力同一 worktree（不带 isolation）。
-//       第 5 步开 PR 时 push 到 feature 分支并合入远端。
+//       内部 9 步全部接力同一 worktree（不带 isolation）。
+//       第 7 步开 PR 时 push 到 feature 分支并合入远端。
 //
 // 派单策略（dispatchKind）已内联到本文件底部（harness 不支持 relative import）
 //
@@ -35,9 +37,9 @@ export const meta = {
 }
 
 // —— 内联自 lib/dispatch.js（harness 工作流发现机制可能不支持 relative import，
-//    所有工作流文件必须自包含，参考 triage-loop.js / wait-for-pr-review.js）
+//    所有工作流文件必须自包含，参考 triage-loop.js）
 // 注意：BUG_LABELS 故意不含 p0/p1——优先级标签不代表 bug 类型
-// issue #7 案例：label = [enhancement, p1, security] 命中 'feature' 走完整 7 步 + planner
+// issue #7 案例：label = [enhancement, p1, security] 命中 'feature' 走完整 9 步 + planner
 // 之前 BUG_LABELS 含 p1 导致 enhancement + p1 被误判为 bug，跳过 planner 后 TDD 撑爆
 const STALE_LABELS = ['stale']
 const FAILING_CI_LABELS = ['failing-ci', 'ci-failing']
@@ -275,8 +277,8 @@ const prUrl = prInfo.prUrl
 if (!prNumber) throw new Error(`#${item.id} PR 创建失败: ${JSON.stringify(prInfo)}`)
 
 // 6. 盯自动 review（inline agent 轮询 claude-review.yml）
-//    修复：原本调 workflow('wait-for-pr-review', ...)，但 harness 限制 child workflow 内
-//    不能再调 workflow（nesting limited to 1 level）。把 wait-for-pr-review.js 的逻辑
+//    修复：原本调外部子工作流（`workflow('wait-for-pr-review', ...)`），但 harness 限制 child workflow 内
+//    不能再调 workflow（nesting limited to 1 level）。把外部子工作流的 review 轮询逻辑
 //    inline 进来：1 个 agent 内部轮询 Actions + 拉所有 review。
 const reviewTimeoutMs = args.reviewTimeoutMs ?? 900000  // 默认 15 分钟
 const REVIEW_SCHEMA = {
