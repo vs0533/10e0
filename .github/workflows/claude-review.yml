@@ -173,11 +173,14 @@ jobs:
         if: always()
         uses: actions/github-script@v7
         with:
-          github-token: "${{ secrets.REVIEW_BOT_TOKEN || secrets.GITHUB_TOKEN }}"
+          # 默认 GITHUB_TOKEN 用于 fallback comment（PAT 失败时绝不让 fallback 用
+          # 同一个有问题的 PAT context——否则 createComment 也会 401）
+          github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             // 重要：从文件读取模型 body 而非 GitHub 表达式插值
             // 后者会引入模板注入（模型输出含反引号会破坏 JS template literal）
             const fs = require('fs');
+            const { GitHub } = require('@actions/github');
             const verdict = '${{ steps.parse.outputs.verdict }}' === 'APPROVE' ? 'APPROVE' : 'REQUEST_CHANGES';
             let modelBody = '';
             try {
@@ -188,7 +191,8 @@ jobs:
             // 用 + 拼接（单引号字符串）而非 template literal → 模型 body 含反引号 / ${ 也不会破坏 JS 解析
             const body = '## 🤖 MiniMax Code Review\n\nVerdict: **' + verdict + '**\n\n---\n\n' + modelBody;
 
-            const usingPat = !!'${{ secrets.REVIEW_BOT_TOKEN }}';
+            const pat = '${{ secrets.REVIEW_BOT_TOKEN }}';
+            const hasPat = !!pat;
             const prNumber = context.issue.number;
             const { owner, repo } = context.repo;
 
@@ -199,23 +203,49 @@ jobs:
               return;
             }
 
-            // If PAT is available, post a real review (counts as approval)
-            if (usingPat && (verdict === 'APPROVE' || verdict === 'REQUEST_CHANGES')) {
+            // 显式建 PAT client 调 pulls.createReview（只 PAT 走这条路径）
+            // + self-approve 检测：PAT 账号 == PR 作者时 GitHub 会拒绝 "can not
+            // approve your own pull request"，直接走 fallback 避免无谓的 PAT 调用
+            if (hasPat && (verdict === 'APPROVE' || verdict === 'REQUEST_CHANGES')) {
               try {
-                await github.rest.pulls.createReview({
-                  owner, repo, pull_number: prNumber,
-                  event: verdict,
-                  body: body
-                });
-                core.info('Posted ' + verdict + ' review via PAT');
-                return;
+                const patGithub = new GitHub(pat);
+                // 拿 PAT 自身账号
+                let patLogin = null;
+                try {
+                  const me = await patGithub.rest.users.getAuthenticated();
+                  patLogin = me.data.login;
+                } catch (e) {
+                  core.warning('PAT auth check failed: ' + e.message);
+                }
+                // 拿 PR 作者
+                let prAuthor = null;
+                try {
+                  const pr = await github.rest.pulls.get({ owner, repo, pull_number: prNumber });
+                  prAuthor = pr.data.user?.login;
+                } catch (e) {
+                  core.warning('PR author fetch failed: ' + e.message);
+                }
+                if (patLogin && prAuthor && patLogin === prAuthor) {
+                  core.warning('PAT account (' + patLogin + ') equals PR author (' + prAuthor + ') — skipping pulls.createReview (self-approve forbidden by GitHub). Falling back to comment.');
+                } else {
+                  await patGithub.rest.pulls.createReview({
+                    owner, repo, pull_number: prNumber,
+                    event: verdict,
+                    body: body
+                  });
+                  core.info('Posted ' + verdict + ' review via PAT');
+                  return;
+                }
               } catch (e) {
                 core.warning('PAT review failed: ' + e.message + '. Falling back to comment.');
               }
             }
 
-            // Fallback: post as comment (does NOT count as approval)
-            const warning = usingPat ? '' : '\n\n---\n⚠️ `REVIEW_BOT_TOKEN` secret 未配置，本次仅作 comment，**不计入 branch protection 批准**。';
+            // Fallback: 用 GITHUB_TOKEN client (`github`) 发 comment
+            // —— 跟上面 PAT 路径**完全隔离**，即使 PAT 状态被污染也不影响
+            const warning = hasPat
+              ? '\n\n---\n⚠️ 正式 review 提交失败或被跳过（self-approve），已自动降级为 comment，**不计入 branch protection 批准**。'
+              : '\n\n---\n⚠️ `REVIEW_BOT_TOKEN` secret 未配置，本次仅作 comment，**不计入 branch protection 批准**。';
             await github.rest.issues.createComment({
               owner, repo, issue_number: prNumber,
               body: body + warning
