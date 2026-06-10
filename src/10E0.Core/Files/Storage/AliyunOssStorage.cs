@@ -4,7 +4,13 @@ using Microsoft.Extensions.Options;
 namespace TenE0.Core.Files.Storage;
 
 /// <summary>
-/// 阿里云 OSS 存储实现
+/// 阿里云 OSS 存储实现。
+/// <para>
+/// 生产环境强烈建议将 <c>AccessKeyId</c> / <c>AccessKeySecret</c> 配置到环境变量
+/// （如 <c>OSS__AccessKeyId</c> / <c>OSS__AccessKeySecret</c>）、阿里云 RAM 角色或
+/// KMS 凭据提供者中，<b>不要</b>在 <c>appsettings.*.json</c> 或源代码中明文写入密钥。
+/// 本地开发可使用 <c>dotnet user-secrets</c>。
+/// </para>
 /// </summary>
 public class AliyunOssStorage : IFileStorage
 {
@@ -14,6 +20,8 @@ public class AliyunOssStorage : IFileStorage
     public AliyunOssStorage(IOptions<AliyunOssOptions> options)
     {
         _options = options.Value;
+        // 防御性校验：尽早失败，避免 SDK 在后续调用时抛出难以诊断的认证错误。
+        AliyunOssOptions.Validate(_options);
         _client = new OssClient(_options.Endpoint, _options.AccessKeyId, _options.AccessKeySecret);
     }
 
@@ -87,10 +95,80 @@ public class AliyunOssStorage : IFileStorage
     }
 }
 
+/// <summary>
+/// 阿里云 OSS 配置项。
+/// <para>
+/// <b>生产环境</b>请通过环境变量（<c>OSS__Endpoint</c> / <c>OSS__AccessKeyId</c> /
+/// <c>OSS__AccessKeySecret</c> / <c>OSS__BucketName</c>）、用户密钥或 RAM 角色注入，
+/// 切勿将真实凭据提交到源代码仓库。
+/// </para>
+/// </summary>
 public class AliyunOssOptions
 {
     public string Endpoint { get; set; } = string.Empty;
     public string AccessKeyId { get; set; } = string.Empty;
     public string AccessKeySecret { get; set; } = string.Empty;
     public string BucketName { get; set; } = string.Empty;
+
+    /// <summary>
+    /// 占位符黑名单（大小写不敏感）。配置值若包含其中任一模式将被视为未配置。
+    /// </summary>
+    private static readonly string[] PlaceholderPatterns =
+    {
+        "TODO", "CHANGE_ME", "PLACEHOLDER", "your-"
+    };
+
+    /// <summary>
+    /// 校验 <see cref="AliyunOssOptions"/>。任何必填字段为空、或包含占位符模式
+    /// （<c>TODO</c> / <c>CHANGE_ME</c> / <c>PLACEHOLDER</c> / <c>your-</c>，大小写不敏感）
+    /// 时，抛出 <see cref="OptionsValidationException"/>。
+    /// </summary>
+    /// <param name="options">待校验的配置实例。</param>
+    /// <exception cref="OptionsValidationException">校验失败时抛出。</exception>
+    public static void Validate(AliyunOssOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+
+        var failures = new List<string>();
+
+        EnsureValid(options.Endpoint, nameof(Endpoint), failures);
+        EnsureValid(options.AccessKeyId, nameof(AccessKeyId), failures);
+        EnsureValid(options.AccessKeySecret, nameof(AccessKeySecret), failures);
+        EnsureValid(options.BucketName, nameof(BucketName), failures);
+
+        if (failures.Count > 0)
+        {
+            throw new OptionsValidationException(
+                nameof(AliyunOssOptions),
+                typeof(AliyunOssOptions),
+                failures);
+        }
+    }
+
+    private static void EnsureValid(string value, string fieldName, List<string> failures)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            failures.Add(
+                $"AliyunOssOptions.{fieldName} is required. " +
+                $"Configure it via configuration key 'OSS:{fieldName}' " +
+                $"(or environment variable 'OSS__{fieldName}'), " +
+                $"Aliyun RAM role, or `dotnet user-secrets` for local development. " +
+                $"Do NOT commit credentials to source control.");
+            return;
+        }
+
+        foreach (var pattern in PlaceholderPatterns)
+        {
+            if (value.Contains(pattern, StringComparison.OrdinalIgnoreCase))
+            {
+                failures.Add(
+                    $"AliyunOssOptions.{fieldName} contains placeholder '{pattern}' " +
+                    $"and appears to be unconfigured. " +
+                    $"Replace it with a real value sourced from environment variable " +
+                    $"'OSS__{fieldName}' or an Aliyun RAM role. " +
+                    $"Do NOT commit credentials to source control.");
+            }
+        }
+    }
 }

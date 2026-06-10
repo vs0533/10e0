@@ -7,6 +7,8 @@ namespace TenE0.Core.Auth.Jwt;
 /// - <see cref="SigningKey"/> 至少 32 字节随机字符串，从环境变量或密钥管理服务读取，不要硬编码
 /// - <see cref="AccessTokenLifetime"/> 15-60 分钟（短，便于撤销）
 /// - <see cref="RefreshTokenLifetime"/> 7-30 天（长，让用户少登录）
+/// - <see cref="RefreshTokenRotationEnabled"/> 强烈建议保持 true（OWASP 推荐）。
+///   关闭后会回退到非轮换模式：旧 refresh token 不过期，窃取后仍可长期复用。
 /// </summary>
 public sealed class JwtOptions
 {
@@ -16,4 +18,19 @@ public sealed class JwtOptions
 
     public TimeSpan AccessTokenLifetime { get; set; } = TimeSpan.FromMinutes(30);
     public TimeSpan RefreshTokenLifetime { get; set; } = TimeSpan.FromDays(14);
+
+    /// <summary>
+    /// 是否启用 refresh token 旋转（OWASP 推荐）。
+    /// true：每次 refresh 成功后旧 token 立即失效，检测到重放则撤销该用户所有 token
+    /// false：refresh token 不轮换（不推荐，仅用于特殊兼容场景）
+    /// </summary>
+    public bool RefreshTokenRotationEnabled { get; set; } = true;
+
+    /// <summary>
+    /// 滑动过期：成功 refresh 时新签发 token 的过期时间是否刷新为 now + <see cref="RefreshTokenLifetime"/>。
+    /// 与 <see cref="RefreshTokenRotationEnabled"/> 互相独立：
+    /// 即使关闭 rotation，handler 仍会写入新 token 行（旧 token 不撤销），新 token 的过期时间仍受此开关影响。
+    /// 关闭此开关时，新 token 保留原 token 未来的过期时间（不会延长，但也不会缩短）。
+    /// </summary>
+    public bool SlidingRefreshExpiration { get; set; } = true;
 }

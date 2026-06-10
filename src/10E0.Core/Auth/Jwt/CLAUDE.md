@@ -6,7 +6,7 @@ JWT 令牌签发与验证的配置。
 
 | 文件 | 职责 |
 |------|------|
-| `JwtOptions.cs` | JWT 配置 POCO：`Issuer`、`Audience`、`SigningKey`、`AccessTokenLifetime`、`RefreshTokenLifetime` |
+| `JwtOptions.cs` | JWT 配置 POCO：`Issuer`、`Audience`、`SigningKey`、`AccessTokenLifetime`、`RefreshTokenLifetime`、`RefreshTokenRotationEnabled`、`SlidingRefreshExpiration` |
 
 ## 子目录
 

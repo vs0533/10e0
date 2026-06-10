@@ -156,7 +156,10 @@ public sealed class DataFilterRuleServiceTests
         {
             var rule = new TenE0DataFilterRule
             {
-                EntityTypeName = "Order", RuleJson = ValidRuleJson, Description = "old", IsEnabled = false
+                EntityTypeName = "Order",
+                RuleJson = ValidRuleJson,
+                Description = "old",
+                IsEnabled = false
             };
             seedCtx.Rules.Add(rule);
             await seedCtx.SaveChangesAsync();
