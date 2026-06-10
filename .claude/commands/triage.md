@@ -56,5 +56,4 @@ Workflow({
 
 ```js
 Workflow({ name: 'process-item', args: { item: {...} } })
-Workflow({ name: 'wait-for-pr-review', args: { prNumber: 7, prUrl: '...', timeoutMs: 600000 } })
 ```

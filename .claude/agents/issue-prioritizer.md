@@ -28,7 +28,7 @@ const RANK_SCHEMA = { type: 'array', items: {...} }
 StructuredOutput(input: { id: 7, type: 'issue', ... })
 ```
 
-> **当前所有下游工作流都用 `{ items: [...] }` 包装格式**（`triage-loop.js` 的 `RANK_SCHEMA`、`wait-for-pr-review.js` 的 `REVIEW_SCHEMA`），所以默认按 `object.items` 格式返回即可。
+> **当前所有下游工作流都用 `{ items: [...] }` 包装格式**（如 `triage-loop.js` 的 `RANK_SCHEMA`），所以默认按 `object.items` 格式返回即可。
 
 **判别流程**：
 - 收到 schema？→ 是 → 按 schema 输出结构化数据，忽略 markdown

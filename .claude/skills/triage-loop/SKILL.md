@@ -7,7 +7,6 @@ description: 自动循环处理仓库的 issues 和 PRs。每一轮从 issue-pri
 
 > **执行入口**：`.claude/workflows/triage-loop.js`（外层 while 循环）
 > **子工作流**：`.claude/workflows/process-item.js`（单 issue/PR 完整 9 步）
-> **遗留文件**：`.claude/workflows/wait-for-pr-review.js`（PR #32 起不再被 process-item 调用，逻辑已 inline 进 agent；保留供参考，可手动调用）
 >
 > 本文件**只描述规则与派单策略**；具体执行逻辑请读 workflow 脚本注释。
 > 用户在 Claude Code 中调用 `Workflow({ name: "triage-loop", args: { ... } })` 触发。
@@ -37,7 +36,7 @@ Workflow({ name: "triage-loop", args: { "dry-run": true } })
 Workflow({ name: "process-item", args: { item: { id: 42, type: "issue", ... } } })
 
 # 等 PR review（手动触发或测试用）
-Workflow({ name: "wait-for-pr-review", args: { prNumber: 7, prUrl: "...", timeoutMs: 600000 } })
+// PR #36 起 wait-for-pr-review.js 已删除——轮询逻辑 inline 在 process-item 第 8 步
 ```
 
 支持的 args（透传给 `triage-loop.js`）：
@@ -88,7 +87,7 @@ Workflow({ name: "wait-for-pr-review", args: { prNumber: 7, prUrl: "...", timeou
 
 - **BranchCheck**：`BRANCHCHECK_SCHEMA` 强制 `currentBranch` 是非空字符串，agent 不许省略 / 写 undefined
 - **Tests**：`TESTS_SCHEMA` 要求 `buildOk` / `testsOk` / `formatOk` boolean + `failed` / `passed` / `skipped` number。process-item 直接看字段，**不依赖正则**
-- **Watch**：原 `workflow('wait-for-pr-review', ...)` 因 harness 单层嵌套限制被废弃，改用 inline agent 轮询（schema 化 `REVIEW_SCHEMA`）
+- **Watch**：原外部子工作流调用（`workflow('wait-for-pr-review', ...)`）因 harness 单层嵌套限制被废弃，改用 inline agent 轮询（schema 化 `REVIEW_SCHEMA`）
 - **dotnet 命令必须带 `DOTNET_CLI_UI_LANGUAGE=en-US`**：zh_CN locale 下 CLI 输出中文 "已通过!"，`Passed!` 匹配不到 → 误判失败（PR #29 修复）
 
 ### 8→9 步的 review 分类原则
@@ -169,7 +168,6 @@ Followup from #<pr-number>: <review 反馈摘要>
 - **Workflow 脚本**：
   - `.claude/workflows/triage-loop.js`（外层循环）
   - `.claude/workflows/process-item.js`（单 item 9 步）
-  - `.claude/workflows/wait-for-pr-review.js`（盯 PR review）
   - `.claude/workflows/triage-loop-test.js`（烟雾测试，验证 schema 不破）
   - `.claude/workflows/lib/dispatch.js`（派单策略共享模块）
 - **Slash 命令**：
