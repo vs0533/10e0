@@ -173,9 +173,10 @@ jobs:
         if: always()
         uses: actions/github-script@v7
         with:
-          # 默认 GITHUB_TOKEN 用于 fallback comment（PAT 失败时绝不让 fallback 用
-          # 同一个有问题的 PAT context——否则 createComment 也会 401）
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          # 用 github.token (runtime context) 而非 secrets.GITHUB_TOKEN (secret lookup)
+          # ——runtime reference 自动继承 workflow-level permissions，且绕过
+          # secret 解析 timing 问题。
+          github-token: ${{ github.token }}
           script: |
             // 重要：从文件读取模型 body 而非 GitHub 表达式插值
             // 后者会引入模板注入（模型输出含反引号会破坏 JS template literal）
@@ -190,8 +191,8 @@ jobs:
             // 用 + 拼接（单引号字符串）而非 template literal → 模型 body 含反引号 / ${ 也不会破坏 JS 解析
             const body = '## 🤖 MiniMax Code Review\n\nVerdict: **' + verdict + '**\n\n---\n\n' + modelBody;
 
-            const pat = '${{ secrets.REVIEW_BOT_TOKEN }}';
-            const hasPat = !!pat;
+            const pat = ('${{ secrets.REVIEW_BOT_TOKEN }}' || '').trim();
+            const hasPat = pat.length > 0;
             const prNumber = context.issue.number;
             const { owner, repo } = context.repo;
 
