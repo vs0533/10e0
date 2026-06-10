@@ -19,13 +19,34 @@ public class AwsS3Storage : IFileStorage
     private readonly IAmazonS3 _s3Client;
     private readonly AwsS3Options _options;
 
+    /// <summary>
+    /// DI 入口：构造 <see cref="AmazonS3Client"/> 并交给基类逻辑复用。
+    /// </summary>
     public AwsS3Storage(IOptions<AwsS3Options> options)
+        : this(options.Value, BuildDefaultClient(options.Value))
     {
-        _options = options.Value;
-        // 防御性校验：尽早失败，避免 SDK 在后续调用时抛出难以诊断的认证错误。
-        AwsS3Options.Validate(_options);
-        _s3Client = new AmazonS3Client(_options.AccessKey, _options.SecretKey, Amazon.RegionEndpoint.GetBySystemName(_options.Region));
     }
+
+    /// <summary>
+    /// 测试 / 自定义客户端入口：允许注入一个 <see cref="IAmazonS3"/> 替身。
+    /// </summary>
+    /// <param name="options">S3 配置项（已通过 <see cref="AwsS3Options.Validate"/> 校验）。</param>
+    /// <param name="client">S3 客户端替身。</param>
+    public AwsS3Storage(AwsS3Options options, IAmazonS3 client)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(client);
+        // 防御性校验：尽早失败，避免 SDK 在后续调用时抛出难以诊断的认证错误。
+        AwsS3Options.Validate(options);
+        _options = options;
+        _s3Client = client;
+    }
+
+    private static IAmazonS3 BuildDefaultClient(AwsS3Options options) =>
+        new AmazonS3Client(
+            options.AccessKey,
+            options.SecretKey,
+            Amazon.RegionEndpoint.GetBySystemName(options.Region));
 
     public async Task<StorageResult> StoreAsync(Stream stream, string fileName, string contentType, CancellationToken ct = default)
     {
