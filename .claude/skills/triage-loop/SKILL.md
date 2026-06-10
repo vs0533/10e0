@@ -1,13 +1,13 @@
 ---
 name: triage-loop
-description: 自动循环处理仓库的 issues 和 PRs。每一轮从 issue-prioritizer agent 拉取当前最高优先级的未处理项，派发给 process-item 子工作流走完整 7 步（BDD→TDD→tests→review→PR→盯 review→分类），循环往复。完全自主运行（无人值守）。触发关键词："批量处理 issue"、"批量处理 PR"、"sprint 清理"、"triage 循环"、"自动清理"、"处理所有未处理项"、"把 PR 和 issue 都过一遍"、"triage backlog"、"drain queue"。
+description: 自动循环处理仓库的 issues 和 PRs。每一轮从 issue-prioritizer agent 拉取当前最高优先级的未处理项，派发给 process-item 子工作流走完整处理流程（详见正文流程图与 PR #29/#32 schema 化要点），循环往复。完全自主运行（无人值守）。触发关键词："批量处理 issue"、"批量处理 PR"、"sprint 清理"、"triage 循环"、"自动清理"、"处理所有未处理项"、"把 PR 和 issue 都过一遍"、"triage backlog"、"drain queue"。
 ---
 
 # Triage Loop / 循环分诊
 
 > **执行入口**：`.claude/workflows/triage-loop.js`（外层 while 循环）
-> **子工作流**：`.claude/workflows/process-item.js`（单 issue/PR 完整 7 步）
-> **辅助子工作流**：`.claude/workflows/wait-for-pr-review.js`（盯 PR 自动 review）
+> **子工作流**：`.claude/workflows/process-item.js`（单 issue/PR 完整 9 步）
+> **遗留文件**：`.claude/workflows/wait-for-pr-review.js`（PR #32 起不再被 process-item 调用，逻辑已 inline 进 agent；保留供参考，可手动调用）
 >
 > 本文件**只描述规则与派单策略**；具体执行逻辑请读 workflow 脚本注释。
 > 用户在 Claude Code 中调用 `Workflow({ name: "triage-loop", args: { ... } })` 触发。
@@ -60,8 +60,8 @@ Workflow({ name: "wait-for-pr-review", args: { prNumber: 7, prUrl: "...", timeou
 | `stale` | `stale` | 只让 `issue-prioritizer` 加 stale label / 评论（不开发） |
 | `failing-ci` / `ci-failing` | `fix-ci` | 跳 BDD，走 TDD+tests+review+PR+盯+handle |
 | `review-feedback` / `changes-requested` | `fix-review` | 跳 BDD，走 TDD+tests+review+PR+盯+handle |
-| `bug`/`p0`/`p1`/`critical` 或标题含 fix/bug/error/exception/crash | `bug` | **完整 7 步**：BDD→TDD→tests→review→PR→盯 review→handle |
-| `feature` / `enhancement` | `feature` | 完整 7 步 + 前置 planner |
+| `bug`/`p0`/`p1`/`critical` 或标题含 fix/bug/error/exception/crash | `bug` | **完整 9 步**：BranchCheck→BDD→TDD→Tests→Review→Open PR→Watch→Handle |
+| `feature` / `enhancement` | `feature` | 完整 9 步 + 前置 planner |
 | `refactor` / `tech-debt` / `dead-code` | `refactor` | 跳 BDD+planner，走 TDD+tests+review+PR+盯+handle |
 | `docs` / `documentation` | `docs` | 跳 BDD，让 doc-updater 写 |
 | 其它 | `default` | 走 general-purpose 兜底 |
@@ -73,17 +73,25 @@ Workflow({ name: "wait-for-pr-review", args: { prNumber: 7, prUrl: "...", timeou
 每个 item 必走（kind 决定哪些步跳过）：
 
 ```
-1. BDD         bdd-guide           写 Given/When/Then 验收测试，必须 RED
-2. Plan (feature)  planner          写 plan markdown（仅 feature）
-3. TDD         tdd-guide           实现让所有测试 GREEN
-4. Tests       general-purpose     dotnet build && dotnet test，红就抛错
-5. Review      code-reviewer       本地扫 diff，处理 CRITICAL/HIGH
-6. Open PR     general-purpose     推 dev，mcp__github__create_pull_request
-7. Watch       wait-for-pr-review  子工作流轮询 claude-review.yml
-8. Handle      general-purpose     分类 review：能修修，不能修开 followup issue
+1. BranchCheck general-purpose     schema 化 preflight：currentBranch / isFeature / worktreeClean
+2. BDD         bdd-guide           写 Given/When/Then 验收测试，必须 RED
+3. Plan (feature)  planner          写 plan markdown（仅 feature）
+4. TDD         tdd-guide           实现让所有测试 GREEN
+5. Tests       general-purpose     schema 化报数字（buildOk / testsOk / failed / passed / formatOk）
+6. Review      code-reviewer       本地扫 diff，处理 CRITICAL/HIGH
+7. Open PR     general-purpose     推 dev，mcp__github__create_pull_request
+8. Watch       general-purpose     inline agent 轮询 claude-review.yml（reviewTimeoutMs 默认 15 分钟）
+9. Handle      general-purpose     分类 review：能修修，不能修开 followup issue
 ```
 
-### 7→8 步的 review 分类原则
+### schema 化要点（PR #32 修复 w7bu0omg2 案例）
+
+- **BranchCheck**：`BRANCHCHECK_SCHEMA` 强制 `currentBranch` 是非空字符串，agent 不许省略 / 写 undefined
+- **Tests**：`TESTS_SCHEMA` 要求 `buildOk` / `testsOk` / `formatOk` boolean + `failed` / `passed` / `skipped` number。process-item 直接看字段，**不依赖正则**
+- **Watch**：原 `workflow('wait-for-pr-review', ...)` 因 harness 单层嵌套限制被废弃，改用 inline agent 轮询（schema 化 `REVIEW_SCHEMA`）
+- **dotnet 命令必须带 `DOTNET_CLI_UI_LANGUAGE=en-US`**：zh_CN locale 下 CLI 输出中文 "已通过!"，`Passed!` 匹配不到 → 误判失败（PR #29 修复）
+
+### 8→9 步的 review 分类原则
 
 | 类型 | 处理 | 例子 |
 |---|---|---|
@@ -123,7 +131,7 @@ Followup from #<pr-number>: <review 反馈摘要>
 按"外层 worktree，内层接力"：
 
 - **triage-loop.js**：while 循环本身**不带** `isolation: "worktree"`，让 process-item 自管。
-- **process-item.js**：第 1 步 BDD / TDD agent **不带** `isolation: "worktree"`，全部 7 步在同一 workspace 接力（顺序执行，状态自动可见）。
+- **process-item.js**：第 1 步 BDD / TDD agent **不带** `isolation: "worktree"`，全部 9 步在同一 workspace 接力（顺序执行，状态自动可见）。
 - **wai-for-pr-review.js**：轮询 agent **不带** `isolation`，只读 GitHub API 不改文件。
 - **跨 item 隔离**：靠 git 分支（每 item 推到独立 feature 分支再开 PR），不靠 worktree。
 
@@ -131,7 +139,7 @@ Followup from #<pr-number>: <review 反馈摘要>
 
 ## 已知陷阱（必读）
 
-- **worktree 隔离是给并行用的**：本工作流顺序执行，7 步接力同一 workspace，不要每步 isolation。
+- **worktree 隔离是给并行用的**：本工作流顺序执行，9 步接力同一 workspace，不要每步 isolation。
 - **GitHub API 限流**：未认证 `60/h`，认证 `5000/h`。先 `gh auth login`。
 - **不要自动 merge PR / close issue**：所有改动让用户确认。
 - **单 item > 30 分钟应拆**：`reviewTimeoutMs` 调到 1800000 但要警惕 budget；超长拆子任务。
@@ -160,7 +168,7 @@ Followup from #<pr-number>: <review 反馈摘要>
 
 - **Workflow 脚本**：
   - `.claude/workflows/triage-loop.js`（外层循环）
-  - `.claude/workflows/process-item.js`（单 item 7 步）
+  - `.claude/workflows/process-item.js`（单 item 9 步）
   - `.claude/workflows/wait-for-pr-review.js`（盯 PR review）
   - `.claude/workflows/triage-loop-test.js`（烟雾测试，验证 schema 不破）
   - `.claude/workflows/lib/dispatch.js`（派单策略共享模块）
