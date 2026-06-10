@@ -24,6 +24,13 @@ public interface ICurrentUserContext
     IReadOnlyList<string> RoleIds { get; }
 
     /// <summary>
+    /// 签发 JWT 时各角色的版本号快照。来自 <see cref="JwtClaims.RoleVersion"/> claim，
+    /// 序列化为 <c>Dictionary&lt;string, long&gt;</c>。
+    /// 空字典表示该 token 在 #7 之前签发（legacy），应继续放行不 deny。
+    /// </summary>
+    IReadOnlyDictionary<string, long> RoleVersions { get; }
+
+    /// <summary>
     /// 异步加载用户详情对象。
     /// 实现层负责走分布式缓存（命中即返回，未命中查 DB 并回填）。
     /// </summary>
