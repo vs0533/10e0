@@ -36,6 +36,45 @@ StructuredOutput(input: { id: 7, type: 'issue', ... })
 
 ---
 
+## Issue 间关系解析
+
+GitHub 2024-05 推出 Sub-Issues UI 关联（API 形式：`sub_issue` / `parent_issue` 字段），但**纯文字** `> Part of #N` / `Depends on #N` / `Blocks #N` 不会被自动识别。issue-prioritizer 必须**自己解析** body 文字以构建关系图。
+
+### 三种关系模式
+
+| 文字模式 | 语义 | 排序影响 |
+|---------|------|---------|
+| `Part of #N` / `Child of #N` / `子 issue：#N` | 当前 issue 是 #N 的子任务 | #N 必须**先**或**同时**处理 |
+| `Depends on #N` / `Blocked by #N` / `依赖 #N` | 当前 issue 阻塞于 #N | #N 必须**先**完成 |
+| `Blocks #N` / `阻塞 #N` | 当前 issue 阻塞 #N | 当前 issue 必须**先**完成 |
+
+**解析规则**：
+1. 扫每个 issue body，用正则 `/(?:Part of|Child of|Depends on|Blocked by|Blocks|子 issue|依赖|阻塞)\s*#?(\d+)/gi` 提取关系
+2. 解析后的关系存到 issue 的 `relationships: { parent: N[], dependsOn: N[], blocks: N[] }` 字段（即使 schema 没要求，也存到本地计算变量）
+3. 同样用 `gh issue view <N> --json body,state` 验证 #N 的 `state`（OPEN / CLOSED）
+
+**排序应用**（见"合并顺序调整规则"）：
+- `parent`（Part of）#N 未关闭 → 当前 issue 排在 #N 之后；#N 已关闭 → 当前 issue 照常排序（视为独立）
+- `dependsOn`（Depends on）#N 未关闭 → 当前 issue 排在 #N 之后
+- `blocks`（Blocks）#N 未关闭 → 当前 issue 排在 #N 之前
+
+### 验证方式
+
+```bash
+# 解析所有 open issue 的 body 找 Part of / Depends on 关系
+gh issue list --state open --limit 200 --json number,body \
+  | jq -r '.[] | select(.body | test("Part of|Depends on|Blocks|子 issue|依赖|阻塞"; "i")) 
+           | "\(.number)\t\(.body | match("(Part of|Depends on|Blocks|子 issue|依赖|阻塞)\\s*#?\\d+"; "gi").string)"'
+```
+
+### 注意
+
+- 文字解析不是 GitHub 原生关联，GitHub UI 不渲染父子树；要做 UI 关联需要额外调 `POST /repos/{owner}/{repo}/issues/{parent}/sub_issues` API
+- 但本 agent 的"排序"目的已足够——保证反序派单不会发生
+- Sub-Issues API 关联由用户手动 / 工具脚本完成，不由本 agent 负责
+
+---
+
 ## 仓库分支与 PR 策略（重要 ⚠️）
 
 `vs0533/10e0` 仓库从 2026/06/04 起启用 GitHub branch protection：
@@ -203,6 +242,11 @@ gh issue list --state open --limit 200 --json number,title,body \
    - 同分时更早创建的优先
    - 跨工作项有依赖关系时，依赖项排前
    - stale 越久的权重越高（避免长期挂起）
+   - **Issue 父子/依赖关系**（见"Issue 间关系解析"段）：
+     - `Part of #N`（#N 未关闭）→ 排到 #N 之后；#N 已关闭 → 照常排
+     - `Depends on #N`（#N 未关闭）→ 排到 #N 之后
+     - `Blocks #N`（#N 未关闭）→ 排到 #N 之前
+     - 跨 P-tier 同样适用（高 tier 子 issue 不能反序插队到低 tier 父 issue 前）
 
 ### 第六步：输出报告
 使用以下格式返回（**分三段：Issue + PR + 综合顺序，最后给附录列出被排除的 PR**）：
