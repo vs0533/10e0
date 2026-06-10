@@ -5,6 +5,7 @@ using TenE0.Core.Auth.Jwt.Commands;
 using TenE0.Core.Auth.Jwt.Services;
 using TenE0.Core.Auth.Jwt.Storage;
 using TenE0.Core.Errors;
+using TenE0.Core.Permissions.Storage;
 using Moq;
 
 namespace TenE0.Core.Tests.Auth.Jwt.Commands;
@@ -25,6 +26,8 @@ public sealed class LoginCommandHandlerTests
             modelBuilder.Entity<TestUser>(b => { b.HasKey(e => e.Id); b.Property(e => e.UserCode); b.Property(e => e.PasswordHash); });
             modelBuilder.Entity<TenE0UserRole>(b => b.HasKey(nameof(TenE0UserRole.UserCode), nameof(TenE0UserRole.RoleCode)));
             modelBuilder.Entity<TenE0RefreshToken>(b => b.HasKey(e => e.Id));
+            // #7: role version 需要 TenE0Role 注册才能查询
+            modelBuilder.Entity<TenE0Role>(b => b.HasKey(r => r.Code));
         }
         protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
         {
@@ -64,7 +67,7 @@ public sealed class LoginCommandHandlerTests
 
         var tokenMock = new Mock<IJwtTokenService>();
         var expiresAt = DateTimeOffset.UtcNow.AddHours(1);
-        tokenMock.Setup(t => t.Issue("u001", "张三", UserType.Person, It.Is<IReadOnlyList<string>>(r => r.Contains("admin"))))
+        tokenMock.Setup(t => t.Issue("u001", "张三", UserType.Person, It.Is<IReadOnlyList<string>>(r => r.Contains("admin")), It.IsAny<IReadOnlyDictionary<string, long>>()))
             .Returns(new IssuedTokens("acctok", expiresAt, "reftok", "refhash", expiresAt.AddDays(7)));
 
         var errs = new Errs();

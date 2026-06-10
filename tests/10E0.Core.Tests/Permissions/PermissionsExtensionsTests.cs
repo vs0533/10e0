@@ -56,6 +56,7 @@ public sealed class PermissionsExtensionsTests
         public string? UserCode => null;
         public UserType UserType => UserType.Person;
         public IReadOnlyList<string> RoleIds => [];
+        public IReadOnlyDictionary<string, long> RoleVersions => new Dictionary<string, long>();
         public ValueTask<ICurrentUserInfo?> GetUserInfoAsync(CancellationToken cancellationToken = default)
             => ValueTask.FromResult<ICurrentUserInfo?>(null);
     }
@@ -65,6 +66,13 @@ public sealed class PermissionsExtensionsTests
         public Task<IReadOnlySet<string>> GetGrantedPermissionsAsync(
             IReadOnlyCollection<string> roleIds, CancellationToken cancellationToken = default)
             => Task.FromResult<IReadOnlySet<string>>(new HashSet<string>());
+    }
+
+    private sealed class StubRoleVersionStore : IRoleVersionStore
+    {
+        public Task<IReadOnlyDictionary<string, long>> GetCurrentVersionsAsync(
+            IReadOnlyCollection<string> roleCodes, CancellationToken cancellationToken = default)
+            => Task.FromResult<IReadOnlyDictionary<string, long>>(new Dictionary<string, long>());
     }
 
     // ────────────────────────────────────────────────────────────────────
@@ -145,10 +153,11 @@ public sealed class PermissionsExtensionsTests
     {
         var services = new ServiceCollection();
         // Register all dependencies that PermissionEvaluator needs:
-        // ICurrentUserContext, IPermissionStore, IPermissionCache, IOptions<PermissionsOptions>.
+        // ICurrentUserContext, IPermissionStore, IPermissionCache, IRoleVersionStore, IOptions<PermissionsOptions>.
         services.AddSingleton<ICurrentUserContext>(new StubCurrentUserContext());
         services.AddSingleton<IDistributedCache, MemoryDistributedCache>();
         services.AddSingleton<IPermissionStore>(new StubPermissionStore());
+        services.AddSingleton<IRoleVersionStore>(new StubRoleVersionStore());
         services.AddTenE0Permissions();
         using var sp = services.BuildServiceProvider();
 

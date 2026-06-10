@@ -31,7 +31,7 @@ public sealed class JwtTokenServiceTests
     public void Issue_ShouldReturnNonEmptyAccessToken()
     {
         var service = CreateService();
-        var tokens = service.Issue("user01", "John Doe", UserType.Person, ["admin"]);
+        var tokens = service.Issue("user01", "John Doe", UserType.Person, ["admin"], new Dictionary<string, long>());
 
         tokens.AccessToken.Should().NotBeNullOrEmpty();
     }
@@ -40,7 +40,7 @@ public sealed class JwtTokenServiceTests
     public void Issue_AccessTokenShouldBeValidJwt()
     {
         var service = CreateService();
-        var tokens = service.Issue("user01", "John Doe", UserType.Person, ["admin"]);
+        var tokens = service.Issue("user01", "John Doe", UserType.Person, ["admin"], new Dictionary<string, long>());
 
         var parts = tokens.AccessToken.Split('.');
         parts.Should().HaveCount(3, "JWT tokens have header.payload.signature parts");
@@ -50,7 +50,7 @@ public sealed class JwtTokenServiceTests
     public void Issue_ShouldContainCorrectClaims()
     {
         var service = CreateService();
-        var tokens = service.Issue("user01", "John Doe", UserType.Person, ["admin", "editor"]);
+        var tokens = service.Issue("user01", "John Doe", UserType.Person, ["admin", "editor"], new Dictionary<string, long>());
 
         var handler = new JwtSecurityTokenHandler();
         var jwtToken = handler.ReadJwtToken(tokens.AccessToken);
@@ -66,7 +66,7 @@ public sealed class JwtTokenServiceTests
     public void Issue_ShouldIncludeJti()
     {
         var service = CreateService();
-        var tokens = service.Issue("user01", "John Doe", UserType.Person, []);
+        var tokens = service.Issue("user01", "John Doe", UserType.Person, [], new Dictionary<string, long>());
 
         var handler = new JwtSecurityTokenHandler();
         var jwtToken = handler.ReadJwtToken(tokens.AccessToken);
@@ -84,7 +84,7 @@ public sealed class JwtTokenServiceTests
         timeProvider.Setup(t => t.GetUtcNow()).Returns(fixedTime);
 
         var service = CreateService(timeProvider.Object);
-        var tokens = service.Issue("user01", "John Doe", UserType.Person, []);
+        var tokens = service.Issue("user01", "John Doe", UserType.Person, [], new Dictionary<string, long>());
 
         tokens.AccessTokenExpiresAt.Should().Be(fixedTime.AddMinutes(30));
         tokens.RefreshTokenExpiresAt.Should().Be(fixedTime.AddDays(7));
@@ -94,7 +94,7 @@ public sealed class JwtTokenServiceTests
     public void Issue_ShouldReturnRefreshToken()
     {
         var service = CreateService();
-        var tokens = service.Issue("user01", "John Doe", UserType.Person, []);
+        var tokens = service.Issue("user01", "John Doe", UserType.Person, [], new Dictionary<string, long>());
 
         tokens.RefreshToken.Should().NotBeNullOrEmpty();
         tokens.RefreshTokenHash.Should().NotBeNullOrEmpty();

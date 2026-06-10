@@ -13,6 +13,7 @@ public sealed class PermissionGrantServiceTests
     private sealed class TestDbContext(DbContextOptions<TestDbContext> options) : DbContext(options)
     {
         public DbSet<TenE0RolePermission> RolePermissions => Set<TenE0RolePermission>();
+        public DbSet<TenE0Role> Roles => Set<TenE0Role>();
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -20,6 +21,8 @@ public sealed class PermissionGrantServiceTests
             {
                 b.HasKey(nameof(TenE0RolePermission.RoleCode), nameof(TenE0RolePermission.PermissionKey));
             });
+            // #7: 旧的 TestDbContext 没注册 TenE0Role，新功能需要
+            modelBuilder.Entity<TenE0Role>(b => b.HasKey(r => r.Code));
         }
         protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
         {
@@ -53,11 +56,23 @@ public sealed class PermissionGrantServiceTests
         public IEnumerable<PermissionDefinition> Define() => defs;
     }
 
+    /// <summary>
+    /// 在指定 factory 里 seed 一个角色 — #7 之后 Grant/Revoke/SetGrants 都会 bump role.Version，
+    /// 角色必须存在于 TenE0Role 表中。
+    /// </summary>
+    private static async Task SeedRoleAsync(IDbContextFactory<TestDbContext> f, string roleCode)
+    {
+        await using var ctx = f.CreateDbContext();
+        ctx.Roles.Add(new TenE0Role { Code = roleCode, Name = roleCode });
+        await ctx.SaveChangesAsync();
+    }
+
     [Fact]
     public async Task GrantAsync_NewPermission_CreatesRecordAndInvalidatesCache()
     {
         var dbName = Guid.NewGuid().ToString("N");
         var factory = CreateFactory(dbName);
+        await SeedRoleAsync(factory, "admin");
         var catalog = CreateCatalog("user.read", "user.write");
         var cacheMock = new Mock<IPermissionCache>();
         var svc = new PermissionGrantService<TestDbContext>(factory, catalog, cacheMock.Object);
@@ -77,6 +92,7 @@ public sealed class PermissionGrantServiceTests
     {
         var dbName = Guid.NewGuid().ToString("N");
         var factory = CreateFactory(dbName);
+        await SeedRoleAsync(factory, "admin");
         await using (var seedCtx = factory.CreateDbContext())
         {
             seedCtx.RolePermissions.Add(new TenE0RolePermission { RoleCode = "admin", PermissionKey = "user.read" });
@@ -113,6 +129,7 @@ public sealed class PermissionGrantServiceTests
     {
         var dbName = Guid.NewGuid().ToString("N");
         var factory = CreateFactory(dbName);
+        await SeedRoleAsync(factory, "admin");
         await using (var seedCtx = factory.CreateDbContext())
         {
             seedCtx.RolePermissions.Add(new TenE0RolePermission { RoleCode = "admin", PermissionKey = "user.read" });
@@ -149,6 +166,7 @@ public sealed class PermissionGrantServiceTests
     {
         var dbName = Guid.NewGuid().ToString("N");
         var factory = CreateFactory(dbName);
+        await SeedRoleAsync(factory, "admin");
         await using (var seedCtx = factory.CreateDbContext())
         {
             seedCtx.RolePermissions.Add(new TenE0RolePermission { RoleCode = "admin", PermissionKey = "old.perm" });
