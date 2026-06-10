@@ -180,7 +180,6 @@ jobs:
             // 重要：从文件读取模型 body 而非 GitHub 表达式插值
             // 后者会引入模板注入（模型输出含反引号会破坏 JS template literal）
             const fs = require('fs');
-            const { GitHub } = require('@actions/github');
             const verdict = '${{ steps.parse.outputs.verdict }}' === 'APPROVE' ? 'APPROVE' : 'REQUEST_CHANGES';
             let modelBody = '';
             try {
@@ -203,37 +202,55 @@ jobs:
               return;
             }
 
-            // 显式建 PAT client 调 pulls.createReview（只 PAT 走这条路径）
-            // + self-approve 检测：PAT 账号 == PR 作者时 GitHub 会拒绝 "can not
+            // Self-approve 检测：PAT 账号 == PR 作者时 GitHub 会拒绝 "can not
             // approve your own pull request"，直接走 fallback 避免无谓的 PAT 调用
+            let prAuthor = null;
+            try {
+              const pr = await github.rest.pulls.get({ owner, repo, pull_number: prNumber });
+              prAuthor = pr.data.user?.login;
+            } catch (e) {
+              core.warning('PR author fetch failed: ' + e.message);
+            }
+
+            // 显式用 fetch + PAT header 调 pulls.createReview（不走 github client，
+            // 跟 GITHUB_TOKEN client 完全隔离）
+            // 之前用 new GitHub(pat) + @actions/github require 失败：actions/github-script
+            // 不暴露 @actions/github require 路径。fetch 是 Node 22 内建，无 import 问题。
             if (hasPat && (verdict === 'APPROVE' || verdict === 'REQUEST_CHANGES')) {
               try {
-                const patGithub = new GitHub(pat);
-                // 拿 PAT 自身账号
-                let patLogin = null;
-                try {
-                  const me = await patGithub.rest.users.getAuthenticated();
-                  patLogin = me.data.login;
-                } catch (e) {
-                  core.warning('PAT auth check failed: ' + e.message);
+                // 先验证 PAT 自身账号（探测 PAT 是否有效 + 拿 PAT login）
+                const meResp = await fetch('https://api.github.com/user', {
+                  headers: {
+                    'Authorization': `Bearer ${pat}`,
+                    'Accept': 'application/vnd.github+json',
+                    'X-GitHub-Api-Version': '2022-11-28',
+                    'User-Agent': '10E0-claude-review-workflow'
+                  }
+                });
+                if (!meResp.ok) {
+                  throw new Error(`PAT auth check HTTP ${meResp.status}: ${await meResp.text()}`);
                 }
-                // 拿 PR 作者
-                let prAuthor = null;
-                try {
-                  const pr = await github.rest.pulls.get({ owner, repo, pull_number: prNumber });
-                  prAuthor = pr.data.user?.login;
-                } catch (e) {
-                  core.warning('PR author fetch failed: ' + e.message);
-                }
-                if (patLogin && prAuthor && patLogin === prAuthor) {
+                const me = await meResp.json();
+                const patLogin = me.login;
+
+                if (prAuthor && patLogin === prAuthor) {
                   core.warning('PAT account (' + patLogin + ') equals PR author (' + prAuthor + ') — skipping pulls.createReview (self-approve forbidden by GitHub). Falling back to comment.');
                 } else {
-                  await patGithub.rest.pulls.createReview({
-                    owner, repo, pull_number: prNumber,
-                    event: verdict,
-                    body: body
+                  const reviewResp = await fetch(`https://api.github.com/repos/${owner}/${repo}/pulls/${prNumber}/reviews`, {
+                    method: 'POST',
+                    headers: {
+                      'Authorization': `Bearer ${pat}`,
+                      'Accept': 'application/vnd.github+json',
+                      'X-GitHub-Api-Version': '2022-11-28',
+                      'User-Agent': '10E0-claude-review-workflow',
+                      'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ event: verdict, body: body })
                   });
-                  core.info('Posted ' + verdict + ' review via PAT');
+                  if (!reviewResp.ok) {
+                    throw new Error(`pulls.createReview HTTP ${reviewResp.status}: ${await reviewResp.text()}`);
+                  }
+                  core.info('Posted ' + verdict + ' review via PAT (login=' + patLogin + ')');
                   return;
                 }
               } catch (e) {
