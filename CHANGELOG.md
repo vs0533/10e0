@@ -31,6 +31,15 @@
 - 升级 `System.IdentityModel.Tokens.Jwt` 8.2.1 → 8.18.0（[#6](https://github.com/vs0533/10e0/pull/6)）
 - 升级 `System.Linq.Dynamic.Core` 1.6.0 → 1.7.2（[#6](https://github.com/vs0533/10e0/pull/6)）
 - 升级 `Aliyun.OSS.SDK.NetCore` 2.13.0 → 2.14.1（[#6](https://github.com/vs0533/10e0/pull/6)）
+- 升级 `AWSSDK.S3` 3.7.305.7 → 4.0.23.6（v4 命名空间仍为 `Amazon.S3.*`，现有调用零改动；同时升级 `AWSSDK.Core` 3.7.x → 4.0.7.4）（[#8](https://github.com/vs0533/10e0/issues/8)）
+
+### Added (Tests)
+
+- `AwsS3StorageTests` 13 个新单元测试，使用 Moq 注入 `IAmazonS3` 替身，覆盖 v4 API：构造期凭据/占位符校验、`StoreAsync` / `RetrieveAsync` / `DeleteAsync` / `ExistsAsync` / `GetAccessUrl` 正常 + 失败路径（[#8](https://github.com/vs0533/10e0/issues/8)）
+
+### Changed (Refactor)
+
+- `AwsS3Storage` 新增 `(AwsS3Options, IAmazonS3)` 构造重载，支持客户端注入（之前硬编码 `new AmazonS3Client`，外部无法替身）。原 `IOptions<AwsS3Options>` 入口保持不变（[#8](https://github.com/vs0533/10e0/issues/8)）
 
 ### Infrastructure
 
