@@ -128,7 +128,7 @@ await agent(
   `**硬约束**：\n` +
   `- 改动 < 5 个文件，超了就 throw 退出，让上层拆 issue\n` +
   `- 不写 handler、不写 service、不写 tests\n` +
-  `- 完成后 \`dotnet build 10e0.slnx 2>&1 | tail -10\`，必须通过（已有 RED 测试无所谓）\n` +
+  `- 完成后 \`DOTNET_CLI_UI_LANGUAGE=en-US dotnet build 10e0.slnx 2>&1 | tail -10\`，必须通过（已有 RED 测试无所谓）\n` +
   `- 回报：{ filesChanged, buildOk, newInterfaces } 结构化数据\n\n` +
   `如果发现本步需要改 handler/service（说明 issue 拆得不够细），回报 { needsDownstream: true, reason } 并退出。`,
   { phase: 'TDD-Schema', agentType: 'tdd-guide' }
@@ -140,7 +140,7 @@ await agent(
   `范围：让 RED 验收测试和已有所有测试全 GREEN——改 handler/service/evaluator。\n` +
   `**硬约束**：\n` +
   `- 改动 < 5 个文件\n` +
-  `- 跑 \`dotnet test 10e0.slnx --nologo 2>&1 | tail -30\` 必须显示 "Failed: 0"（既有测试不许破）\n` +
+  `- 跑 \`DOTNET_CLI_UI_LANGUAGE=en-US dotnet test 10e0.slnx --nologo 2>&1 | tail -30\` 必须显示 "Failed: 0"（既有测试不许破）\n` +
   `- 写必要的新单元测试覆盖边界（但 < 3 个测试文件）\n` +
   `- 回报：{ filesChanged, testsPass, newUnitTests, remainingRed } 结构化数据\n\n` +
   `如果本步跑超过 30 分钟还没 GREEN，先 commit 当前进度，回报 { stalled: true, partialFiles, remainingFails } 退出。`,
@@ -150,21 +150,27 @@ await agent(
 await agent(
   `TDD Step 3/3 (full verification) for #${item.id} "${item.title}"\n\n` +
   `**前置条件**：Step 2 已完成。最后兜底：\n` +
-  `1. \`dotnet build 10e0.slnx 2>&1 | tail -5\` 必须 0 警告 0 错误\n` +
-  `2. \`dotnet test 10e0.slnx --nologo 2>&1 | tail -10\` 必须全绿\n` +
-  `3. \`dotnet test 10e0.slnx --collect:"XPlat Code Coverage" 2>&1 | tail -5\` 报告覆盖率数字\n` +
+  `1. \`DOTNET_CLI_UI_LANGUAGE=en-US dotnet build 10e0.slnx 2>&1 | tail -5\` 必须 0 警告 0 错误\n` +
+  `2. \`DOTNET_CLI_UI_LANGUAGE=en-US dotnet test 10e0.slnx --nologo 2>&1 | tail -10\` 必须全绿\n` +
+  `3. \`DOTNET_CLI_UI_LANGUAGE=en-US dotnet test 10e0.slnx --collect:"XPlat Code Coverage" 2>&1 | tail -5\` 报告覆盖率数字\n` +
+  `4. \`DOTNET_CLI_UI_LANGUAGE=en-US dotnet format 10e0.slnx --verify-no-changes --severity warn 2>&1 | tail -5\` 必须 exit 0（PR #27 WHITESPACE 教训：commit 前必须 format 干净，否则 CI 卡门禁）\n` +
   `**只跑命令 + 报告数字**，不写新代码、不修任何东西。如果不绿就 throw 让上层 fail。\n` +
-  `回报：{ buildOk, testsOk, coverage } 结构化数据。`,
+  `回报：{ buildOk, testsOk, coverage, formatOk } 结构化数据。
+
+**所有 dotnet 命令必须加 \`DOTNET_CLI_UI_LANGUAGE=en-US\` 前缀**，否则在 zh_CN locale 下 CLI 输出中文"已通过!"，"Passed!" 匹配不到，下游 regex 误判失败。`,
   { phase: 'TDD-Verify', agentType: 'general-purpose' }
 )
 
 // 3. tests (红就回 TDD)
 const testResult = await agent(
-  `执行 dotnet build 10e0.slnx 2>&1 | tail -20，然后 dotnet test 10e0.slnx --nologo 2>&1 | tail -30。` +
-  `回报：是否 build 成功、所有测试是否通过、覆盖率数字。`,
+  `执行 \`DOTNET_CLI_UI_LANGUAGE=en-US dotnet build 10e0.slnx 2>&1 | tail -20\`，然后 \`DOTNET_CLI_UI_LANGUAGE=en-US dotnet test 10e0.slnx --nologo 2>&1 | tail -30\`，再 \`DOTNET_CLI_UI_LANGUAGE=en-US dotnet format 10e0.slnx --verify-no-changes --severity warn 2>&1 | tail -5\`。` +
+  `回报：是否 build 成功、所有测试是否通过、format 校验是否 exit 0、覆盖率数字。
+
+**DOTNET_CLI_UI_LANGUAGE=en-US 必须带**，否则在 zh_CN locale 下 CLI 输出中文"已通过!"，"Passed!" 匹配不到，下游 regex 误判失败。`,
   { phase: 'Tests', agentType: 'general-purpose' }
 )
-if (!/Passed!|Test execution time|tests? passed/i.test(testResult) || /Failed!/i.test(testResult)) {
+// 兜底正则：中英文都匹配（即使 agent 漏加 env var）
+if (!/Passed!|Test execution time|tests? passed|已通过/i.test(testResult) || /Failed!|失败:\s*[1-9]/i.test(testResult)) {
   throw new Error(`#${item.id} tests failed: ${testResult.slice(0, 500)}`)
 }
 
