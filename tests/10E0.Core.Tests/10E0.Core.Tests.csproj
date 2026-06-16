@@ -25,6 +25,11 @@
     <!-- SQLite ADO.NET provider — used by DynamicFilterProvider tests to exercise
          LoadRulesAsync with a real DbProviderFactory without standing up a full DB -->
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.0" />
+    <!-- EF Core SQLite provider — used by #11 TenantQueryFilterAcceptanceTests to verify
+         that runtime query filters actually enforce cross-tenant isolation
+         (the InMemory provider does NOT apply HasQueryFilter, so we need a real
+         relational provider for the runtime tests). -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.0" />
     <!-- Mocking + Assertions -->
     <PackageReference Include="Moq" Version="4.20.72" />
     <PackageReference Include="FluentAssertions" Version="8.0.1" />

@@ -719,8 +719,9 @@ internal sealed class DemoDbContext(
     IDataAccessPolicy accessPolicy,
     IHttpContextAccessor httpContextAccessor,
     IEnumerable<IEntityFilterContributor> filters,
-    IDynamicFilterProvider dynamicFilterProvider)
-    : TenE0SystemDbContext<AppUser, TenE0Role>(options, currentUser, accessPolicy, filters, dynamicFilterProvider)
+    IDynamicFilterProvider dynamicFilterProvider,
+    ITenantContext tenantContext)
+    : TenE0SystemDbContext<AppUser, TenE0Role>(options, currentUser, accessPolicy, filters, dynamicFilterProvider, tenantContext)
 {
     public string? CurrentOrgId { get; } =
         httpContextAccessor.HttpContext?.User?.FindFirstValue("org");

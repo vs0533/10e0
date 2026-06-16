@@ -70,7 +70,8 @@ public sealed class BaseDataContextTests
         ICurrentUserContext user,
         IDataAccessPolicy policy,
         IEnumerable<IEntityFilterContributor> contributors,
-        IDynamicFilterProvider provider) : BaseDataContext(options, user, policy, contributors, provider)
+        IDynamicFilterProvider provider,
+        ITenantContext tenantContext) : BaseDataContext(options, user, policy, contributors, provider, tenantContext)
     {
         public DbSet<SoftDeletableEntity> SoftEntities => Set<SoftDeletableEntity>();
         public DbSet<PlainEntity> PlainEntities => Set<PlainEntity>();
@@ -81,7 +82,8 @@ public sealed class BaseDataContextTests
         ICurrentUserContext user,
         IDataAccessPolicy policy,
         IEnumerable<IEntityFilterContributor> contributors,
-        IDynamicFilterProvider provider) : BaseDataContext(options, user, policy, contributors, provider)
+        IDynamicFilterProvider provider,
+        ITenantContext tenantContext) : BaseDataContext(options, user, policy, contributors, provider, tenantContext)
     {
         public DbSet<SoftDeletableWithFilter> FilteredEntities => Set<SoftDeletableWithFilter>();
     }
@@ -132,7 +134,8 @@ public sealed class BaseDataContextTests
             CreateUser().Object,
             CreatePolicy().Object,
             [],
-            new Mock<IDynamicFilterProvider>().Object);
+            new Mock<IDynamicFilterProvider>().Object,
+            new Mock<ITenantContext>().Object);
 
         ctx.CurrentUserCode.Should().Be("u1");
     }
@@ -145,7 +148,8 @@ public sealed class BaseDataContextTests
             CreateUser(userCode: null, authenticated: false).Object,
             CreatePolicy().Object,
             [],
-            new Mock<IDynamicFilterProvider>().Object);
+            new Mock<IDynamicFilterProvider>().Object,
+            new Mock<ITenantContext>().Object);
 
         ctx.CurrentUserCode.Should().BeNull();
     }
@@ -159,7 +163,8 @@ public sealed class BaseDataContextTests
             CreateUser(roleIds: roleIds).Object,
             CreatePolicy().Object,
             [],
-            new Mock<IDynamicFilterProvider>().Object);
+            new Mock<IDynamicFilterProvider>().Object,
+            new Mock<ITenantContext>().Object);
 
         ctx.CurrentRoleIds.Should().BeEquivalentTo(roleIds);
     }
@@ -172,7 +177,8 @@ public sealed class BaseDataContextTests
             CreateUser().Object,
             CreatePolicy().Object,
             [],
-            new Mock<IDynamicFilterProvider>().Object);
+            new Mock<IDynamicFilterProvider>().Object,
+            new Mock<ITenantContext>().Object);
 
         ctx.CurrentOrgIds.Should().BeEmpty();
         ctx.CurrentOrgIds = ["o1"];
@@ -187,7 +193,8 @@ public sealed class BaseDataContextTests
             CreateUser(authenticated: false).Object,
             CreatePolicy().Object,
             [],
-            new Mock<IDynamicFilterProvider>().Object);
+            new Mock<IDynamicFilterProvider>().Object,
+            new Mock<ITenantContext>().Object);
 
         ctx.IsAuthenticated.Should().BeFalse();
     }
@@ -200,7 +207,8 @@ public sealed class BaseDataContextTests
             CreateUser().Object,
             CreatePolicy(bypass: true).Object,
             [],
-            new Mock<IDynamicFilterProvider>().Object);
+            new Mock<IDynamicFilterProvider>().Object,
+            new Mock<ITenantContext>().Object);
 
         ctx.BypassFilters.Should().BeTrue();
     }
@@ -215,7 +223,8 @@ public sealed class BaseDataContextTests
             CreateUser().Object,
             CreatePolicy().Object,
             [],
-            new Mock<IDynamicFilterProvider>().Object);
+            new Mock<IDynamicFilterProvider>().Object,
+            new Mock<ITenantContext>().Object);
 
         var entityType = ctx.Model.FindEntityType(typeof(SoftDeletableEntity));
         entityType.Should().NotBeNull();
@@ -230,7 +239,8 @@ public sealed class BaseDataContextTests
             CreateUser().Object,
             CreatePolicy().Object,
             [],
-            new Mock<IDynamicFilterProvider>().Object);
+            new Mock<IDynamicFilterProvider>().Object,
+            new Mock<ITenantContext>().Object);
 
         var entityType = ctx.Model.FindEntityType(typeof(PlainEntity));
         entityType.Should().NotBeNull();
@@ -247,7 +257,8 @@ public sealed class BaseDataContextTests
             CreateUser().Object,
             CreatePolicy().Object,
             [new TestEntityFilterContributor()],
-            new Mock<IDynamicFilterProvider>().Object);
+            new Mock<IDynamicFilterProvider>().Object,
+            new Mock<ITenantContext>().Object);
 
         var entityType = ctx.Model.FindEntityType(typeof(SoftDeletableWithFilter));
         entityType.Should().NotBeNull();
@@ -263,7 +274,8 @@ public sealed class BaseDataContextTests
             CreateUser().Object,
             CreatePolicy().Object,
             [new NoOpFilterContributor()],
-            new Mock<IDynamicFilterProvider>().Object);
+            new Mock<IDynamicFilterProvider>().Object,
+            new Mock<ITenantContext>().Object);
 
         var entityType = ctx.Model.FindEntityType(typeof(PlainEntity));
         entityType.Should().NotBeNull();
@@ -279,7 +291,8 @@ public sealed class BaseDataContextTests
             CreateUser().Object,
             CreatePolicy().Object,
             [new TestEntityFilterContributor(), new AnotherContributor()],
-            new Mock<IDynamicFilterProvider>().Object);
+            new Mock<IDynamicFilterProvider>().Object,
+            new Mock<ITenantContext>().Object);
 
         var entityType = ctx.Model.FindEntityType(typeof(SoftDeletableWithFilter));
         entityType!.FindDeclaredQueryFilter("DataPrivilege:TestEntityFilterContributor").Should().NotBeNull();
@@ -297,7 +310,8 @@ public sealed class BaseDataContextTests
             CreateUser().Object,
             CreatePolicy().Object,
             [],
-            mockProvider.Object);
+            mockProvider.Object,
+            new Mock<ITenantContext>().Object);
 
         // Force model finalization
         _ = ctx.Model;
@@ -319,7 +333,8 @@ public sealed class BaseDataContextTests
                 CreateUser().Object,
                 CreatePolicy().Object,
                 [],
-                mockProvider.Object);
+                mockProvider.Object,
+                new Mock<ITenantContext>().Object);
             c.PlainEntities.Add(new PlainEntity { Name = "x" });
             c.SaveChanges();
         };

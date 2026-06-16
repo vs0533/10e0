@@ -9,6 +9,13 @@
 
 ### Added
 
+- **多租户（Multi-Tenancy）** (#11)：业务实体实现 `IMultiTenantEntity` 后自动启用租户隔离
+  - `IMultiTenantEntity` 接口（`TenantId` string 属性）
+  - `ITenantContext` 抽象 + `HttpTenantContext` HTTP 实现（从 JWT `tenant_id` claim 读取）
+  - `BaseDataContext.CurrentTenantId` + 自动注册 Named Query Filter `Tenant`，表达式 `BypassFilters || (e.TenantId == currentTenantId)`
+  - `JwtClaims.TenantId` 常量（`"tenant_id"`）+ `IJwtTokenService.Issue` 新增 `tenantId` 参数
+  - `TenE0User.TenantId` 字段 + `LoginCommandHandler` / `RefreshTokenCommandHandler` 透传写入 JWT
+  - 新增文档 `docs/20-multi-tenancy.md`
 - `IRoleVersionStore` 接口（`GetCurrentVersionsAsync`）+ `EfRoleVersionStore` 实现（EF Core + IMemoryCache L1，5s TTL），用于按角色版本号快速检测权限变更（[#27](https://github.com/vs0533/10e0/pull/27)）
 - `TenE0Role.Version` 字段（`long`，默认 1）：`PermissionGrantService.GrantAsync` / `RevokeAsync` / `SetGrantsAsync` 实际变更时自增（[#27](https://github.com/vs0533/10e0/pull/27)）
 - `JwtClaims.RoleVersion` 常量（`"role_versions"`）与 `ICurrentUserContext.RoleVersions` 属性：JWT 签发时把当前用户的 `{roleCode: version}` 快照写入 token；评估时按角色比对 token 快照 vs DB（[#27](https://github.com/vs0533/10e0/pull/27)）
