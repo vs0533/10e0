@@ -32,7 +32,7 @@ public sealed class AwsS3StorageTests
     private static AwsS3Storage Create(
         IAmazonS3 s3Client,
         AwsS3Options? options = null) =>
-        new(options ?? ValidOptions(), s3Client);
+        new(TimeProvider.System, options ?? ValidOptions(), s3Client);
 
     // ---------------------------------------------------------------------
     // Construction-time validation (security-critical: must reject placeholders)
@@ -41,7 +41,7 @@ public sealed class AwsS3StorageTests
     [Fact]
     public void Ctor_NullClient_Throws()
     {
-        var act = () => new AwsS3Storage(ValidOptions(), client: null!);
+        var act = () => new AwsS3Storage(TimeProvider.System, ValidOptions(), client: null!);
 
         act.Should().Throw<ArgumentNullException>().WithParameterName("client");
     }
@@ -53,7 +53,7 @@ public sealed class AwsS3StorageTests
         options.AccessKey = string.Empty;
         var s3 = new Mock<IAmazonS3>().Object;
 
-        var act = () => new AwsS3Storage(options, s3);
+        var act = () => new AwsS3Storage(TimeProvider.System, options, s3);
 
         act.Should().Throw<OptionsValidationException>()
             .Which.Failures.Should().ContainMatch("*AccessKey*is required*");
@@ -66,7 +66,7 @@ public sealed class AwsS3StorageTests
         options.BucketName = "your-bucket-name";
         var s3 = new Mock<IAmazonS3>().Object;
 
-        var act = () => new AwsS3Storage(options, s3);
+        var act = () => new AwsS3Storage(TimeProvider.System, options, s3);
 
         act.Should().Throw<OptionsValidationException>()
             .Which.Failures.Should().ContainMatch("*BucketName*contains placeholder*your-*");
@@ -77,7 +77,7 @@ public sealed class AwsS3StorageTests
     {
         var s3 = new Mock<IAmazonS3>().Object;
 
-        var act = () => new AwsS3Storage(ValidOptions(), s3);
+        var act = () => new AwsS3Storage(TimeProvider.System, ValidOptions(), s3);
 
         act.Should().NotThrow();
     }

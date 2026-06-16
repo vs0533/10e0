@@ -7,10 +7,13 @@ namespace TenE0.Core.Files.Storage;
 /// </summary>
 public class LocalFileStorage : IFileStorage
 {
+    private readonly TimeProvider _timeProvider;
     private readonly LocalStorageOptions _options;
 
-    public LocalFileStorage(IOptions<LocalStorageOptions> options)
+    public LocalFileStorage(TimeProvider timeProvider, IOptions<LocalStorageOptions> options)
     {
+        ArgumentNullException.ThrowIfNull(timeProvider);
+        _timeProvider = timeProvider;
         _options = options.Value;
         Directory.CreateDirectory(_options.BasePath);
     }
@@ -72,7 +75,7 @@ public class LocalFileStorage : IFileStorage
 
     private string GenerateStoragePath(string fileName)
     {
-        var date = DateTime.Now;
+        var date = _timeProvider.GetUtcNow().UtcDateTime;
         var ext = Path.GetExtension(fileName);
         var uniqueName = $"{Guid.NewGuid()}{ext}";
         return Path.Combine(date.ToString("yyyy"), date.ToString("MM"), uniqueName);
