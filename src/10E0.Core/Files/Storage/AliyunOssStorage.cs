@@ -14,12 +14,16 @@ namespace TenE0.Core.Files.Storage;
 /// </summary>
 public class AliyunOssStorage : IFileStorage
 {
+    private readonly TimeProvider _timeProvider;
     private readonly OssClient _client;
     private readonly AliyunOssOptions _options;
 
-    public AliyunOssStorage(IOptions<AliyunOssOptions> options)
+    public AliyunOssStorage(TimeProvider timeProvider, AliyunOssOptions options)
     {
-        _options = options.Value;
+        ArgumentNullException.ThrowIfNull(timeProvider);
+        ArgumentNullException.ThrowIfNull(options);
+        _timeProvider = timeProvider;
+        _options = options;
         // 防御性校验：尽早失败，避免 SDK 在后续调用时抛出难以诊断的认证错误。
         AliyunOssOptions.Validate(_options);
         _client = new OssClient(_options.Endpoint, _options.AccessKeyId, _options.AccessKeySecret);
@@ -27,9 +31,9 @@ public class AliyunOssStorage : IFileStorage
 
     public async Task<StorageResult> StoreAsync(Stream stream, string fileName, string contentType, CancellationToken ct = default)
     {
+        var objectKey = GenerateObjectKey(fileName);
         try
         {
-            var objectKey = GenerateObjectKey(fileName);
             var metadata = new ObjectMetadata { ContentType = contentType };
 
             await Task.Run(() => _client.PutObject(_options.BucketName, objectKey, stream, metadata), ct);
@@ -39,7 +43,8 @@ public class AliyunOssStorage : IFileStorage
         }
         catch (Exception ex)
         {
-            return new StorageResult(string.Empty, string.Empty, false, ex.Message);
+            // 把已生成的 objectKey 一并返回，方便上层排查（重试/补偿场景可直接定位对象）。
+            return new StorageResult(objectKey, string.Empty, false, ex.Message);
         }
     }
 
@@ -88,7 +93,7 @@ public class AliyunOssStorage : IFileStorage
 
     private string GenerateObjectKey(string fileName)
     {
-        var date = DateTime.Now;
+        var date = _timeProvider.GetUtcNow().UtcDateTime;
         var ext = Path.GetExtension(fileName);
         var uniqueName = $"{Guid.NewGuid()}{ext}";
         return $"{date:yyyy/MM}/{uniqueName}";
