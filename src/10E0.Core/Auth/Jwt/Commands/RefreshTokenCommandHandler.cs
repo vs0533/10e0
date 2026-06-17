@@ -100,7 +100,8 @@ public sealed class RefreshTokenCommandHandler<TUser, TContext>(
                 .Where(r => roles.Contains(r.Code))
                 .ToDictionaryAsync(r => r.Code, r => r.Version, StringComparer.Ordinal, ct);
 
-        var tokens = tokenService.Issue(user.UserCode, user.DisplayName, user.UserType, roles, roleVersions);
+        // #11: refresh 必须用 DB 最新 TenantId（admin 把人迁走/用户在多租户间切换都能生效）
+        var tokens = tokenService.Issue(user.UserCode, user.DisplayName, user.UserType, roles, roleVersions, user.TenantId);
 
         // 滑动过期：新 refresh token 的过期时间刷新为 now + RefreshTokenLifetime
         // 关闭滑动时保留原 token 的剩余有效期；按 JWT 'exp' 语义 record.ExpiresAt == now 视为已到期，

@@ -26,4 +26,12 @@ public class TenE0User : AuditedEntity
     public string? Phone { get; set; }
     public bool IsActive { get; set; } = true;
     public UserType UserType { get; set; } = UserType.Person;
+
+    /// <summary>
+    /// 租户 ID（#11 multi-tenancy）。登录时由 LoginCommandHandler 读取并写入 JWT
+    /// "tenant_id" claim；后续请求由 HttpTenantContext 解析喂给 EF Tenant Filter。
+    /// 业务方可继承扩展把 TenantId 设为 required（强制每个用户都归属租户）；
+    /// 系统账号 / 多租户关闭场景可保持 nullable。
+    /// </summary>
+    public string? TenantId { get; set; }
 }

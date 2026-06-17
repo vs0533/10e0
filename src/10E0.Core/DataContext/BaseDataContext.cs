@@ -12,20 +12,23 @@ namespace TenE0.Core.DataContext;
 /// 职责：
 /// - 自动注册 Named Query Filter "SoftDelete"（实现 ISoftDeleteEntity 的实体）
 /// - 自动注册 Named Query Filter "DataPrivilege:*"（IEntityFilterContributor 实现）
-/// - 暴露 CurrentUserCode/CurrentRoleIds 等只读属性，供过滤表达式动态引用
+/// - 自动注册 Named Query Filter "Tenant"（实现 IMultiTenantEntity 的实体，#11 multi-tenancy）
+/// - 暴露 CurrentUserCode/CurrentRoleIds/CurrentTenantId 等只读属性，供过滤表达式动态引用
 ///
 /// 与旧 BaseDataContext 的差异：
 /// - 不再含 OnBeforeSaving（已移到 AuditInterceptor）
 /// - 不再含 DataInit（已移到 DatabaseInitializerService）
 /// - 不持有 IMediator/Logger
-/// - 通过构造函数注入 ICurrentUserContext + IEntityFilterContributor（EF Core 10 DI 支持）
+/// - 通过构造函数注入 ICurrentUserContext + ITenantContext + IEntityFilterContributor
+///   （EF Core 10 DI 支持）
 /// </summary>
 public abstract class BaseDataContext(
     DbContextOptions options,
     ICurrentUserContext currentUser,
     IDataAccessPolicy accessPolicy,
     IEnumerable<IEntityFilterContributor> filterContributors,
-    IDynamicFilterProvider dynamicFilterProvider) : DbContext(options)
+    IDynamicFilterProvider dynamicFilterProvider,
+    ITenantContext tenantContext) : DbContext(options)
 {
     // ------------------------------------------------------------
     // 暴露给过滤表达式引用的运行时属性 — EF 会在每次查询时读取并参数化
@@ -45,9 +48,16 @@ public abstract class BaseDataContext(
 
     /// <summary>
     /// 当前请求是否应绕过所有数据行过滤器（如超管）。
-    /// IEntityFilterContributor 的表达式可在最前面 OR 上 dc.BypassFilters 来短路过滤。
+    /// IEntityFilterContributor / Tenant filter 的表达式在最前面 OR 上 dc.BypassFilters 来短路过滤。
     /// </summary>
     public bool BypassFilters { get; } = accessPolicy.BypassFilters;
+
+    /// <summary>
+    /// 当前租户 ID（#11 multi-tenancy）。
+    /// 由 <see cref="ITenantContext"/> 提供（HTTP 场景下从 JWT "tenant_id" claim 读取）。
+    /// 未登录 / 无 claim → null → EF Tenant Filter 走"安全默认"分支（隐藏所有 IMultiTenantEntity 行）。
+    /// </summary>
+    public string? CurrentTenantId => tenantContext.TenantId;
 
     // ------------------------------------------------------------
     // 模型构建
@@ -70,6 +80,32 @@ public abstract class BaseDataContext(
                 var property = Expression.Property(parameter, nameof(ISoftDeleteEntity.IsSoftDelete));
                 var condition = Expression.Equal(property, Expression.Constant(false));
                 entityType.SetQueryFilter("SoftDelete", Expression.Lambda(condition, parameter));
+            }
+
+            // ---- 多租户过滤器（#11）----
+            // 表达式: BypassFilters OR e.TenantId == CurrentTenantId
+            // - BypassFilters 短路（超管可见全部）
+            // - CurrentTenantId 为 null 时短路仍生效（条件 == null == false），安全默认隐藏所有行
+            if (typeof(IMultiTenantEntity).IsAssignableFrom(entityType.ClrType))
+            {
+                var parameter = Expression.Parameter(entityType.ClrType, "e");
+                var tenantProperty = Expression.Property(parameter, nameof(IMultiTenantEntity.TenantId));
+
+                // dc.BypassFilters
+                var bypassMember = Expression.Property(
+                    Expression.Constant(this),
+                    nameof(BypassFilters));
+
+                // e.TenantId == dc.CurrentTenantId
+                var tenantEquals = Expression.Equal(
+                    tenantProperty,
+                    Expression.Property(
+                        Expression.Constant(this),
+                        nameof(CurrentTenantId)));
+
+                // BypassFilters || (e.TenantId == CurrentTenantId)
+                var combined = Expression.OrElse(bypassMember, tenantEquals);
+                entityType.SetQueryFilter("Tenant", Expression.Lambda(combined, parameter));
             }
 
             // ---- 数据权限过滤器（每个贡献者一个命名过滤器）----

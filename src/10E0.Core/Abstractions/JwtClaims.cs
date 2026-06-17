@@ -16,6 +16,14 @@ public static class JwtClaims
     /// 的 <c>TenE0Role.Version</c>。例：<c>{"editor":7,"viewer":12}</c>。
     /// </summary>
     public const string RoleVersion = "role_versions";
+
+    /// <summary>
+    /// 租户 ID claim（#11 multi-tenancy）。
+    /// 业务用户在登录时被赋一个 TenantId，签发 JWT 时写入此 claim。
+    /// 后续请求由 <see cref="Auth.HttpTenantContext"/> 读取并交给 EF Tenant Named Filter。
+    /// 缺失时（系统账号 / 多租户关闭）— Filter 走"safe-by-default"分支隐藏所有 <see cref="IMultiTenantEntity"/> 行。
+    /// </summary>
+    public const string TenantId = "tenant_id";
 }
 
 /// <summary>

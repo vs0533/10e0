@@ -16,12 +16,19 @@ public interface IJwtTokenService
     /// <see cref="TenE0.Core.Permissions.IPermissionEvaluator"/> 用来对比 DB 检测权限变更。
     /// 传空字典表示该用户没有角色（或 legacy 调用方），签发的 token 不带该 claim。
     /// </param>
+    /// <param name="tenantId">
+    /// 租户 ID（#11 multi-tenancy）。会写入 <see cref="TenE0.Core.Abstractions.JwtClaims.TenantId"/> claim，
+    /// 由 <see cref="Auth.HttpTenantContext"/> 读回后喂给 EF Tenant Named Filter。
+    /// 传 null 表示该用户不归属任何租户（系统账号 / 多租户关闭 / legacy 用户）—— token 不带该 claim，
+    /// 后续 EF Filter 走"safe-by-default"分支。
+    /// </param>
     IssuedTokens Issue(
         string userCode,
         string displayName,
         TenE0.Core.Abstractions.UserType userType,
         IReadOnlyList<string> roles,
-        IReadOnlyDictionary<string, long> roleVersions);
+        IReadOnlyDictionary<string, long> roleVersions,
+        string? tenantId = null);
 
     /// <summary>
     /// 生成一个新的 refresh token 字符串和其 SHA-256 哈希。

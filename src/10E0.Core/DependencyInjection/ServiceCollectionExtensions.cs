@@ -37,6 +37,10 @@ public static class ServiceCollectionExtensions
         // 当前用户上下文（无状态，从 ClaimsPrincipal 读）
         services.TryAddScoped<ICurrentUserContext, HttpCurrentUserContext>();
 
+        // #11 multi-tenancy: 租户上下文（无状态，从 JWT tenant_id claim 读）。
+        // 与 ICurrentUserContext 共享同一 IHttpContextAccessor 实例。
+        services.TryAddScoped<ITenantContext, HttpTenantContext>();
+
         // 错误袋（Scoped，每请求独立）
         services.TryAddScoped<IErrs, Errs>();
 

@@ -43,7 +43,8 @@ public sealed class FilterExpressionBuilderTests
             IDataAccessPolicy accessPolicy)
             : base(options, currentUser, accessPolicy,
                    Enumerable.Empty<IEntityFilterContributor>(),
-                   Mock.Of<IDynamicFilterProvider>())
+                   Mock.Of<IDynamicFilterProvider>(),
+                   Mock.Of<ITenantContext>())
         {
         }
     }

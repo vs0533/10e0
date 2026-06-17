@@ -47,3 +47,27 @@ public interface ITreeEntity : IBaseEntity
 {
     string? ParentId { get; set; }
 }
+
+/// <summary>
+/// 多租户实体接口（#11 multi-tenancy）。
+///
+/// 业务方让实体实现此接口后：
+/// - <see cref="TenE0.Core.DataContext.BaseDataContext"/> 在 OnModelCreating 时
+///   自动为该实体注册名为 <c>Tenant</c> 的 Named Query Filter：
+///   <c>e.TenantId == currentTenantId OR BypassFilters == true</c>
+/// - 跨租户查询在应用层不需要写条件；EF 自动追加
+/// - 超管（<c>IDataAccessPolicy.BypassFilters == true</c>）可见全租户数据
+/// - .IgnoreQueryFilters("Tenant") 旁路租户过滤
+///
+/// 字段约束：
+/// - <see cref="TenantId"/> 必填（写入侧由业务方在创建时赋值；Filter 侧用 Bypass 短路）
+/// - 租户上下文由 <see cref="ITenantContext"/> 解析，默认从 JWT "tenant_id" claim 读取
+/// </summary>
+public interface IMultiTenantEntity : IBaseEntity
+{
+    /// <summary>
+    /// 租户 ID。Guid 字符串 / 业务编码皆可。
+    /// 业务方在 Insert 时必须赋值；Query 侧由 EF Tenant Named Filter 自动比对。
+    /// </summary>
+    string TenantId { get; set; }
+}

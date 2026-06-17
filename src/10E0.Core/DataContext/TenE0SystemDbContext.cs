@@ -43,8 +43,9 @@ public abstract class TenE0SystemDbContext<TUser, TRole>(
     ICurrentUserContext currentUser,
     IDataAccessPolicy accessPolicy,
     IEnumerable<IEntityFilterContributor> filterContributors,
-    IDynamicFilterProvider dynamicFilterProvider)
-    : BaseDataContext(options, currentUser, accessPolicy, filterContributors, dynamicFilterProvider)
+    IDynamicFilterProvider dynamicFilterProvider,
+    ITenantContext tenantContext)
+    : BaseDataContext(options, currentUser, accessPolicy, filterContributors, dynamicFilterProvider, tenantContext)
     where TUser : TenE0User
     where TRole : TenE0Role
 {
@@ -88,5 +89,6 @@ public abstract class TenE0SystemDbContext(
     ICurrentUserContext currentUser,
     IDataAccessPolicy accessPolicy,
     IEnumerable<IEntityFilterContributor> filterContributors,
-    IDynamicFilterProvider dynamicFilterProvider)
-    : TenE0SystemDbContext<TenE0User, TenE0Role>(options, currentUser, accessPolicy, filterContributors, dynamicFilterProvider);
+    IDynamicFilterProvider dynamicFilterProvider,
+    ITenantContext tenantContext)
+    : TenE0SystemDbContext<TenE0User, TenE0Role>(options, currentUser, accessPolicy, filterContributors, dynamicFilterProvider, tenantContext);
