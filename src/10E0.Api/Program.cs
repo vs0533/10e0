@@ -9,8 +9,10 @@ using Microsoft.Extensions.Options;
 using Scalar.AspNetCore;
 using TenE0.Core.Abstractions;
 using TenE0.Core.Auth;
+using TenE0.Core.Common;
 using TenE0.Core.DataContext;
 using TenE0.Core.DependencyInjection;
+using TenE0.Core.Errors;
 using TenE0.Core.DynamicFilters;
 using TenE0.Core.DynamicFilters.Storage;
 using TenE0.Core.Entities;
@@ -80,6 +82,9 @@ builder.Services.AddTenE0Files<DemoDbContext>(options =>
     options.BaseUrl = "/uploads";
 });
 
+// #39: 集中异常映射 (PermissionDenied → 403, Validation → 400, DbUpdate → 409, 其余 → 500)
+builder.Services.AddTenE0ExceptionHandler();
+
 // Seeder：初始权限授予 + 管理员账号 + 组织树
 builder.Services.AddScoped<IDataSeeder, PermissionSeeder>();
 builder.Services.AddScoped<IDataSeeder, AuthSeeder>();
@@ -101,6 +106,11 @@ if (app.Environment.IsDevelopment())
 
 // 静态文件服务（用于本地存储）
 app.UseStaticFiles();
+
+// #39: 集中异常处理 — 必须放在 endpoint mapping 之前，最早接住未处理异常
+// 传入空 configure 委托是为了满足 UseExceptionHandler 的"必须设置 ExceptionHandler 或 ExceptionHandlingPath"
+// 约束；实际的异常映射由已注册的 IExceptionHandler (TenE0ExceptionHandler) 接管。
+app.UseExceptionHandler(_ => { });
 
 app.UseAuthentication();
 app.UseAuthorization();
@@ -145,57 +155,35 @@ app.MapGet("/whoami", (ICurrentUserContext user) => new
 
 app.MapPost("/demo", async (CreateDemoDto dto, ICommandDispatcher dispatcher, IErrs errs, CancellationToken ct) =>
 {
-    try
-    {
-        var id = await dispatcher.SendAsync(new CreateDemoCommand(dto.Name, dto.OrgId, dto.Salary), ct);
-        return errs.IsValid
-            ? Results.Ok(new { id })
-            : Results.BadRequest(new { error = errs.GetFirstError(), keys = errs.Keys });
-    }
-    catch (PermissionDeniedException ex) { return Results.Json(new { error = ex.Message }, statusCode: 403); }
+    var id = await dispatcher.SendAsync(new CreateDemoCommand(dto.Name, dto.OrgId, dto.Salary), ct);
+    return errs.IsValid
+        ? ApiResultResult.Api(ApiResult<object>.Ok(new { id }))
+        : Results.BadRequest(new { error = errs.GetFirstError(), keys = errs.Keys });
 });
 
 app.MapPut("/demo/{id}", async (string id, UpdateDemoDto dto, ICommandDispatcher dispatcher, IErrs errs, CancellationToken ct) =>
 {
-    try
-    {
-        var ok = await dispatcher.SendAsync(new UpdateDemoCommand(id, dto.Name, dto.Salary), ct);
-        return ok && errs.IsValid
-            ? Results.Ok(new { ok = true })
-            : Results.BadRequest(new { error = errs.GetFirstError(), keys = errs.Keys });
-    }
-    catch (PermissionDeniedException ex) { return Results.Json(new { error = ex.Message }, statusCode: 403); }
+    var ok = await dispatcher.SendAsync(new UpdateDemoCommand(id, dto.Name, dto.Salary), ct);
+    return ok && errs.IsValid
+        ? Results.Ok(new { ok = true })
+        : Results.BadRequest(new { error = errs.GetFirstError(), keys = errs.Keys });
 });
 
 app.MapDelete("/demo/{id}", async (string id, ICommandDispatcher dispatcher, CancellationToken ct) =>
 {
-    try
-    {
-        var ok = await dispatcher.SendAsync(new DeleteDemoCommand(id), ct);
-        return Results.Ok(new { ok });
-    }
-    catch (PermissionDeniedException ex) { return Results.Json(new { error = ex.Message }, statusCode: 403); }
+    var ok = await dispatcher.SendAsync(new DeleteDemoCommand(id), ct);
+    return Results.Ok(new { ok });
 });
 
 app.MapGet("/demo", async (ICommandDispatcher dispatcher, CancellationToken ct) =>
-{
-    try
-    {
-        return Results.Ok(await dispatcher.SendAsync(new ListDemosQuery(), ct));
-    }
-    catch (PermissionDeniedException ex) { return Results.Json(new { error = ex.Message }, statusCode: 403); }
-});
+    Results.Ok(await dispatcher.SendAsync(new ListDemosQuery(), ct)));
 
 app.MapPost("/demo/{id}/publish", async (string id, ICommandDispatcher dispatcher, IErrs errs, CancellationToken ct) =>
 {
-    try
-    {
-        var ok = await dispatcher.SendAsync(new PublishDemoCommand(id), ct);
-        return ok && errs.IsValid
-            ? Results.Ok(new { ok = true })
-            : Results.BadRequest(new { error = errs.GetFirstError() });
-    }
-    catch (PermissionDeniedException ex) { return Results.Json(new { error = ex.Message }, statusCode: 403); }
+    var ok = await dispatcher.SendAsync(new PublishDemoCommand(id), ct);
+    return ok && errs.IsValid
+        ? Results.Ok(new { ok = true })
+        : Results.BadRequest(new { error = errs.GetFirstError() });
 });
 
 // ----------------- 动态查询演示 -----------------
