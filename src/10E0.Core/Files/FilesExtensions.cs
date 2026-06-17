@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Options;
 using TenE0.Core.Files;
 using TenE0.Core.Files.Storage;
 
@@ -26,6 +27,12 @@ public static class FilesExtensions
         var options = new LocalStorageOptions();
         configure?.Invoke(options);
 
+        // Storage backends now require TimeProvider (issue #38) — register a default
+        // so DI works even in bare ServiceCollection scenarios (e.g. unit tests).
+        // The host (WebApplication.CreateBuilder) also registers TimeProvider.System,
+        // but TryAdd keeps both paths working without conflict.
+        services.TryAddSingleton(TimeProvider.System);
+
         services.Configure(configure ?? (opts => { }));
         services.TryAddScoped<IFileStorage, LocalFileStorage>();
         services.TryAddScoped<IImageProcessor, ImageProcessor>();
@@ -41,8 +48,11 @@ public static class FilesExtensions
     public static IServiceCollection AddTenE0FilesWithAliyunOss<TContext>(this IServiceCollection services, Action<AliyunOssOptions> configure)
         where TContext : DbContext
     {
+        services.TryAddSingleton(TimeProvider.System);
         services.Configure(configure);
-        services.TryAddScoped<IFileStorage, AliyunOssStorage>();
+        services.AddScoped<IFileStorage>(sp => new AliyunOssStorage(
+            sp.GetRequiredService<TimeProvider>(),
+            sp.GetRequiredService<IOptions<AliyunOssOptions>>().Value));
         services.TryAddScoped<IImageProcessor, ImageProcessor>();
         services.TryAddScoped<IFileService, FileService<TContext>>();
 
@@ -56,6 +66,7 @@ public static class FilesExtensions
     public static IServiceCollection AddTenE0FilesWithAwsS3<TContext>(this IServiceCollection services, Action<AwsS3Options> configure)
         where TContext : DbContext
     {
+        services.TryAddSingleton(TimeProvider.System);
         services.Configure(configure);
         services.TryAddScoped<IFileStorage, AwsS3Storage>();
         services.TryAddScoped<IImageProcessor, ImageProcessor>();

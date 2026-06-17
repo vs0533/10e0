@@ -15,7 +15,7 @@ public sealed class LocalFileStorageTests : IDisposable
         _tempDir = Path.Combine(Path.GetTempPath(), $"10e0-test-{Guid.NewGuid()}");
         Directory.CreateDirectory(_tempDir);
         var options = Options.Create(new LocalStorageOptions { BasePath = _tempDir, BaseUrl = "http://localhost/uploads" });
-        _sut = new LocalFileStorage(options);
+        _sut = new LocalFileStorage(TimeProvider.System, options);
     }
 
     public void Dispose()

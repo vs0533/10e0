@@ -33,8 +33,9 @@ public sealed class DynamicFilterProviderTests
         ICurrentUserContext currentUser,
         IDataAccessPolicy accessPolicy,
         IEnumerable<TenE0.Core.Permissions.DataFilter.IEntityFilterContributor> filterContributors,
-        IDynamicFilterProvider dynamicFilterProvider)
-        : BaseDataContext(options, currentUser, accessPolicy, filterContributors, dynamicFilterProvider)
+        IDynamicFilterProvider dynamicFilterProvider,
+        ITenantContext tenantContext)
+        : BaseDataContext(options, currentUser, accessPolicy, filterContributors, dynamicFilterProvider, tenantContext)
     {
         public DbSet<OrderEntity> Orders => Set<OrderEntity>();
         public DbSet<ProductEntity> Products => Set<ProductEntity>();
@@ -56,7 +57,7 @@ public sealed class DynamicFilterProviderTests
         var user = new Mock<ICurrentUserContext>();
         user.SetupGet(c => c.RoleIds).Returns(Array.Empty<string>());
         var policy = new Mock<IDataAccessPolicy>();
-        return new TestDbContext(options, user.Object, policy.Object, [], provider);
+        return new TestDbContext(options, user.Object, policy.Object, [], provider, Mock.Of<ITenantContext>());
     }
 
     // ── CreateDbConnection / ResolveFactory ────────────────────────────

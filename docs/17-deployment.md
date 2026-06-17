@@ -86,18 +86,26 @@ dotnet pack src/10E0.Core/10E0.Core.csproj \
 
 ### 2. `claude-review.yml` — AI 代码审查
 
-- **触发条件**：PR 的 `opened` 或 `synchronize` 事件，目标分支为 `dev` 或 `main`
+- **触发条件**：PR 的 `opened` 或 `synchronize` 事件，目标分支为 `dev` 或 `main`；另保留 `workflow_dispatch` 作应急手动触发
+- **触发器注意**：~~`push: branches: [feature/**]`~~ 触发器已移除（PR #33）—— feature 分支 push 没 PR context，step 8 走早退；重复跑无产出浪费 CI
 - **执行步骤**：
   1. 检出完整 git 历史（`fetch-depth: 0`）
   2. 安装 Node.js 22 和 `@anthropic-ai/claude-code` CLI
-  3. 生成 PR 的 diff 文件（`git diff origin/$BASE...HEAD`）
+  3. 生成 PR 的 diff 文件：
+     - **PR 触发**：通过 `curl` + `Authorization: Bearer ${{ github.token }}` 调 GitHub API `pulls/{n}` 拿 diff（PR #33，不依赖 gh CLI 认证）
+     - **workflow_dispatch fallback**：`git diff origin/$BASE...HEAD` 兜底
   4. 将 diff 传入 Claude Code CLI，以 **headless 模式**（`claude -p`）审查
-  5. 审查结果作为 PR Comment 发布，分三个等级：
+  5. 审查结果作为 PR Review 或 Comment 发布，分三个等级：
      - 🔴 **Critical** — 必须修复（Bug、安全、模式违规）
      - 🟡 **Suggestion** — 建议改进
      - 🟢 **Nit** — 可选微调
-- **AI 后端**：阿里云百炼 API（Qwen 3.7-max），非 Anthropic 官方
-- **超时**：30 分钟
+- **AI 后端**：阿里云百炼 API（**MiniMax-M3** headless mode），非 Anthropic 官方
+- **超时**：15 分钟 review wait（`process-item.js` 的 `reviewTimeoutMs`）
+- **review 提交路径**（PR #33 重构）：
+  1. 优先用 **PAT**（`secrets.REVIEW_BOT_TOKEN`）调 `pulls.createReview`（`fetch` + PAT header 直连 API，不走 `github` client）—— 算 branch protection approval
+  2. **Self-approve 检测**：若 PAT 账号 == PR 作者，GitHub 会拒绝 "can not approve your own pull request"，自动降级为 comment
+  3. **降级 fallback**：用 `GITHUB_TOKEN` client (`github.rest.issues.createComment`) 发 comment —— **不计入** branch protection 批准
+- **CodeQL 权限要求**（PR #33 新增）：workflow-level `permissions:` 必须 grant `security-events: write`，否则 GitHub auto-inject 的 "Perform CodeQL Analysis" step 会因缺权限无法 upload SARIF 到 Security tab（症状：Code Review job 偶发失败，rerun 偶尔能过，根因是 token 临时刷新掩盖了权限缺失）
 - **容错**：`continue-on-error: true`，API 故障不阻塞 PR 合并
 
 ### 3. `release.yml` — 自动发版

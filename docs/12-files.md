@@ -386,7 +386,7 @@ services.AddTenE0FilesWithAwsS3<DemoDbContext>(options =>
 | SixLabors.ImageSharp | 3.1.12 | 图片编解码与处理 |
 | SixLabors.ImageSharp.Drawing | 2.1.6 | 水印文字绘制 |
 | Aliyun.OSS.SDK.NetCore | 2.13.0 | 阿里云 OSS SDK |
-| AWSSDK.S3 | 3.7.305.7 | AWS S3 SDK |
+| AWSSDK.S3 | 4.0.23.6 | AWS S3 SDK（v4，命名空间保持 `Amazon.S3.*`，现有调用零改动） |
 
 ---
 

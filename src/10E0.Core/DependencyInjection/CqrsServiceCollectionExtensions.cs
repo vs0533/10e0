@@ -27,7 +27,11 @@ public static class CqrsServiceCollectionExtensions
         services.AddScoped<ICommandDispatcher, CommandDispatcher>();
 
         // 内置行为 — 开放泛型注册，所有命令类型自动套用
+        // #41: Order 在 IPipelineBehavior 默认接口方法 + concrete override 上声明
         services.AddScoped(typeof(IPipelineBehavior<,>), typeof(LoggingBehavior<,>));
+
+        // BehaviorOptions — #41: 配置 SkipBehaviorInTestEnv / DisabledInTest
+        services.AddOptions<BehaviorOptions>();
 
         foreach (var assembly in handlerAssemblies.Distinct())
         {
@@ -50,6 +54,24 @@ public static class CqrsServiceCollectionExtensions
             typeof(TContext)));
 
         return services;
+    }
+
+    /// <summary>
+    /// #41 增量：注册一个 <see cref="IPipelineBehavior{TCommand, TResult}"/> 开放泛型实现。
+    ///
+    /// 用法：
+    /// <code>
+    /// services.AddBehavior&lt;MyCustomBehavior&lt;,&gt;&gt;();
+    /// services.AddBehavior&lt;AnotherBehavior&lt;,,&gt;&gt;();
+    /// </code>
+    ///
+    /// Order 由 <see cref="IPipelineBehavior{TCommand, TResult}.Order"/> 属性决定。
+    /// 建议的 Order 值参考 <see cref="BuiltInBehaviorOrders"/>（框架保留 0~1000 给用户）。
+    /// </summary>
+    public static IServiceCollection AddBehavior<TBehavior>(this IServiceCollection services)
+        where TBehavior : class
+    {
+        return services.AddScoped(typeof(IPipelineBehavior<,>), typeof(TBehavior));
     }
 
     private static void RegisterHandlersFromAssembly(IServiceCollection services, Assembly assembly)

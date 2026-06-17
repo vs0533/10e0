@@ -39,6 +39,12 @@ ANTHROPIC_MODEL    = qwen3.7-max
 - **默认 Setup**: 仓库通过 Settings → Code security 启用 **default setup**，GitHub 自动对 `csharp` 和 `actions` 进行 CodeQL 分析
 - **高级 Workflow 已移除**: PR #6 曾尝试添加 advanced workflow，因与 default setup 冲突而撤销（"CodeQL analyses from advanced configurations cannot be processed when the default setup is enabled"）
 - 无需手动配置 workflow 文件，GitHub 自动管理和运行扫描
+- **项目 workflow 必须 grant `security-events: write`**（PR #33 教训）：GitHub 会 auto-inject "Perform CodeQL Analysis" step 到**所有**项目拥有的 workflow（不只 default setup），该 step 需要此权限才能 upload SARIF 到 Security tab。缺它会报：
+  ```
+  ##[error]Please check that your token is valid and has the required permissions:
+          contents: read, security-events: write
+  ```
+  症状表现为 Code Review job 偶发失败、rerun 偶尔能过——根因是 GITHUB_TOKEN 临时刷新掩盖了权限缺失。`claude-review.yml` 已加该权限，后续新增 workflow 必须在 `permissions:` 段同步加上
 
 ## 修改注意事项
 

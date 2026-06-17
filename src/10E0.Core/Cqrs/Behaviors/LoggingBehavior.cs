@@ -16,6 +16,10 @@ public sealed class LoggingBehavior<TCommand, TResult>(
     ILogger<LoggingBehavior<TCommand, TResult>> logger) : IPipelineBehavior<TCommand, TResult>
     where TCommand : ICommand<TResult>
 {
+    /// <inheritdoc />
+    /// <remarks>最外层 behavior — 捕获所有内部行为抛出的异常并记录耗时。</remarks>
+    public int Order => BuiltInBehaviorOrders.Logging;
+
     public async Task<TResult> HandleAsync(
         TCommand command,
         CommandHandlerDelegate<TResult> next,

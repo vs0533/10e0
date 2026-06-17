@@ -19,6 +19,10 @@ public static class AuthModelBuilderExtensions
             b.Property(u => u.PasswordHash).HasMaxLength(512).IsRequired();
             b.Property(u => u.Email).HasMaxLength(256);
             b.Property(u => u.Phone).HasMaxLength(32);
+            // #11 multi-tenancy: tenantId 可选（系统账号 / 多租户关闭场景）。
+            // 长度与 UserCode 保持一致（GUID 字符串 / 业务编码皆可）。
+            b.Property(u => u.TenantId).HasMaxLength(64);
+            b.HasIndex(u => u.TenantId);
         });
 
         mb.Entity<TenE0UserRole>(b =>

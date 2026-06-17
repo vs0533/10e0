@@ -1,5 +1,6 @@
 using System.Reflection;
 using TenE0.Core.Abstractions;
+using TenE0.Core.Cqrs.Behaviors;
 
 namespace TenE0.Core.Permissions.Behaviors;
 
@@ -19,6 +20,10 @@ public sealed class PermissionBehavior<TCommand, TResult>(
     IPermissionEvaluator evaluator) : IPipelineBehavior<TCommand, TResult>
     where TCommand : ICommand<TResult>
 {
+    /// <inheritdoc />
+    /// <remarks>最内层 behavior — 权限检查越早越好，事务还没开的时候拒绝比开了再回滚便宜。</remarks>
+    public int Order => BuiltInBehaviorOrders.Permission;
+
     // 每个命令类型只反射一次 attribute，命中缓存
     private static readonly IReadOnlyList<RequirePermissionAttribute> RequiredAttrs =
         typeof(TCommand).GetCustomAttributes<RequirePermissionAttribute>(inherit: false).ToList();

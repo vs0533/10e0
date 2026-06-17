@@ -9,6 +9,13 @@
 
 ### Added
 
+- **多租户（Multi-Tenancy）** (#11)：业务实体实现 `IMultiTenantEntity` 后自动启用租户隔离
+  - `IMultiTenantEntity` 接口（`TenantId` string 属性）
+  - `ITenantContext` 抽象 + `HttpTenantContext` HTTP 实现（从 JWT `tenant_id` claim 读取）
+  - `BaseDataContext.CurrentTenantId` + 自动注册 Named Query Filter `Tenant`，表达式 `BypassFilters || (e.TenantId == currentTenantId)`
+  - `JwtClaims.TenantId` 常量（`"tenant_id"`）+ `IJwtTokenService.Issue` 新增 `tenantId` 参数
+  - `TenE0User.TenantId` 字段 + `LoginCommandHandler` / `RefreshTokenCommandHandler` 透传写入 JWT
+  - 新增文档 `docs/20-multi-tenancy.md`
 - `IRoleVersionStore` 接口（`GetCurrentVersionsAsync`）+ `EfRoleVersionStore` 实现（EF Core + IMemoryCache L1，5s TTL），用于按角色版本号快速检测权限变更（[#27](https://github.com/vs0533/10e0/pull/27)）
 - `TenE0Role.Version` 字段（`long`，默认 1）：`PermissionGrantService.GrantAsync` / `RevokeAsync` / `SetGrantsAsync` 实际变更时自增（[#27](https://github.com/vs0533/10e0/pull/27)）
 - `JwtClaims.RoleVersion` 常量（`"role_versions"`）与 `ICurrentUserContext.RoleVersions` 属性：JWT 签发时把当前用户的 `{roleCode: version}` 快照写入 token；评估时按角色比对 token 快照 vs DB（[#27](https://github.com/vs0533/10e0/pull/27)）
@@ -47,12 +54,17 @@
 - 新增 `dependabot.yml`：NuGet + GitHub Actions 周度更新，按 `Microsoft.*` / `AWSSDK.*` 分组减少 PR 噪音（[#6](https://github.com/vs0533/10e0/pull/6)）
 - 新增 `codeql.yml`：csharp 推送 / PR / 周扫，manual build mode 适配 .NET 10 slnx（[#6](https://github.com/vs0533/10e0/pull/6)）
 - PR build 加 `dotnet format --verify-no-changes` 门禁（[#6](https://github.com/vs0533/10e0/pull/6)）
+- **`claude-review.yml` 加 `security-events: write` 权限**（[#33](https://github.com/vs0533/10e0/pull/33)）：GitHub auto-inject 的 "Perform CodeQL Analysis" step 需要此权限才能 upload SARIF 到 Security tab。修 PR #31/#32 偶发 Code Review job 失败的根因（GITHUB_TOKEN 临时刷新掩盖权限缺失，rerun 偶尔能过）
+- **`claude-review.yml` review 提交重构**（[#33](https://github.com/vs0533/10e0/pull/33)）：从 `github.rest.pulls.createReview`（受 GITHUB_TOKEN 限制）改为 `fetch` + PAT header 直连 API；新增 self-approve 检测（PAT 账号 == PR 作者时自动降级为 comment）；diff 拉取从 `gh pr diff` 改为 `curl` GitHub API；移除 `push: branches: [feature/**]` 触发器（无 PR context 早退无产出）
+- **`process-item.js` zh_CN locale + format gate**（[#29](https://github.com/vs0533/10e0/pull/29)）：所有 dotnet 命令强制加 `DOTNET_CLI_UI_LANGUAGE=en-US` 前缀（zh_CN locale 下 CLI 输出中文 "已通过!"，`Passed!` 匹配不到 → 误判失败）；TDD Verify 步加 `dotnet format --verify-no-changes --severity warn` 门禁
+- **`process-item.js` schema 化 + inline review**（[#32](https://github.com/vs0533/10e0/pull/32)）：`BRANCHCHECK_SCHEMA` / `TESTS_SCHEMA` / `REVIEW_SCHEMA` 三个 JSON Schema 强制 agent 报结构化字段（修 w7bu0omg2 误报"在 dev 分支" + "Passed:" 数字匹配不到的根因）；`wait-for-pr-review` 子工作流改 inline agent（修 harness 单层嵌套限制）
 
 ### Tests
 
 - 行覆盖率 78.18% → 83.48%；新增 41 个测试覆盖 CQRS 并发 / Savepoint 嵌套 / Refresh Token 旋转 / DI 扩展契约 / DynamicFilterProvider / BaseDataContext OnModelCreating（[#6](https://github.com/vs0533/10e0/pull/6)）
 - 测试依赖新增 `Microsoft.Data.Sqlite 10.0.0`（[#6](https://github.com/vs0533/10e0/pull/6)）
 - 新增 4 个 BDD acceptance suite（874 行）覆盖 #7 role version 全链路：`RoleVersionJwtClaimAcceptanceTests`（JWT sign/verify round-trip）/ `RoleVersionBumpAcceptanceTests`（EF InMemory 验证 grant/revoke bump）/ `RoleVersionCheckAcceptanceTests`（evaluator stale 检测 + legacy token + super-admin bypass）/ `RoleRevocationEndToEndAcceptanceTests`（WAF 端到端：admin revoke 后原 token 立即 403）（[#27](https://github.com/vs0533/10e0/pull/27)）
+- #10 CQRS 并发硬验收：新增 `CommandDispatcherTests.SendAsync_100Iterations_StableWrapperCache`（100 轮 wrapper cache 实例稳定）+ `TransactionBehaviorTests.ConcurrentNestedCommands_100Batches_AllSavepointNamesUnique`（100 批 × 16 并发，1600 个 savepoint GUID 全唯一）。`CommandDispatcher.WrapperCache` 改为 `internal` 移除反射访问（[#31](https://github.com/vs0533/10e0/pull/31)）
 
 ## [0.0.1] - 2026-06-02
 

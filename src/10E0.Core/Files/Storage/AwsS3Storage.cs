@@ -16,28 +16,32 @@ namespace TenE0.Core.Files.Storage;
 /// </summary>
 public class AwsS3Storage : IFileStorage
 {
+    private readonly TimeProvider _timeProvider;
     private readonly IAmazonS3 _s3Client;
     private readonly AwsS3Options _options;
 
     /// <summary>
     /// DI 入口：构造 <see cref="AmazonS3Client"/> 并交给基类逻辑复用。
     /// </summary>
-    public AwsS3Storage(IOptions<AwsS3Options> options)
-        : this(options.Value, BuildDefaultClient(options.Value))
+    public AwsS3Storage(TimeProvider timeProvider, IOptions<AwsS3Options> options)
+        : this(timeProvider, options.Value, BuildDefaultClient(options.Value))
     {
     }
 
     /// <summary>
     /// 测试 / 自定义客户端入口：允许注入一个 <see cref="IAmazonS3"/> 替身。
     /// </summary>
+    /// <param name="timeProvider">时间提供者，用于生成对象键中的日期段（保证 UTC、可测试）。</param>
     /// <param name="options">S3 配置项（已通过 <see cref="AwsS3Options.Validate"/> 校验）。</param>
     /// <param name="client">S3 客户端替身。</param>
-    public AwsS3Storage(AwsS3Options options, IAmazonS3 client)
+    public AwsS3Storage(TimeProvider timeProvider, AwsS3Options options, IAmazonS3 client)
     {
+        ArgumentNullException.ThrowIfNull(timeProvider);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(client);
         // 防御性校验：尽早失败，避免 SDK 在后续调用时抛出难以诊断的认证错误。
         AwsS3Options.Validate(options);
+        _timeProvider = timeProvider;
         _options = options;
         _s3Client = client;
     }
@@ -139,7 +143,7 @@ public class AwsS3Storage : IFileStorage
 
     private string GenerateObjectKey(string fileName)
     {
-        var date = DateTime.Now;
+        var date = _timeProvider.GetUtcNow().UtcDateTime;
         var ext = Path.GetExtension(fileName);
         var uniqueName = $"{Guid.NewGuid()}{ext}";
         return $"{date:yyyy/MM}/{uniqueName}";
