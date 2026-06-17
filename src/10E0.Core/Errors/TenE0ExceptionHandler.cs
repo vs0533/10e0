@@ -69,7 +69,7 @@ public sealed class TenE0ExceptionHandler(
         // a partial body before the error envelope is written.
         httpContext.Response.Clear();
         httpContext.Response.StatusCode = statusCode;
-        httpContext.Response.ContentType = "application/json";
+        httpContext.Response.ContentType = "application/json; charset=utf-8";
 
         await JsonSerializer.SerializeAsync(
             httpContext.Response.Body,

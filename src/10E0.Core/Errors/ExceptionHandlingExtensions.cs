@@ -35,9 +35,10 @@ public static class ExceptionHandlingExtensions
         // Mapper is pure + stateless → singleton.
         services.TryAddSingleton<IApiErrorMapper, DefaultApiErrorMapper>();
 
-        // The handler resolves scoped services (ILogger) per request.
-        // Use TryAddEnumerable so multiple test fixtures can stack extra
-        // handlers without colliding.
+        // ILogger<T> is a singleton and the handler itself has no per-request
+        // state, so the handler is registered as singleton too. TryAddEnumerable
+        // keeps registration idempotent so multiple test fixtures can stack
+        // extra IExceptionHandler implementations without colliding.
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IExceptionHandler, TenE0ExceptionHandler>());
 
         return services;

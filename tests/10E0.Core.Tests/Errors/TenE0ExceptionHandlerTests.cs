@@ -33,7 +33,7 @@ public sealed class TenE0ExceptionHandlerTests
         // Assert
         handled.Should().BeTrue();
         ctx.Response.StatusCode.Should().Be(StatusCodes.Status403Forbidden);
-        ctx.Response.ContentType.Should().Be("application/json");
+        ctx.Response.ContentType.Should().Be("application/json; charset=utf-8");
         var body = await ReadBodyAsync(ctx);
         body.GetProperty("success").GetBoolean().Should().BeFalse();
         body.GetProperty("errorCode").GetString().Should().Be("PERM_DENIED");

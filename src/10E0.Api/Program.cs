@@ -104,13 +104,16 @@ if (app.Environment.IsDevelopment())
     app.MapScalarApiReference();
 }
 
+// #39: 集中异常处理 — 放在 pipeline 最前面，最早接住未处理异常。
+// 传入空 configure 委托是为了满足 ExceptionHandlerMiddleware 的"必须设置
+// ExceptionHandler / ExceptionHandlingPath / IExceptionHandlerOptions"约束
+// (仅传 IExceptionHandler 服务不够，middleware 还会做 null-check 抛
+// InvalidOperationException)。实际异常分发由注册到 DI 的 TenE0ExceptionHandler
+// 负责，configure 委托本身不做任何事情。
+app.UseExceptionHandler(_ => { });
+
 // 静态文件服务（用于本地存储）
 app.UseStaticFiles();
-
-// #39: 集中异常处理 — 必须放在 endpoint mapping 之前，最早接住未处理异常
-// 传入空 configure 委托是为了满足 UseExceptionHandler 的"必须设置 ExceptionHandler 或 ExceptionHandlingPath"
-// 约束；实际的异常映射由已注册的 IExceptionHandler (TenE0ExceptionHandler) 接管。
-app.UseExceptionHandler(_ => { });
 
 app.UseAuthentication();
 app.UseAuthorization();
@@ -176,7 +179,10 @@ app.MapDelete("/demo/{id}", async (string id, ICommandDispatcher dispatcher, Can
 });
 
 app.MapGet("/demo", async (ICommandDispatcher dispatcher, CancellationToken ct) =>
-    Results.Ok(await dispatcher.SendAsync(new ListDemosQuery(), ct)));
+{
+    var list = await dispatcher.SendAsync(new ListDemosQuery(), ct);
+    return Results.Ok(list);
+});
 
 app.MapPost("/demo/{id}/publish", async (string id, ICommandDispatcher dispatcher, IErrs errs, CancellationToken ct) =>
 {
