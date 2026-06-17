@@ -81,14 +81,19 @@ Workflow({ name: "process-item", args: { item: { id: 42, type: "issue", ... } } 
 7.  Tests        general-purpose   schema 化报数字（buildOk / testsOk / failed / passed / formatOk）
 8.  Local Review code-reviewer     本地扫 diff，处理 CRITICAL/HIGH
 9.  Open PR      general-purpose   push feature 分支，mcp__github__create_pull_request（base=dev）
-10. Watch Review general-purpose   inline agent 轮询 claude-review.yml（reviewTimeoutMs 默认 15 分钟）
+10. Watch Review general-purpose   shell seq 轮询 CI；拉三类评论(reviews+行内+issue comment)；解析 bot VERDICT
 11. Handle Review general-purpose  分类 review：能修修，不能修开 followup issue
-12. Merge & Sync general-purpose   CI 绿+mergeable 时 squash merge 到 dev，再 checkout dev + pull 同步本地
+12. Merge & Sync general-purpose   bot≠REQUEST_CHANGES + CI 绿 + mergeable 时 squash merge 到 dev，再 pull 同步本地
 ```
 
-> **Merge & Sync（全自动合并模式）**：CI（pr-build.yml）SUCCESS 且 mergeable 时自动 `squash` 合并到 dev
-> 并同步本地 dev；若 branch protection 要求人工 approve（merge API 422）则跳过合并、标记 `reason` 待人工处理，
-> **不崩溃**。CI 未绿/冲突时绝不强合。
+> **Merge & Sync（全自动合并模式）三层门禁**：
+> 1. **bot 门禁**：claude-review 输出 `VERDICT: REQUEST_CHANGES`（有 🔴 Critical）→ 确定性跳过自动合并，
+>    交人工/下一轮 fix-review（Watch Review 阶段解析 `botVerdict`，process-item 脚本层判断，不依赖 merge agent）。
+> 2. **CI 门禁**：`pr-build.yml` SUCCESS 且 mergeable 才 `squash` 合并到 dev 并同步本地 dev。
+> 3. **branch protection**：要求人工 approve（merge API 422）则标记 `reason` 跳过，**不崩溃**。CI 未绿/冲突绝不强合。
+>
+> ⚠️ **claude-review 拉取要拉三类评论**：bot 可能发正式 review（`gh pr view --json reviews`）、行内 comment
+> （`pulls/N/comments`），也可能降级成 issue comment（`issues/N/comments`）——只拉前两类会漏掉 fallback 评论。
 
 ### schema 化要点（PR #32 修复 w7bu0omg2 案例）
 

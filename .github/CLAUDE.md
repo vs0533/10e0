@@ -15,16 +15,20 @@
 
 - **触发**: PR opened / synchronize
 - **方式**: 安装 `@anthropic-ai/claude-code` CLI，通过 `claude -p` headless 模式审查 diff
-- **后端**: 阿里云百炼 API (Qwen 3.7-max)，非 Anthropic 官方
+- **后端**: MiniMax API (MiniMax-M3)，非 Anthropic 官方
 - **超时**: 30 分钟
-- **输出**: 作为 PR comment 发布，分 🔴 Critical / 🟡 Suggestion / 🟢 Nit
+- **输出**: 末尾强制输出 `VERDICT: APPROVE`（无 🔴 Critical）或 `VERDICT: REQUEST_CHANGES`（有 🔴 Critical / 解析失败保守拒绝）；分 🔴 Critical / 🟡 Suggestion / 🟢 Nit
+- **发布方式**: 有 `REVIEW_BOT_TOKEN` (PAT) 且非 self-approve 时用 `pulls.createReview` 发**正式 review**（计入 branch protection approval）；否则降级为 issue comment（**不计入 approval**）
 
-关键环境变量（与本机 `~/.claude/settings.json` 一致）:
+关键环境变量:
 ```
-ANTHROPIC_AUTH_TOKEN = secrets.ALIBABA_API_KEY
-ANTHROPIC_BASE_URL = https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic
-ANTHROPIC_MODEL    = qwen3.7-max
+ANTHROPIC_AUTH_TOKEN = secrets.MINIMAX_API_KEY
+ANTHROPIC_BASE_URL   = https://api.minimaxi.com/anthropic
+ANTHROPIC_MODEL      = MiniMax-M3
 ```
+
+> **triage 消费方注意**：`.claude/workflows/process-item.js` 的 Merge & Sync 阶段会解析本 bot 的 `VERDICT`，
+> `REQUEST_CHANGES` 时跳过自动合并。修改 VERDICT 输出格式时需同步该解析逻辑。
 
 ### `release.yml` — 自动发版
 

@@ -243,6 +243,15 @@ try {
       `| ${(testResult?.raw || '').slice(0, 500)}`
     )
   }
+  // 加固：防 agent 没真跑 dotnet test 就空报 testsOk:true / failed:0。
+  // raw 必须含真实 dotnet test 输出特征（Passed!/Passed: <n>/Failed: <n>），否则字段不可信。
+  const testsRaw = String(testResult?.raw || '')
+  if (!/Passed!|Passed:\s*\d+|Failed:\s*\d+/.test(testsRaw)) {
+    throw new Error(
+      `#${item.id} tests 可疑：testsOk=${testResult?.testsOk} 但 raw 无真实 dotnet test 输出特征` +
+      `（疑似未真跑测试，schema 字段不可信）| raw=${testsRaw.slice(0, 500)}`
+    )
+  }
 
   // 5. local review
   await agent(
@@ -285,8 +294,10 @@ try {
   const reviewTimeoutMs = args.reviewTimeoutMs ?? 900000  // 默认 15 分钟
   const REVIEW_SCHEMA = {
     type: 'object',
-    required: ['items'],
+    required: ['items', 'botVerdict'],
     properties: {
+      // claude-review.yml bot 的结论：APPROVE / REQUEST_CHANGES（有 🔴 Critical）/ NONE（没找到 bot 评论）
+      botVerdict: { type: 'string', enum: ['APPROVE', 'REQUEST_CHANGES', 'NONE'] },
       items: {
         type: 'array',
         items: {
@@ -308,7 +319,7 @@ try {
   // 否则 MiniMax-M3 会在 CI 早已 settled 后仍无限空转（实测卡 >40 分钟）。每次间隔 20s。
   const pollCount = Math.max(3, Math.floor(reviewTimeoutMs / 20000))
   const reviewResult = await agent(
-    `盯 PR #${prNumber} (${prUrl}) 的 CI + claude-review.yml 完成，然后拉所有 review 评论。\n\n` +
+    `盯 PR #${prNumber} (${prUrl}) 的 CI + claude-review.yml 完成，然后拉所有 review 评论 + 解析 bot 结论。\n\n` +
     `**第一步：原样执行下面这段 shell 轮询（循环次数由 \`seq\` 控制，绝对不要自己心算 sleep 次数、不要在循环外再反复查询）：**\n` +
     '```bash\n' +
     `PR=${prNumber}\n` +
@@ -320,18 +331,24 @@ try {
     `done\n` +
     `gh pr checks $PR --json name,state,bucket\n` +
     '```\n\n' +
-    `**第二步：checks settled（或循环用尽）后，拉 review 数据：**\n` +
+    `**第二步：checks settled（或循环用尽）后，拉三类评论（缺一不可——claude-review bot 可能发正式 review，也可能降级成 issue comment）：**\n` +
     '```bash\n' +
-    `gh pr view ${prNumber} --json reviews\n` +
-    `gh api repos/{owner}/{repo}/pulls/${prNumber}/comments\n` +
+    `gh pr view ${prNumber} --json reviews                              # 正式 review（含 state）\n` +
+    `gh api repos/{owner}/{repo}/pulls/${prNumber}/comments             # 行内 review comment\n` +
+    `gh api repos/{owner}/{repo}/issues/${prNumber}/comments            # 普通 issue comment（bot fallback 在这里！）\n` +
     '```\n\n' +
-    `**第三步**：把 reviews（每条取 author.login→user, body, state）和行内 comments（user.login→user, body, path, line，state 填 "COMMENTED"）合并成数组，按 schema 返回。\n` +
-    `返回 schema: { items: [{ id, user, body, path?, line?, state }] }（数组放在 items 字段下，不是顶层数组）。\n` +
-    `**shell 循环一结束就立刻进第二步**；没有任何 review/comment 就返回 { items: [] }。`,
+    `**第三步**：把三类评论合并成 items 数组（reviews 取 author.login→user/body/state；行内 comment 取 user.login→user/body/path/line，state="COMMENTED"；issue comment 取 user.login→user/body，state="COMMENTED"）。\n\n` +
+    `**第四步（关键）：解析 claude-review bot 的结论 botVerdict**。在上面所有评论 body 里找 claude-review bot 那条（特征：含 "🤖 MiniMax Code Review" 或 "VERDICT:" 或 "Verdict:"）：\n` +
+    `- body 含 "VERDICT: REQUEST_CHANGES" 或 "Verdict: **REQUEST_CHANGES**" → botVerdict="REQUEST_CHANGES"\n` +
+    `- body 含 "VERDICT: APPROVE" 或 "Verdict: **APPROVE**" → botVerdict="APPROVE"\n` +
+    `- 完全找不到 bot 评论 → botVerdict="NONE"\n\n` +
+    `返回 schema: { botVerdict: "APPROVE"|"REQUEST_CHANGES"|"NONE", items: [{ id, user, body, path?, line?, state }] }（数组放在 items 字段下）。\n` +
+    `**shell 循环一结束就立刻进第二步**；没有任何评论时返回 { botVerdict:"NONE", items: [] }。`,
     { phase: 'Watch Review', schema: REVIEW_SCHEMA, agentType: 'general-purpose' }
   )
   const reviews = reviewResult?.items ?? []
-  log(`PR #${prNumber} 收到 ${reviews.length} 条 review`)
+  const botVerdict = reviewResult?.botVerdict ?? 'NONE'
+  log(`PR #${prNumber} 收到 ${reviews.length} 条评论，bot verdict=${botVerdict}`)
 
   // 8. 分类处理 review
   const handleResult = await agent(
@@ -347,8 +364,10 @@ try {
   )
 
   // 9. 合并 PR 到 dev + 同步本地 dev（用户选择全自动）
-  //    门禁：必须 CI(pr-build.yml) 绿 + mergeable，否则不合并（返回 reason，不强合）。
-  //    branch protection 若要求人工 review approval，merge API 会 422 → 标记需人工 approve，不崩溃。
+  //    门禁三层：
+  //    (a) bot 门禁：claude-review 判定 REQUEST_CHANGES（有 🔴 Critical）→ 不自动合并（本段下方确定性判断）
+  //    (b) CI 门禁：必须 pr-build.yml 绿 + mergeable，否则不合并（merge agent 内判断）
+  //    (c) branch protection：若要求人工 review approval，merge API 会 422 → 标记需人工 approve，不崩溃
   const MERGE_SCHEMA = {
     type: 'object',
     required: ['merged'],
@@ -359,21 +378,29 @@ try {
       reason: { type: 'string' },
     },
   }
-  const mergeResult = await agent(
-    `合并 PR #${prNumber} 到 dev 并同步本地 dev 分支。\n\n` +
-    `**Watch Review 阶段已等过 CI，这里只查一次、不再轮询：**\n` +
-    `1. \`gh pr checks ${prNumber} --json name,state,bucket\` —— 是否所有 bucket 都是 pass/skipping（**无 pending/fail**）\n` +
-    `   \`gh pr view ${prNumber} --json mergeable,mergeStateStatus\` —— mergeable 是否 MERGEABLE\n` +
-    `2. 若有 check fail/pending 或不可合并 → 返回 { merged:false, reason:"<具体状态>" }，**不要强合**\n` +
-    `3. 若全 pass 且 MERGEABLE → \`gh pr merge ${prNumber} --squash\`\n` +
-    `   （本仓库 dev 启用 linear history，**必须 --squash**，不能 merge commit）\n` +
-    `   - 若报错含 "not mergeable" / "required" / "review" / "protected" / "422" →\n` +
-    `     返回 { merged:false, reason:"branch protection 需人工 approve 后才能合并" }，**不要崩溃**\n` +
-    `4. merge 成功后同步本地：\`git checkout dev\` → \`git pull --ff-only origin dev\`（devSynced=true）\n` +
-    `   再删分支：\`git branch -D ${workBranch}\` + \`git push origin --delete ${workBranch}\`（删除失败可忽略）\n\n` +
-    `回报 schema：{ merged: boolean, mergeSha?: string, devSynced?: boolean, reason?: string }`,
-    { phase: 'Merge & Sync', agentType: 'general-purpose', schema: MERGE_SCHEMA }
-  )
+  // (a) bot 门禁：REQUEST_CHANGES 时确定性跳过自动合并，不进 merge agent——
+  //     Handle 已修能修的，剩下的交人工确认或下一轮 fix-review 收尾。
+  let mergeResult
+  if (botVerdict === 'REQUEST_CHANGES') {
+    log(`PR #${prNumber} bot 判定 REQUEST_CHANGES（存在 🔴 Critical），跳过自动合并`)
+    mergeResult = { merged: false, reason: 'bot REQUEST_CHANGES：存在 🔴 Critical，需人工确认或下一轮 fix-review 修复后再合' }
+  } else {
+    mergeResult = await agent(
+      `合并 PR #${prNumber} 到 dev 并同步本地 dev 分支。\n\n` +
+      `**Watch Review 阶段已等过 CI，这里只查一次、不再轮询：**\n` +
+      `1. \`gh pr checks ${prNumber} --json name,state,bucket\` —— 是否所有 bucket 都是 pass/skipping（**无 pending/fail**）\n` +
+      `   \`gh pr view ${prNumber} --json mergeable,mergeStateStatus\` —— mergeable 是否 MERGEABLE\n` +
+      `2. 若有 check fail/pending 或不可合并 → 返回 { merged:false, reason:"<具体状态>" }，**不要强合**\n` +
+      `3. 若全 pass 且 MERGEABLE → \`gh pr merge ${prNumber} --squash\`\n` +
+      `   （本仓库 dev 启用 linear history，**必须 --squash**，不能 merge commit）\n` +
+      `   - 若报错含 "not mergeable" / "required" / "review" / "protected" / "422" →\n` +
+      `     返回 { merged:false, reason:"branch protection 需人工 approve 后才能合并" }，**不要崩溃**\n` +
+      `4. merge 成功后同步本地：\`git checkout dev\` → \`git pull --ff-only origin dev\`（devSynced=true）\n` +
+      `   再删分支：\`git branch -D ${workBranch}\` + \`git push origin --delete ${workBranch}\`（删除失败可忽略）\n\n` +
+      `回报 schema：{ merged: boolean, mergeSha?: string, devSynced?: boolean, reason?: string }`,
+      { phase: 'Merge & Sync', agentType: 'general-purpose', schema: MERGE_SCHEMA }
+    )
+  }
   log(`PR #${prNumber} 合并: merged=${mergeResult.merged} devSynced=${mergeResult.devSynced ?? false} ${mergeResult.reason ?? ''}`)
 
   // 显式使用全部字段（linter 看不到顶层 return 是 consumer）
@@ -386,6 +413,7 @@ try {
     prUrl,
     merged: Boolean(mergeResult.merged),
     mergeReason: mergeResult.reason ?? '',
+    botVerdict,
     followupCount: handleResult.followupCount ?? 0,
     fixedCount: handleResult.fixedCount ?? 0,
     summary: handleResult.summary ?? '',
