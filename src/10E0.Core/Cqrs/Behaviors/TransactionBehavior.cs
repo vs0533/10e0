@@ -30,6 +30,14 @@ public sealed class TransactionBehavior<TCommand, TResult, TContext>(
     where TCommand : ICommand<TResult>
     where TContext : DbContext
 {
+    /// <inheritdoc />
+    /// <remarks>
+    /// 中间层 — 必须包住 PermissionBehavior（Order=50），
+    /// 这样权限失败时 transaction 会回滚；又必须被 LoggingBehavior（Order=200）包住，
+    /// 让外层能看到事务耗时和异常。
+    /// </remarks>
+    public int Order => BuiltInBehaviorOrders.Transaction;
+
     public async Task<TResult> HandleAsync(
         TCommand command,
         CommandHandlerDelegate<TResult> next,
