@@ -97,6 +97,12 @@ Workflow({ name: "process-item", args: { item: { id: 42, type: "issue", ... } } 
 > 循环直到 APPROVE 或耗尽 `maxReviewRounds`；不能在本 PR 解决的开 `followup-from:#<pr>` issue（含来源 PR/review 链接/原因）保证可追溯。
 > 判断「要不要再转一轮」靠 Handle 回报的 `pushed`/`fixedCount`——**本轮没 push 新代码就别空等**（CI/verdict 结果不会变）。
 >
+> 🛑 **冲突门禁（每轮先查）**：Watch Review 拉 `mergeable`/`mergeStateStatus`，若 `CONFLICTING`/`DIRTY` → **立即停自愈循环留人工**，
+> 不空转——自愈循环能修 bot review 意见，但修不了 merge 冲突。常见根因：重复处理了已被合并 PR 解决的 issue，或 base 落后需 rebase。
+>
+> 🔒 **防重复处理**：Open PR 阶段，issue 类型的 PR 正文**必须**写 `Closes #<issue.id>`，合并后自动关 issue；
+> 否则 issue 遗留 open，下轮 triage 会把它当 open issue 重新拉起、重做一遍，与已合并改动冲突（#51→#55→#58 真实教训）。
+>
 > ⚠️ **claude-review 必须拉三类评论**：bot 可能发正式 review（`gh pr view --json reviews`）、行内 comment
 > （`pulls/N/comments`），也可能降级成 issue comment（`issues/N/comments`）——只拉前两类会漏掉 fallback 评论，解析不到 VERDICT。
 
@@ -187,6 +193,7 @@ Followup from #<pr-number>: <review 反馈摘要>
 | 自动合并不生效，PR 停在 open | branch protection 要求人工 approve，merge API 422 | 预期行为：Merge & Sync 标 `reason="需人工 approve"` 跳过，需人工合并 |
 | `--dry-run` 重复打印同一项 N 次 | 旧版 dry-run 进 while 循环 rank N 次（Bug D） | 已修：dry-run 只 rank 一次列出整个队列后 return |
 | Watch Review 阶段 CI 早绿却空转卡死 >40min | 旧版让 LLM 自己数 sleep 次数轮询，MiniMax-M3 不可靠（Bug H） | 已修：Watch/Merge 改用确定性 `for i in $(seq 1 N)` shell 循环控制次数，LLM 只执行命令不数数 |
+| 同一 issue 被重做、PR 与 dev 冲突、自愈循环空转 | 已合并 PR 没写 `Closes #N` → issue 遗留 open 被下轮重复处理（#51→#55→#58） | 已修：Open PR 对 issue 强制写 `Closes #<id>`；自愈循环每轮先查 `mergeable`，`CONFLICTING/DIRTY` 立即停留人工 |
 
 ## 相关资源
 
