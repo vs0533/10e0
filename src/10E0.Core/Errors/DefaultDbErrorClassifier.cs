@@ -109,7 +109,43 @@ public sealed class DefaultDbErrorClassifier : IDbErrorClassifier
         if (ExtractPostgresSqlState(toStringProbe) is not null)
             return ClassifyByPostgresSqlState(toStringProbe);
 
-        return DbErrorClassification.Unknown();
+        return ExtractFromEntries(exception) is { } fromEntries
+            ? fromEntries
+            : DbErrorClassification.Unknown();
+    }
+
+    /// <summary>
+    /// 兜底：当 inner exception 解析失败（未识别 / 空 message）但 EF Core
+    /// 在构造 <see cref="DbUpdateException"/> 时已经塞了
+    /// <c>Entries</c>（issue #51 body 第 2 条明文要求
+    /// 'include the entity / field from DbUpdateException.Entries
+    /// (single entry on a save, so the entity name is reliable)'），
+    /// 从 <c>EntityEntry.Metadata.ClrType.Name</c> 提取 CLR 类型名作为
+    /// EntityName。Entries 是 EF Core 模型自带的 provider-agnostic 来源，
+    /// 与 message 解析路径正交，能在最坏情况下保证客户端拿到 entity 后缀。
+    ///
+    /// 返回 null 表示 Entries 也不可用（极少见，但防御性处理）。
+    /// </summary>
+    private static DbErrorClassification? ExtractFromEntries(DbUpdateException exception)
+    {
+        var entries = exception.Entries;
+        if (entries is null || entries.Count == 0)
+        {
+            return null;
+        }
+
+        // 真实 SaveChanges 路径下只有一个 entry（issue body 也点明
+        // "single entry on a save"）。多 entry 时按 EF Core 约定取首个。
+        var first = entries[0];
+        if (first?.Metadata?.ClrType is null)
+        {
+            return null;
+        }
+
+        return new DbErrorClassification(
+            DbErrorKind.Other,
+            EntityName: first.Metadata.ClrType.Name,
+            ConstraintName: null);
     }
 
     private static bool HasSqlServerPrefix(string text) =>

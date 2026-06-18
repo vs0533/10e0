@@ -209,6 +209,114 @@ public sealed class DefaultDbErrorClassifierTests
         result.ConstraintName.Should().BeNull();
     }
 
+    // ── Entries fallback (issue #51 contract: include entity from Entries) ──
+    // When the inner exception cannot be classified (unrecognised type /
+    // empty message / no provider-shaped prefix), the classifier must still
+    // surface the entity name from DbUpdateException.Entries — that's the
+    // provider-agnostic source EF Core guarantees on every SaveChanges
+    // failure. The boundary cases below lock down that contract.
+
+    [Fact]
+    public void Classify_UnrecognisedInnerWithEntries_ExposesEntityFromEntries()
+    {
+        // Arrange — inner type/message 不匹配任何 provider，
+        // 但 Entries 有一个真实 EntityEntry（其 Metadata.ClrType
+        // 为 "TenE0DemoProbe"，与 BDD 契约灯塔测试同模式 —— CLR 名是
+        // EF Core 在 Entries 上稳定的来源）。classifier 必须从 Entries
+        // 兜底拿到 entity 后缀。
+        var entry = CreateProbeEntry();
+        var ex = new DbUpdateException(
+            "wrapped",
+            innerException: new InvalidOperationException("not a provider error"),
+            entries: new[] { entry });
+
+        // Act
+        var result = NewClassifier().Classify(ex);
+
+        // Assert
+        result.Kind.Should().Be(DbErrorKind.Other,
+            "inner 不可识别 → 落到 Other，但 entity 名必须仍能透传");
+        result.EntityName.Should().Be("TenE0DemoProbe",
+            "issue #51 body 第 2 条：Entries 是稳定兜底，CLR 类型名必须透传");
+    }
+
+    [Fact]
+    public void Classify_UnrecognisedInnerWithoutEntries_ReturnsUnknownFallback()
+    {
+        // Arrange — 无 inner、也无 entries。这是双重最坏路径，classifier
+        // 必须不抛、EntityName 留 null，让 mapper 走纯 fallback message。
+        var ex = new DbUpdateException("wrapped");
+
+        // Act
+        var result = NewClassifier().Classify(ex);
+
+        // Assert — 与既有 Classify_DbUpdateExceptionWithNoInner_ReturnsOther
+        // 一致；本次新增断言 entries 兜底未污染 null 路径。
+        result.Kind.Should().Be(DbErrorKind.Other);
+        result.EntityName.Should().BeNull();
+    }
+
+    [Fact]
+    public void Classify_ClassifiableInner_EntityFromMessageWinsOverEntries()
+    {
+        // Arrange — inner 是 SQL Server 2627（message 里能解析出
+        // "dbo.TenE0Role"），但 Entries 是 "TenE0DemoProbe"。两个来源都能
+        // 拿 entity，message 路径更精准（带 schema 前缀 + 与业务表
+        // 一致），必须优先；Entries 仅作 message-parse 失败的兜底。
+        var entry = CreateProbeEntry();
+        var inner = new SqlServerExceptionLike(
+            number: 2627,
+            message: "Violation of UNIQUE KEY constraint 'UX_TenE0Role_Code'. " +
+                     "Cannot insert duplicate key in object 'dbo.TenE0Role'.");
+        var ex = new DbUpdateException(
+            "wrapped",
+            innerException: inner,
+            entries: new[] { entry });
+
+        // Act
+        var result = NewClassifier().Classify(ex);
+
+        // Assert
+        result.Kind.Should().Be(DbErrorKind.UniqueKey);
+        result.EntityName.Should().Be("dbo.TenE0Role",
+            "message 解析成功时，EntityName 走 message 路径而非 Entries 兜底");
+    }
+
+    // ── Probe DbContext（真实构造 EntityEntry，与 BDD 文件同模式） ────
+
+    private sealed class TenE0DemoProbe
+    {
+        public int Id { get; set; }
+        public string Name { get; set; } = string.Empty;
+    }
+
+    private sealed class ProbeDbContext : DbContext
+    {
+        public ProbeDbContext(DbContextOptions<ProbeDbContext> options) : base(options) { }
+        public DbSet<TenE0DemoProbe> Demos => Set<TenE0DemoProbe>();
+
+        protected override void OnModelCreating(ModelBuilder modelBuilder)
+        {
+            modelBuilder.Entity<TenE0DemoProbe>(b =>
+            {
+                b.HasKey(x => x.Id);
+                b.Property(x => x.Name).HasMaxLength(64);
+                b.ToTable("TenE0Demo");
+            });
+        }
+    }
+
+    private static Microsoft.EntityFrameworkCore.ChangeTracking.EntityEntry CreateProbeEntry()
+    {
+        var options = new DbContextOptionsBuilder<ProbeDbContext>()
+            .UseInMemoryDatabase($"classifier-probe-{Guid.NewGuid():N}")
+            .Options;
+        using var ctx = new ProbeDbContext(options);
+        var entity = new TenE0DemoProbe { Id = 1, Name = "x" };
+        ctx.Demos.Add(entity);
+        return ctx.Entry(entity);
+    }
+
     // ── Stand-ins (mirror the BDD acceptance tests) ─────────────
 
     private sealed class SqlServerExceptionLike : Exception
