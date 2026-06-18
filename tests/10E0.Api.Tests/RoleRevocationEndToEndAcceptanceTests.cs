@@ -45,9 +45,8 @@ public sealed class RoleRevocationEndToEndAcceptanceTests
             "/auth/login", new { userCode = "alice", password = "111111" });
         loginResp.StatusCode.Should().Be(HttpStatusCode.OK,
             "alice is seeded in AuthSeeder with password 111111");
-        var aliceAuth = await loginResp.Content.ReadFromJsonAsync<AuthResponseDto>();
-        aliceAuth.Should().NotBeNull();
-        aliceAuth!.AccessToken.Should().NotBeNullOrWhiteSpace();
+        var aliceAuth = (await loginResp.Content.ReadFromJsonAsync<AuthEnvelope>())!.Data!;
+        aliceAuth.AccessToken.Should().NotBeNullOrWhiteSpace();
 
         // Alice can read /demo with the original token
         aliceClient.DefaultRequestHeaders.Authorization =
@@ -63,9 +62,9 @@ public sealed class RoleRevocationEndToEndAcceptanceTests
         var adminLoginResp = await adminClient.PostAsJsonAsync(
             "/auth/login", new { userCode = "admin", password = "111111" });
         adminLoginResp.StatusCode.Should().Be(HttpStatusCode.OK);
-        var adminAuth = await adminLoginResp.Content.ReadFromJsonAsync<AuthResponseDto>();
+        var adminAuth = (await adminLoginResp.Content.ReadFromJsonAsync<AuthEnvelope>())!.Data!;
         adminClient.DefaultRequestHeaders.Authorization =
-            new AuthenticationHeaderValue("Bearer", adminAuth!.AccessToken);
+            new AuthenticationHeaderValue("Bearer", adminAuth.AccessToken);
 
         var revokeResp = await adminClient.DeleteAsync(
             "/admin/roles/viewer/permissions/demo.view");
@@ -88,27 +87,27 @@ public sealed class RoleRevocationEndToEndAcceptanceTests
         var aliceClient = factory.CreateClient();
         var loginResp = await aliceClient.PostAsJsonAsync(
             "/auth/login", new { userCode = "alice", password = "111111" });
-        var aliceAuth = await loginResp.Content.ReadFromJsonAsync<AuthResponseDto>();
+        var aliceAuth = (await loginResp.Content.ReadFromJsonAsync<AuthEnvelope>())!.Data!;
 
         // Admin revokes demo.view from the viewer role BEFORE alice refreshes
         var adminClient = factory.CreateClient();
         var adminLoginResp = await adminClient.PostAsJsonAsync(
             "/auth/login", new { userCode = "admin", password = "111111" });
-        var adminAuth = await adminLoginResp.Content.ReadFromJsonAsync<AuthResponseDto>();
+        var adminAuth = (await adminLoginResp.Content.ReadFromJsonAsync<AuthEnvelope>())!.Data!;
         adminClient.DefaultRequestHeaders.Authorization =
-            new AuthenticationHeaderValue("Bearer", adminAuth!.AccessToken);
+            new AuthenticationHeaderValue("Bearer", adminAuth.AccessToken);
         await adminClient.DeleteAsync("/admin/roles/viewer/permissions/demo.view");
 
         // Act — alice calls /auth/refresh to get a brand-new access token
         var refreshResp = await aliceClient.PostAsJsonAsync(
-            "/auth/refresh", new { refreshToken = aliceAuth!.RefreshToken });
+            "/auth/refresh", new { refreshToken = aliceAuth.RefreshToken });
         refreshResp.StatusCode.Should().Be(HttpStatusCode.OK,
             "rotation flow should still succeed; the issue is permission, not token validity");
-        var refreshed = await refreshResp.Content.ReadFromJsonAsync<AuthResponseDto>();
+        var refreshed = (await refreshResp.Content.ReadFromJsonAsync<AuthEnvelope>())!.Data!;
 
         // Assert — even the freshly-issued token cannot access /demo
         aliceClient.DefaultRequestHeaders.Authorization =
-            new AuthenticationHeaderValue("Bearer", refreshed!.AccessToken);
+            new AuthenticationHeaderValue("Bearer", refreshed.AccessToken);
         var resp = await aliceClient.GetAsync("/demo");
 
         resp.StatusCode.Should().Be(HttpStatusCode.Forbidden,
@@ -123,9 +122,9 @@ public sealed class RoleRevocationEndToEndAcceptanceTests
         var aliceClient = factory.CreateClient();
         var loginResp = await aliceClient.PostAsJsonAsync(
             "/auth/login", new { userCode = "alice", password = "111111" });
-        var aliceAuth = await loginResp.Content.ReadFromJsonAsync<AuthResponseDto>();
+        var aliceAuth = (await loginResp.Content.ReadFromJsonAsync<AuthEnvelope>())!.Data!;
         aliceClient.DefaultRequestHeaders.Authorization =
-            new AuthenticationHeaderValue("Bearer", aliceAuth!.AccessToken);
+            new AuthenticationHeaderValue("Bearer", aliceAuth.AccessToken);
 
         // Sanity: alice can already create demos (editor grants demo.create)
         var preGrantCreate = await aliceClient.PostAsJsonAsync(
@@ -137,9 +136,9 @@ public sealed class RoleRevocationEndToEndAcceptanceTests
         var adminClient = factory.CreateClient();
         var adminLoginResp = await adminClient.PostAsJsonAsync(
             "/auth/login", new { userCode = "admin", password = "111111" });
-        var adminAuth = await adminLoginResp.Content.ReadFromJsonAsync<AuthResponseDto>();
+        var adminAuth = (await adminLoginResp.Content.ReadFromJsonAsync<AuthEnvelope>())!.Data!;
         adminClient.DefaultRequestHeaders.Authorization =
-            new AuthenticationHeaderValue("Bearer", adminAuth!.AccessToken);
+            new AuthenticationHeaderValue("Bearer", adminAuth.AccessToken);
 
         await adminClient.DeleteAsync("/admin/roles/editor/permissions/demo.create");
         var revokeResp = await aliceClient.PostAsJsonAsync(
@@ -233,4 +232,10 @@ public sealed class RoleRevocationEndToEndAcceptanceTests
         string UserCode,
         string DisplayName,
         IReadOnlyList<string> Roles);
+
+    /// <summary>
+    /// #50: /auth/login and /auth/refresh return the uniform
+    /// <c>ApiResult&lt;T&gt;</c> envelope (success = true, data = AuthResponseDto).
+    /// </summary>
+    private sealed record AuthEnvelope(bool Success, AuthResponseDto? Data);
 }
