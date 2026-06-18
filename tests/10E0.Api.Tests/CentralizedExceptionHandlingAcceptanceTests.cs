@@ -199,10 +199,16 @@ public sealed class CentralizedExceptionHandlingAcceptanceTests
             "/auth/login", new { userCode, password });
         resp.StatusCode.Should().Be(HttpStatusCode.OK,
             $"{userCode} is seeded in AuthSeeder with password {password}");
-        var auth = await resp.Content.ReadFromJsonAsync<AuthResponseDto>();
-        auth.Should().NotBeNull();
-        auth!.AccessToken.Should().NotBeNullOrWhiteSpace();
-        return auth;
+        // #50: /auth/login now returns the uniform ApiResult<T> envelope
+        // (success = true, data = { accessToken, refreshToken, ... }) so a
+        // single DTO deserializes both success and failure responses.
+        var env = await resp.Content.ReadFromJsonAsync<LoginEnvelope>();
+        env.Should().NotBeNull();
+        env!.Success.Should().BeTrue("the success body must carry success = true");
+        env.Data.Should().NotBeNull("the success body must carry the data envelope");
+        env.Data!.AccessToken.Should().NotBeNullOrWhiteSpace();
+        env.Data.RefreshToken.Should().NotBeNullOrWhiteSpace();
+        return env.Data;
     }
 
     /// <summary>Reads the response body as a permissive ApiResult-like DTO.</summary>
@@ -266,6 +272,14 @@ public sealed class CentralizedExceptionHandlingAcceptanceTests
     // ── Wire DTOs (lenient deserialization — only the fields we assert) ──
 
     private sealed record AuthResponseDto(string AccessToken, string RefreshToken);
+
+    /// <summary>
+    /// #50: /auth/login success body is the uniform <c>ApiResult&lt;T&gt;</c>
+    /// envelope. <c>Data</c> carries the <see cref="AuthResponseDto"/> payload
+    /// (the same DTO a client uses to deserialize failure responses, since
+    /// <c>Data</c> is null there).
+    /// </summary>
+    private sealed record LoginEnvelope(bool Success, AuthResponseDto? Data);
 
     private sealed record ApiResultBody(
         bool Success,

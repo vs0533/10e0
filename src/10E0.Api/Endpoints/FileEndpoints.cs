@@ -1,5 +1,7 @@
 using Microsoft.AspNetCore.Http;
 using TenE0.Core.Abstractions;
+using TenE0.Core.Common;
+using TenE0.Core.Errors;
 using TenE0.Core.Files;
 
 namespace TenE0.Api.Endpoints;
@@ -8,18 +10,20 @@ internal static class FileEndpoints
 {
     public static WebApplication MapFileEndpoints(this WebApplication app)
     {
+        // #50: IErrs 校验失败统一走 ApiResult<T>.FromErrs + ApiResultResult.Api，
+        // 与异常路径（TenE0ExceptionHandler）使用同一信封。
         app.MapPost("/files/upload", async (IFormFile file, IFileService fileSvc, IErrs errs, CancellationToken ct) =>
         {
             if (file == null || file.Length == 0)
             {
                 errs.Add("文件不能为空", "file", "FILE_EMPTY");
-                return Results.BadRequest(new { error = "文件不能为空" });
+                return ApiResultResult.Api(ApiResult<object>.FromErrs(errs));
             }
 
             using var stream = file.OpenReadStream();
             var response = await fileSvc.UploadAsync(stream, file.FileName, file.ContentType, ct: ct);
 
-            return Results.Ok(response);
+            return ApiResultResult.Api(ApiResult<object>.Ok(response));
         })
         .WithName("UploadFile")
         .WithDescription("上传文件");
@@ -30,13 +34,13 @@ internal static class FileEndpoints
             if (file == null || file.Length == 0)
             {
                 errs.Add("文件不能为空", "file", "FILE_EMPTY");
-                return Results.BadRequest(new { error = "文件不能为空" });
+                return ApiResultResult.Api(ApiResult<object>.FromErrs(errs));
             }
 
             if (!file.ContentType.StartsWith("image/"))
             {
                 errs.Add("只能上传图片文件", "file", "NOT_IMAGE");
-                return Results.BadRequest(new { error = "只能上传图片文件" });
+                return ApiResultResult.Api(ApiResult<object>.FromErrs(errs));
             }
 
             var options = new ImageProcessOptions
@@ -51,7 +55,7 @@ internal static class FileEndpoints
             using var stream = file.OpenReadStream();
             var response = await fileSvc.UploadImageAsync(stream, file.FileName, options, ct: ct);
 
-            return Results.Ok(response);
+            return ApiResultResult.Api(ApiResult<object>.Ok(response));
         })
         .WithName("UploadImage")
         .WithDescription("上传图片（支持处理选项）");
