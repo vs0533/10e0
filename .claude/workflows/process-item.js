@@ -274,7 +274,7 @@ try {
     `4. 推送用 \`git push -u origin ${workBranch}\`（**绝不能** \`git push origin main/dev\`）\n\n` +
     `PR 内容：\n` +
     `- 标题: <type>: ${item.title}（格式参考 git-workflow.md）\n` +
-    `- 正文: 关联 #${item.id}（Closes #N 或 Refs #N）、测试计划、checklist\n` +
+    `- 正文（防重复处理）：${item.type === 'issue' ? '**必须**包含 "Closes #' + item.id + '"——合并后自动关闭 issue #' + item.id + '，否则它遗留 open 会被下轮 triage 重复处理、与已合并改动冲突（#51/#55/#58 教训）' : '用 "Refs #' + item.id + '"（PR 类型不要 Closes 自己）'}；附测试计划、checklist\n` +
     `- 用 mcp__github__create_pull_request 创建\n\n` +
     `回报字段：{ prNumber: number, prUrl: string, headBranch: string, baseBranch: string }`,
     { phase: 'Open PR', agentType: 'general-purpose', schema: {
@@ -311,6 +311,9 @@ try {
     properties: {
       // claude-review.yml bot 的结论：APPROVE / REQUEST_CHANGES（有 🔴 Critical）/ NONE（没找到 bot 评论）
       botVerdict: { type: 'string', enum: ['APPROVE', 'REQUEST_CHANGES', 'NONE'] },
+      // PR 与 dev 的可合并状态（用于冲突门禁，防自愈循环对着 merge 冲突空转）
+      mergeable: { type: 'string' },         // MERGEABLE / CONFLICTING / UNKNOWN
+      mergeStateStatus: { type: 'string' },  // CLEAN / DIRTY / BLOCKED / BEHIND / UNSTABLE / UNKNOWN
       items: {
         type: 'array',
         items: {
@@ -374,25 +377,35 @@ try {
       `done\n` +
       `gh pr checks $PR --json name,state,bucket\n` +
       '```\n\n' +
-      `**第二步：拉三类评论（缺一不可——bot 可能发正式 review，也可能降级成 issue comment）：**\n` +
+      `**第二步：拉三类评论（缺一不可——bot 可能发正式 review，也可能降级成 issue comment）+ PR 可合并状态：**\n` +
       '```bash\n' +
       `gh pr view ${prNumber} --json reviews\n` +
       `gh api repos/{owner}/{repo}/pulls/${prNumber}/comments\n` +
       `gh api repos/{owner}/{repo}/issues/${prNumber}/comments\n` +
+      `gh pr view ${prNumber} --json mergeable,mergeStateStatus    # 冲突门禁用\n` +
       '```\n\n' +
-      `**第三步**：合并成 items（reviews→author.login/body/state；行内 comment→user.login/body/path/line,state="COMMENTED"；issue comment→user.login/body,state="COMMENTED"）。\n` +
+      `**第三步**：合并评论成 items（reviews→author.login/body/state；行内 comment→user.login/body/path/line,state="COMMENTED"；issue comment→user.login/body,state="COMMENTED"）。\n` +
+      `把 \`gh pr view --json mergeable,mergeStateStatus\` 的两个值**原样**填进返回的 mergeable / mergeStateStatus 字段。\n` +
       `**只按时间最新的那条 bot 评论判 verdict**（本 PR 可能已 push 过多轮，别被旧评论干扰）。\n\n` +
       `**第四步：解析最新 bot VERDICT**（bot 评论特征："🤖 MiniMax Code Review" / "VERDICT:" / "Verdict:"）：\n` +
       `- 含 "VERDICT: REQUEST_CHANGES" / "Verdict: **REQUEST_CHANGES**" → "REQUEST_CHANGES"\n` +
       `- 含 "VERDICT: APPROVE" / "Verdict: **APPROVE**" → "APPROVE"\n` +
       `- 找不到 bot 评论 → "NONE"\n\n` +
-      `返回 schema: { botVerdict, items: [{ id, user, body, path?, line?, state }] }（数组放 items 字段下）。无评论返回 { botVerdict:"NONE", items: [] }。`,
+      `返回 schema: { botVerdict, mergeable, mergeStateStatus, items: [{ id, user, body, path?, line?, state }] }（数组放 items 字段下）。无评论返回 { botVerdict:"NONE", items: [], mergeable, mergeStateStatus }。`,
       { phase: 'Watch Review', schema: REVIEW_SCHEMA, agentType: 'general-purpose' }
     )
     const reviews = reviewResult?.items ?? []
     const botVerdict = reviewResult?.botVerdict ?? 'NONE'
     finalVerdict = botVerdict
-    log(`PR #${prNumber} 轮 ${round}: ${reviews.length} 条评论, verdict=${botVerdict}`)
+    log(`PR #${prNumber} 轮 ${round}: ${reviews.length} 条评论, verdict=${botVerdict}, mergeable=${reviewResult?.mergeable ?? '?'}/${reviewResult?.mergeStateStatus ?? '?'}`)
+
+    // (2a) 冲突门禁：PR 与 dev 冲突（CONFLICTING/DIRTY）→ 自愈循环修不了 merge 冲突，立即停留人工。
+    //      常见根因：重复处理了已被合并 PR 解决的 issue（#51/#55/#58 案例），或 base 落后需 rebase。
+    if (reviewResult?.mergeable === 'CONFLICTING' || reviewResult?.mergeStateStatus === 'DIRTY') {
+      mergeReason = `PR #${prNumber} 与 dev 冲突（mergeable=${reviewResult?.mergeable}, state=${reviewResult?.mergeStateStatus}）——自愈循环修不了 merge 冲突，停止重试留人工（疑似重复处理已合并 issue，或需 rebase）`
+      log(`PR #${prNumber} 检测到冲突，停止自愈循环：${mergeReason}`)
+      break
+    }
 
     // (2) 收紧门禁：只有 APPROVE 才尝试合并
     if (botVerdict === 'APPROVE') {
