@@ -32,8 +32,19 @@ public static class ExceptionHandlingExtensions
     /// </summary>
     public static IServiceCollection AddTenE0ExceptionHandler(this IServiceCollection services)
     {
-        // Mapper is pure + stateless → singleton.
-        services.TryAddSingleton<IApiErrorMapper, DefaultApiErrorMapper>();
+        // #51: the DbUpdateException disambiguator must be in DI before
+        // the mapper resolves it. DefaultDbErrorClassifier is provider-
+        // agnostic and stateless → singleton. Hosts that need a custom
+        // classifier (e.g. one that reads Npgsql.PostgresException
+        // directly) can call services.Replace(...) after this method.
+        services.AddTenE0DbErrorClassifier();
+
+        // Mapper depends on IDbErrorClassifier; use a factory so DI
+        // resolves the (potentially replaced) classifier instance rather
+        // than constructing DefaultApiErrorMapper with a parameterless
+        // ctor and silently bypassing the registered classifier.
+        services.TryAddSingleton<IApiErrorMapper>(sp =>
+            new DefaultApiErrorMapper(sp.GetRequiredService<IDbErrorClassifier>()));
 
         // ILogger<T> is a singleton and the handler itself has no per-request
         // state, so the handler is registered as singleton too. TryAddEnumerable
