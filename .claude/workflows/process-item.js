@@ -1,6 +1,9 @@
 // 单 issue/PR 完整工作流（meta.phases 列表是事实源）
 //   BranchCheck → Dispatch → [Planner] → BDD → TDD-Schema → TDD-Impl → TDD-Verify
-//   → Tests → Local Review → Open PR → Watch Review → Handle Review → Merge & Sync
+//   → Tests → Local Review → Open PR → [review-fix 循环: Watch Review → (REQUEST_CHANGES 时) Handle Review]
+// 末段 Watch/Handle/Merge 是一个**循环**（最多 maxReviewRounds 轮）：
+//   等 CI + 解析 bot VERDICT → APPROVE 才合并；REQUEST_CHANGES 则修能修的+push 重等、不能修的开 followup issue；
+//   NONE 不合并留人工。**收紧门禁：只有 bot 明确 APPROVE 才自动合并。**
 // 派单策略（dispatchKind）已内联到本文件底部（harness 不支持 relative import）
 //
 // worktree 策略（与 SKILL.md 一致）：
@@ -243,6 +246,15 @@ try {
       `| ${(testResult?.raw || '').slice(0, 500)}`
     )
   }
+  // 加固：防 agent 没真跑 dotnet test 就空报 testsOk:true / failed:0。
+  // raw 必须含真实 dotnet test 输出特征（Passed!/Passed: <n>/Failed: <n>），否则字段不可信。
+  const testsRaw = String(testResult?.raw || '')
+  if (!/Passed!|Passed:\s*\d+|Failed:\s*\d+/.test(testsRaw)) {
+    throw new Error(
+      `#${item.id} tests 可疑：testsOk=${testResult?.testsOk} 但 raw 无真实 dotnet test 输出特征` +
+      `（疑似未真跑测试，schema 字段不可信）| raw=${testsRaw.slice(0, 500)}`
+    )
+  }
 
   // 5. local review
   await agent(
@@ -281,12 +293,24 @@ try {
   const prUrl = prInfo.prUrl
   if (!prNumber) throw new Error(`PR 创建失败: ${JSON.stringify(prInfo)}`)
 
-  // 7. 盯自动 review（inline agent 轮询 claude-review.yml；harness 限制 child workflow 不能再嵌套调 workflow）
+  // 7-9. review-fix 循环（收紧门禁 + 自动修复重试）：
+  //   每轮：等 CI settled → 拉三类评论 + 解析 bot VERDICT →
+  //     - APPROVE：CI 绿 + mergeable 时 squash 合并到 dev + 同步本地，结束
+  //     - REQUEST_CHANGES：逐条评估——能在本 PR 修的就修 + git push（触发新 CI + 新 review）→ 下一轮重等；
+  //                        不能修的开可追溯 followup issue。本轮没 push 任何修复 → 停（留人工，issue 已追溯）
+  //     - NONE（bot 没产出 VERDICT）：收紧模式下不合并，留人工
+  //   最多 maxReviewRounds 轮，防止无限循环（每轮含等 CI + bot review + 修复，注意 budget）。
+  //
+  // **收紧门禁（用户要求）**：只有 bot 明确 APPROVE 才自动合并；REQUEST_CHANGES / NONE 一律不自动合。
   const reviewTimeoutMs = args.reviewTimeoutMs ?? 900000  // 默认 15 分钟
+  const maxReviewRounds = args.maxReviewRounds ?? 3
+  const pollCount = Math.max(3, Math.floor(reviewTimeoutMs / 20000))  // shell seq 控制轮询次数，间隔 20s
   const REVIEW_SCHEMA = {
     type: 'object',
-    required: ['items'],
+    required: ['items', 'botVerdict'],
     properties: {
+      // claude-review.yml bot 的结论：APPROVE / REQUEST_CHANGES（有 🔴 Critical）/ NONE（没找到 bot 评论）
+      botVerdict: { type: 'string', enum: ['APPROVE', 'REQUEST_CHANGES', 'NONE'] },
       items: {
         type: 'array',
         items: {
@@ -304,51 +328,17 @@ try {
       },
     },
   }
-  // 轮询次数由 shell 的 seq 控制（确定性），不让 LLM 自己心算 sleep 次数——
-  // 否则 MiniMax-M3 会在 CI 早已 settled 后仍无限空转（实测卡 >40 分钟）。每次间隔 20s。
-  const pollCount = Math.max(3, Math.floor(reviewTimeoutMs / 20000))
-  const reviewResult = await agent(
-    `盯 PR #${prNumber} (${prUrl}) 的 CI + claude-review.yml 完成，然后拉所有 review 评论。\n\n` +
-    `**第一步：原样执行下面这段 shell 轮询（循环次数由 \`seq\` 控制，绝对不要自己心算 sleep 次数、不要在循环外再反复查询）：**\n` +
-    '```bash\n' +
-    `PR=${prNumber}\n` +
-    `for i in $(seq 1 ${pollCount}); do\n` +
-    `  pending=$(gh pr checks $PR --json bucket -q '[.[] | select(.bucket=="pending")] | length' 2>/dev/null || echo err)\n` +
-    `  echo "poll $i/${pollCount}: pending=$pending"\n` +
-    `  [ "$pending" = "0" ] && { echo "checks settled"; break; }\n` +
-    `  sleep 20\n` +
-    `done\n` +
-    `gh pr checks $PR --json name,state,bucket\n` +
-    '```\n\n' +
-    `**第二步：checks settled（或循环用尽）后，拉 review 数据：**\n` +
-    '```bash\n' +
-    `gh pr view ${prNumber} --json reviews\n` +
-    `gh api repos/{owner}/{repo}/pulls/${prNumber}/comments\n` +
-    '```\n\n' +
-    `**第三步**：把 reviews（每条取 author.login→user, body, state）和行内 comments（user.login→user, body, path, line，state 填 "COMMENTED"）合并成数组，按 schema 返回。\n` +
-    `返回 schema: { items: [{ id, user, body, path?, line?, state }] }（数组放在 items 字段下，不是顶层数组）。\n` +
-    `**shell 循环一结束就立刻进第二步**；没有任何 review/comment 就返回 { items: [] }。`,
-    { phase: 'Watch Review', schema: REVIEW_SCHEMA, agentType: 'general-purpose' }
-  )
-  const reviews = reviewResult?.items ?? []
-  log(`PR #${prNumber} 收到 ${reviews.length} 条 review`)
-
-  // 8. 分类处理 review
-  const handleResult = await agent(
-    `处理 PR #${prNumber} 的 ${reviews.length} 条 review 评论：\n\n` +
-    `分类原则：\n` +
-    `- 拼写/typo/命名、局部重构、注释补充、测试覆盖 → 直接修，commit push 到同 PR（${workBranch}）\n` +
-    `- 架构/大重构、新功能建议、跨 PR 范围、设计争论 → 开新 issue，标题 "Followup from #${prNumber}: <摘要>"，` +
-    `  标签 followup-from:#${prNumber} + 对应 enhancement/refactor 标签\n` +
-    `  正文包含：来源 PR、review 链接、为什么不在本 PR、建议处理\n\n` +
-    `Reviews：\n${JSON.stringify(reviews, null, 2)}\n\n` +
-    `回报字段：followupCount (int, 开的新 issue 数)、fixedCount (int, 本 PR 修的评论数)、summary (string, 摘要)。`,
-    { phase: 'Handle Review', agentType: 'general-purpose' }
-  )
-
-  // 9. 合并 PR 到 dev + 同步本地 dev（用户选择全自动）
-  //    门禁：必须 CI(pr-build.yml) 绿 + mergeable，否则不合并（返回 reason，不强合）。
-  //    branch protection 若要求人工 review approval，merge API 会 422 → 标记需人工 approve，不崩溃。
+  // Handle 结构化回报：pushed/fixedCount 决定要不要重等 CI（代码没变就别空等）
+  const HANDLE_SCHEMA = {
+    type: 'object',
+    required: ['fixedCount', 'followupCount', 'pushed'],
+    properties: {
+      fixedCount: { type: 'number' },      // 本轮在当前 PR 改代码并已 git push 的评论数
+      followupCount: { type: 'number' },   // 本轮开的可追溯 followup issue 数
+      pushed: { type: 'boolean' },         // 本轮是否真的 git push 了修复
+      summary: { type: 'string' },
+    },
+  }
   const MERGE_SCHEMA = {
     type: 'object',
     required: ['merged'],
@@ -359,36 +349,130 @@ try {
       reason: { type: 'string' },
     },
   }
-  const mergeResult = await agent(
-    `合并 PR #${prNumber} 到 dev 并同步本地 dev 分支。\n\n` +
-    `**Watch Review 阶段已等过 CI，这里只查一次、不再轮询：**\n` +
-    `1. \`gh pr checks ${prNumber} --json name,state,bucket\` —— 是否所有 bucket 都是 pass/skipping（**无 pending/fail**）\n` +
-    `   \`gh pr view ${prNumber} --json mergeable,mergeStateStatus\` —— mergeable 是否 MERGEABLE\n` +
-    `2. 若有 check fail/pending 或不可合并 → 返回 { merged:false, reason:"<具体状态>" }，**不要强合**\n` +
-    `3. 若全 pass 且 MERGEABLE → \`gh pr merge ${prNumber} --squash\`\n` +
-    `   （本仓库 dev 启用 linear history，**必须 --squash**，不能 merge commit）\n` +
-    `   - 若报错含 "not mergeable" / "required" / "review" / "protected" / "422" →\n` +
-    `     返回 { merged:false, reason:"branch protection 需人工 approve 后才能合并" }，**不要崩溃**\n` +
-    `4. merge 成功后同步本地：\`git checkout dev\` → \`git pull --ff-only origin dev\`（devSynced=true）\n` +
-    `   再删分支：\`git branch -D ${workBranch}\` + \`git push origin --delete ${workBranch}\`（删除失败可忽略）\n\n` +
-    `回报 schema：{ merged: boolean, mergeSha?: string, devSynced?: boolean, reason?: string }`,
-    { phase: 'Merge & Sync', agentType: 'general-purpose', schema: MERGE_SCHEMA }
-  )
-  log(`PR #${prNumber} 合并: merged=${mergeResult.merged} devSynced=${mergeResult.devSynced ?? false} ${mergeResult.reason ?? ''}`)
+
+  let merged = false
+  let mergeReason = ''
+  let finalVerdict = 'NONE'
+  let totalFixed = 0
+  let totalFollowup = 0
+  let lastSummary = ''
+
+  for (let round = 1; round <= maxReviewRounds; round++) {
+    log(`PR #${prNumber} review 轮 ${round}/${maxReviewRounds}`)
+
+    // (1) 等 CI settled + 拉三类评论 + 解析 bot VERDICT
+    const reviewResult = await agent(
+      `盯 PR #${prNumber} (${prUrl}) 的 CI + claude-review.yml 完成（第 ${round} 轮），拉所有评论 + 解析 bot 结论。\n\n` +
+      `**第一步：原样执行下面这段 shell 轮询（循环次数由 \`seq\` 控制，绝对不要自己心算 sleep 次数、不要在循环外再反复查询）：**\n` +
+      '```bash\n' +
+      `PR=${prNumber}\n` +
+      `for i in $(seq 1 ${pollCount}); do\n` +
+      `  pending=$(gh pr checks $PR --json bucket -q '[.[] | select(.bucket=="pending")] | length' 2>/dev/null || echo err)\n` +
+      `  echo "poll $i/${pollCount}: pending=$pending"\n` +
+      `  [ "$pending" = "0" ] && { echo "checks settled"; break; }\n` +
+      `  sleep 20\n` +
+      `done\n` +
+      `gh pr checks $PR --json name,state,bucket\n` +
+      '```\n\n' +
+      `**第二步：拉三类评论（缺一不可——bot 可能发正式 review，也可能降级成 issue comment）：**\n` +
+      '```bash\n' +
+      `gh pr view ${prNumber} --json reviews\n` +
+      `gh api repos/{owner}/{repo}/pulls/${prNumber}/comments\n` +
+      `gh api repos/{owner}/{repo}/issues/${prNumber}/comments\n` +
+      '```\n\n' +
+      `**第三步**：合并成 items（reviews→author.login/body/state；行内 comment→user.login/body/path/line,state="COMMENTED"；issue comment→user.login/body,state="COMMENTED"）。\n` +
+      `**只按时间最新的那条 bot 评论判 verdict**（本 PR 可能已 push 过多轮，别被旧评论干扰）。\n\n` +
+      `**第四步：解析最新 bot VERDICT**（bot 评论特征："🤖 MiniMax Code Review" / "VERDICT:" / "Verdict:"）：\n` +
+      `- 含 "VERDICT: REQUEST_CHANGES" / "Verdict: **REQUEST_CHANGES**" → "REQUEST_CHANGES"\n` +
+      `- 含 "VERDICT: APPROVE" / "Verdict: **APPROVE**" → "APPROVE"\n` +
+      `- 找不到 bot 评论 → "NONE"\n\n` +
+      `返回 schema: { botVerdict, items: [{ id, user, body, path?, line?, state }] }（数组放 items 字段下）。无评论返回 { botVerdict:"NONE", items: [] }。`,
+      { phase: 'Watch Review', schema: REVIEW_SCHEMA, agentType: 'general-purpose' }
+    )
+    const reviews = reviewResult?.items ?? []
+    const botVerdict = reviewResult?.botVerdict ?? 'NONE'
+    finalVerdict = botVerdict
+    log(`PR #${prNumber} 轮 ${round}: ${reviews.length} 条评论, verdict=${botVerdict}`)
+
+    // (2) 收紧门禁：只有 APPROVE 才尝试合并
+    if (botVerdict === 'APPROVE') {
+      const mergeResult = await agent(
+        `合并 PR #${prNumber} 到 dev 并同步本地 dev 分支。\n\n` +
+        `**已等过 CI，这里只查一次、不再轮询：**\n` +
+        `1. \`gh pr checks ${prNumber} --json name,state,bucket\` —— 是否所有 bucket 都是 pass/skipping（**无 pending/fail**）\n` +
+        `   \`gh pr view ${prNumber} --json mergeable,mergeStateStatus\` —— mergeable 是否 MERGEABLE\n` +
+        `2. 若有 check fail/pending 或不可合并 → 返回 { merged:false, reason:"<具体状态>" }，**不要强合**\n` +
+        `3. 若全 pass 且 MERGEABLE → \`gh pr merge ${prNumber} --squash\`\n` +
+        `   （本仓库 dev 启用 linear history，**必须 --squash**，不能 merge commit）\n` +
+        `   - 报错含 "not mergeable"/"required"/"review"/"protected"/"422" → 返回 { merged:false, reason:"branch protection 需人工 approve" }，**不崩溃**\n` +
+        `4. merge 成功后：\`git checkout dev\` → \`git pull --ff-only origin dev\`（devSynced=true）\n` +
+        `   再删分支：\`git branch -D ${workBranch}\` + \`git push origin --delete ${workBranch}\`（失败忽略）\n\n` +
+        `回报 schema：{ merged: boolean, mergeSha?: string, devSynced?: boolean, reason?: string }`,
+        { phase: 'Merge & Sync', agentType: 'general-purpose', schema: MERGE_SCHEMA }
+      )
+      merged = Boolean(mergeResult.merged)
+      mergeReason = mergeResult.reason ?? ''
+      log(`PR #${prNumber} APPROVE → 合并: merged=${merged} ${mergeReason}`)
+      break  // APPROVE 后结束循环（合并失败是 CI/protection 问题，reason 已记，留人工）
+    }
+
+    // (3) NONE：bot 没产出 VERDICT，收紧模式不合并；重试结果也是 NONE（代码没变），直接停留人工
+    if (botVerdict === 'NONE') {
+      mergeReason = `bot 未产出 VERDICT（NONE）——收紧模式只认 APPROVE，留人工检查 claude-review 是否异常`
+      log(`PR #${prNumber} verdict=NONE，${mergeReason}`)
+      break
+    }
+
+    // (4) REQUEST_CHANGES：逐条评估，能在本 PR 修的就修 + push，不能修的开可追溯 followup issue
+    const handleResult = await agent(
+      `PR #${prNumber} 第 ${round} 轮收到 bot REQUEST_CHANGES（存在 🔴 Critical）。逐条评估并处理：\n\n` +
+      `**判定「能否在当前 PR (${workBranch}) 解决」：**\n` +
+      `- ✅ 能解决（bug、拼写/命名、局部重构、补测试、缺 XML doc 等）→ **在当前分支改代码，commit 并 \`git push\`**（push 触发新 CI + 新 claude-review）\n` +
+      `- ❌ 不能在本 PR 解决（架构大改、新功能、跨 PR 范围、设计争论）→ **开 followup issue 保证可追溯**：\n` +
+      `    - 标题 "Followup from #${prNumber}: <摘要>"\n` +
+      `    - 标签 \`followup-from:#${prNumber}\` + enhancement/refactor\n` +
+      `    - 正文：来源 PR #${prNumber} 链接、对应 review 评论摘要/链接、为什么不能在本 PR 解决、建议处理方式\n\n` +
+      `bot 评论 + 所有 review：\n${JSON.stringify(reviews, null, 2)}\n\n` +
+      `**严格统计**：fixedCount 只数「真改了代码且 git push 成功」的；pushed=本轮是否执行过 git push（决定要不要重等 CI）。\n` +
+      `回报 schema：{ fixedCount, followupCount, pushed, summary }。`,
+      { phase: 'Handle Review', schema: HANDLE_SCHEMA, agentType: 'general-purpose' }
+    )
+    const fixed = handleResult.fixedCount ?? 0
+    const followup = handleResult.followupCount ?? 0
+    totalFixed += fixed
+    totalFollowup += followup
+    lastSummary = handleResult.summary ?? ''
+    log(`PR #${prNumber} 轮 ${round} Handle: fixed=${fixed} followup=${followup} pushed=${handleResult.pushed}`)
+
+    // (5) 本轮没 push 任何修复 → 重等 CI/verdict 结果不会变（代码没动）→ 停，留人工（followup issue 已开可追溯）
+    if (!handleResult.pushed || fixed === 0) {
+      mergeReason = `REQUEST_CHANGES 的问题无法在本 PR 自动解决（已开 ${totalFollowup} 个 followup issue 追溯），留人工`
+      log(`PR #${prNumber} 本轮无 push 修复，停止重试：${mergeReason}`)
+      break
+    }
+    // fixed>0 且 pushed：回循环顶，重新等新 CI + 新 bot verdict，直到 APPROVE 或耗尽轮数
+    log(`PR #${prNumber} 本轮 push 了 ${fixed} 处修复，进入下一轮重等 CI + verdict`)
+  }
+
+  // 循环耗尽仍未拿到 APPROVE
+  if (!merged && !mergeReason) {
+    mergeReason = `review 重试 ${maxReviewRounds} 轮仍未拿到 APPROVE（最后 verdict=${finalVerdict}），留人工`
+  }
 
   // 显式使用全部字段（linter 看不到顶层 return 是 consumer）
-  log(`#${item.id} 处理完成: pr=#${prNumber} merged=${mergeResult.merged} ` +
-    `followup=${handleResult.followupCount ?? 0} fixed=${handleResult.fixedCount ?? 0} | ${handleResult.summary ?? ''}`)
+  log(`#${item.id} 处理完成: pr=#${prNumber} merged=${merged} verdict=${finalVerdict} ` +
+    `fixed=${totalFixed} followup=${totalFollowup} | ${lastSummary} | ${mergeReason}`)
 
   return {
     ok: true,
     prNumber,
     prUrl,
-    merged: Boolean(mergeResult.merged),
-    mergeReason: mergeResult.reason ?? '',
-    followupCount: handleResult.followupCount ?? 0,
-    fixedCount: handleResult.fixedCount ?? 0,
-    summary: handleResult.summary ?? '',
+    merged,
+    mergeReason,
+    botVerdict: finalVerdict,
+    followupCount: totalFollowup,
+    fixedCount: totalFixed,
+    summary: lastSummary,
   }
 } catch (e) {
   // 单 item 失败：不崩溃整个 triage-loop，返回 ok:false 让上层跳过继续。

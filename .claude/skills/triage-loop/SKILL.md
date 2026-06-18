@@ -48,7 +48,8 @@ Workflow({ name: "process-item", args: { item: { id: 42, type: "issue", ... } } 
 | `prs-only` | bool | false | 只处理 PR |
 | `labels` | string | — | 逗号分隔，只处理带这些 label 的项 |
 | `dry-run` | bool | false | 仅显示将处理什么，不实际派单 |
-| `reviewTimeoutMs` | int | 900000 | process-item 盯 PR review 的超时（15 分钟） |
+| `reviewTimeoutMs` | int | 900000 | process-item 每轮等 CI/review 的超时（15 分钟） |
+| `maxReviewRounds` | int | 3 | process-item review-fix 循环最多重试轮数（REQUEST_CHANGES→修+push→重等 的上限） |
 
 ## 派单策略（dispatchKind）
 
@@ -81,14 +82,23 @@ Workflow({ name: "process-item", args: { item: { id: 42, type: "issue", ... } } 
 7.  Tests        general-purpose   schema 化报数字（buildOk / testsOk / failed / passed / formatOk）
 8.  Local Review code-reviewer     本地扫 diff，处理 CRITICAL/HIGH
 9.  Open PR      general-purpose   push feature 分支，mcp__github__create_pull_request（base=dev）
-10. Watch Review general-purpose   inline agent 轮询 claude-review.yml（reviewTimeoutMs 默认 15 分钟）
-11. Handle Review general-purpose  分类 review：能修修，不能修开 followup issue
-12. Merge & Sync general-purpose   CI 绿+mergeable 时 squash merge 到 dev，再 checkout dev + pull 同步本地
+10-12. review-fix 循环（最多 `maxReviewRounds`=3 轮，Watch/Handle/Merge 反复跑）：
+        每轮 Watch Review 等 CI + 拉三类评论 + 解析 bot VERDICT →
+        - **APPROVE** → Merge & Sync：CI 绿 + mergeable 时 squash 合并到 dev + 同步本地，结束
+        - **REQUEST_CHANGES** → Handle Review：能在本 PR 修的修 + `git push`（触发新 CI+新 review）→ **下一轮重等**；
+          不能修的开可追溯 followup issue。本轮没 push 任何修复 → 停（留人工，issue 已追溯）
+        - **NONE**（bot 没产出 VERDICT）→ 不合并，留人工
 ```
 
-> **Merge & Sync（全自动合并模式）**：CI（pr-build.yml）SUCCESS 且 mergeable 时自动 `squash` 合并到 dev
-> 并同步本地 dev；若 branch protection 要求人工 approve（merge API 422）则跳过合并、标记 `reason` 待人工处理，
-> **不崩溃**。CI 未绿/冲突时绝不强合。
+> **收紧门禁（合并模式）**：**只有 bot 明确 `VERDICT: APPROVE` 才自动合并**；`REQUEST_CHANGES` / `NONE` 一律不自动合。
+> 三层叠加：① bot VERDICT=APPROVE（脚本层确定性判断）→ ② CI(`pr-build.yml`) 绿 + mergeable → ③ branch protection（422 则标记 reason 跳过，不崩溃）。
+>
+> **REQUEST_CHANGES 的自愈循环**：能在本 PR 解决的问题，Handle 当场改 + push，靠 `synchronize` 触发新一轮 CI+review，
+> 循环直到 APPROVE 或耗尽 `maxReviewRounds`；不能在本 PR 解决的开 `followup-from:#<pr>` issue（含来源 PR/review 链接/原因）保证可追溯。
+> 判断「要不要再转一轮」靠 Handle 回报的 `pushed`/`fixedCount`——**本轮没 push 新代码就别空等**（CI/verdict 结果不会变）。
+>
+> ⚠️ **claude-review 必须拉三类评论**：bot 可能发正式 review（`gh pr view --json reviews`）、行内 comment
+> （`pulls/N/comments`），也可能降级成 issue comment（`issues/N/comments`）——只拉前两类会漏掉 fallback 评论，解析不到 VERDICT。
 
 ### schema 化要点（PR #32 修复 w7bu0omg2 案例）
 
