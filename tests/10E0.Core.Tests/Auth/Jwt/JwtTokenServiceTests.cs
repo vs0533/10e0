@@ -21,7 +21,8 @@ public sealed class JwtTokenServiceTests
         });
 
         var tp = timeProvider ?? TimeProvider.System;
-        return new JwtTokenService(options.Object, tp);
+        // #37: 默认 ITokenClaimNames 实现 —— claim 名与遗留 JwtClaims 常量一致
+        return new JwtTokenService(options.Object, tp, new JwtClaimsTokenClaimNames());
     }
 
     [Fact]

@@ -2,6 +2,10 @@ namespace TenE0.Core.Abstractions;
 
 /// <summary>
 /// JWT Claim 类型常量。从旧 GlobalConstans.JwtClaimTypes 迁移并收敛。
+///
+/// #37 注：业务代码应优先注入 <see cref="ITokenClaimNames"/>，以便在不改 Core
+/// 源码的前提下整体替换为 Keycloak / Auth0 / SAML 等不同 IdP 的 claim 命名。
+/// 本静态类作为常量兼容层保留，值与 <see cref="DefaultTokenClaimNames"/> 完全一致。
 /// </summary>
 public static class JwtClaims
 {
@@ -28,6 +32,10 @@ public static class JwtClaims
 
 /// <summary>
 /// 缓存键前缀常量。
+///
+/// #37 注：业务代码应优先注入 <see cref="ICacheKeyNamespace"/>，以支持多租户
+/// namespace / 环境隔离。本静态类作为兼容层保留，值与
+/// <see cref="DefaultCacheKeyNamespace.UserInfo"/> 完全一致。
 /// </summary>
 public static class CacheKeys
 {

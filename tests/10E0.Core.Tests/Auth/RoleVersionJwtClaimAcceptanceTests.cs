@@ -31,7 +31,11 @@ public sealed class RoleVersionJwtClaimAcceptanceTests
     };
 
     private static JwtTokenService CreateService() =>
-        new(Options.Create(CreateOptions()), new FakeTimeProvider());
+        new(
+            Options.Create(CreateOptions()),
+            new FakeTimeProvider(),
+            // #37: 测试走默认 ITokenClaimNames
+            new JwtClaimsTokenClaimNames());
 
     private static IReadOnlyDictionary<string, long> ParseRoleVersionClaim(JwtSecurityToken jwt)
     {

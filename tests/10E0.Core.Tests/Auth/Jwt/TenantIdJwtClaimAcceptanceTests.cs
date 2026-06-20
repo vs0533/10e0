@@ -37,7 +37,9 @@ public sealed class TenantIdJwtClaimAcceptanceTests
                 AccessTokenLifetime = TimeSpan.FromMinutes(30),
                 RefreshTokenLifetime = TimeSpan.FromDays(7),
             }),
-            new FakeTimeProvider());
+            new FakeTimeProvider(),
+            // #37: 测试走默认 ITokenClaimNames（JwtClaims 常量），保持向后兼容
+            new JwtClaimsTokenClaimNames());
 
     // ── 静态 contract: claim 常量与解析逻辑 ─────────────────────
 
