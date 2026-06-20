@@ -27,11 +27,13 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
-      - name: Check code format
-        run: dotnet format 10e0.slnx --verify-no-changes --severity warn
-
       - name: Restore dependencies
         run: dotnet restore 10e0.slnx
+
+      # format 必须在 restore 之后、且加 --no-restore：否则 dotnet format 会做隐式 restore，
+      # 在 .NET 10 SDK 版本漂移时报 "Restore operation failed"（2026-06-20 #62 撞到）。
+      - name: Check code format
+        run: dotnet format 10e0.slnx --no-restore --verify-no-changes --severity warn
 
       - name: Build (Release)
         run: dotnet build 10e0.slnx --no-restore -c Release

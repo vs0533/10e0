@@ -193,8 +193,8 @@ try {
     `1. \`DOTNET_CLI_UI_LANGUAGE=en-US dotnet build 10e0.slnx 2>&1 | tail -5\` 必须 0 警告 0 错误\n` +
     `2. \`DOTNET_CLI_UI_LANGUAGE=en-US dotnet test 10e0.slnx --nologo 2>&1 | tail -10\` 必须全绿\n` +
     `3. \`DOTNET_CLI_UI_LANGUAGE=en-US dotnet test 10e0.slnx --collect:"XPlat Code Coverage" 2>&1 | tail -5\` 报告覆盖率数字\n` +
-    `4. \`DOTNET_CLI_UI_LANGUAGE=en-US dotnet format 10e0.slnx --verify-no-changes --severity warn 2>&1 | tail -5\` 必须 exit 0（PR #27 WHITESPACE 教训：commit 前必须 format 干净，否则 CI 卡门禁）\n` +
-    `**只跑命令 + 报告数字**，不写新代码、不修任何东西。如果不绿就 throw 让上层 fail。\n` +
+    `4. **format 自动修复**：先 \`DOTNET_CLI_UI_LANGUAGE=en-US dotnet format 10e0.slnx --severity warn 2>&1 | tail -5\`（自动补换行/空白），再 \`--verify-no-changes\` 确认 exit 0（PR #27 WHITESPACE 教训：format 空白不该卡门禁，自动修即可）\n` +
+    `**除 format 自动修复外不写新代码、不改逻辑**。仅 build/test 不绿才 throw（format 自动修后不该因空白 fail）。\n` +
     `回报：{ buildOk, testsOk, coverage, formatOk } 结构化数据。
 
 **所有 dotnet 命令必须加 \`DOTNET_CLI_UI_LANGUAGE=en-US\` 前缀**，否则在 zh_CN locale 下 CLI 输出中文"已通过!"，"Passed!" 匹配不到，下游 regex 误判失败。`,
@@ -222,8 +222,9 @@ try {
     `2. \`DOTNET_CLI_UI_LANGUAGE=en-US dotnet test 10e0.slnx --nologo 2>&1 | tail -30\`\n` +
     `   → testsOk = exit code 0 AND 'Failed: 0' 子串存在\n` +
     `   → 从输出 grep 数字: Passed: <n>, Failed: <n>, Skipped: <n>\n` +
-    `3. \`DOTNET_CLI_UI_LANGUAGE=en-US dotnet format 10e0.slnx --verify-no-changes --severity warn 2>&1 | tail -5\`\n` +
-    `   → formatOk = exit code 0\n\n` +
+    `3. **format 先自动修复再验证**（空白/换行不该卡门禁——小模型常漏末尾换行，自动补即可）：\n` +
+    `   a. \`DOTNET_CLI_UI_LANGUAGE=en-US dotnet format 10e0.slnx --severity warn 2>&1 | tail -5\`（**不带 --verify**，就地补换行/空白；改动留工作区，Open PR 阶段 commit 会带上）\n` +
+    `   b. \`DOTNET_CLI_UI_LANGUAGE=en-US dotnet format 10e0.slnx --verify-no-changes --severity warn 2>&1 | tail -5\` → formatOk = exit code 0（a 修过后这里应必过）\n\n` +
     `**DOTNET_CLI_UI_LANGUAGE=en-US 必须带**，否则 zh_CN locale 下 CLI 输出"已通过!"，` +
     `grep 不到 'Passed:' 数字。\n\n` +
     `**严格按 schema 返回**（字段名拼写、大小写必须一致，failed/passed/skipped 是 number 不是 string）：\n` +
@@ -488,9 +489,35 @@ try {
     summary: lastSummary,
   }
 } catch (e) {
-  // 单 item 失败：不崩溃整个 triage-loop，返回 ok:false 让上层跳过继续。
-  // 工作区残留无需在此清理——下一个 item 的 BranchCheck 会强制 `git checkout -f dev`。
+  // 单 item 失败：不崩溃整个 triage-loop，返回 ok:false 让上层处理。
   const msg = e?.message ?? String(e)
-  log(`#${item.id} 处理失败（已捕获，跳过该项）: ${msg}`)
-  return { ok: false, prNumber: null, merged: false, followupCount: 0, error: msg }
+  log(`#${item.id} 处理失败（已捕获）: ${msg}`)
+
+  // 失败改动保护：把工作区已有改动 commit + push 到 feature 分支（WIP），
+  // 否则下一轮 BranchCheck 的 `git checkout -f dev` 会丢掉它们——
+  // 本次 #49 案例就是代码全写完、751 测试全过，只因 format 卡，改动差点被丢。
+  // 内层 try/catch 包住：保护本身失败也不让异常逃出 process-item。
+  let savedBranch = null
+  try {
+    const saveResult = await agent(
+      `process-item 处理 #${item.id} 失败了，但工作区可能有有价值的改动（如代码已写完只是某步卡住）。\n` +
+      `**抢救改动，别让它被下一轮 \`git checkout -f dev\` 丢掉：**\n` +
+      `1. \`git status --porcelain\`——没有任何改动就返回 { saved:false, reason:"无改动" }\n` +
+      `2. 有改动 → 确认当前在 feature 分支 \`${workBranch}\`（不是 dev/main）；若不在则返回 { saved:false, reason:"不在 feature 分支" }\n` +
+      `3. \`git add -A\` → \`git commit -m "wip: #${item.id} 处理中断保存"\`\n` +
+      `4. \`git push -u origin ${workBranch}\`（推远端彻底安全；push 失败也没关系，本地 commit 已保住）\n` +
+      `回报 schema：{ saved: boolean, branch?: string, reason?: string }`,
+      { phase: 'BranchCheck', agentType: 'general-purpose', schema: {
+        type: 'object', required: ['saved'],
+        properties: { saved: { type: 'boolean' }, branch: { type: 'string' }, reason: { type: 'string' } },
+      } }
+    )
+    if (saveResult?.saved) savedBranch = saveResult.branch || workBranch
+    log(`#${item.id} 失败改动保护: ${JSON.stringify(saveResult)}`)
+  } catch (se) {
+    log(`#${item.id} 改动保护也失败（忽略）: ${se?.message ?? String(se)}`)
+  }
+
+  log(`#${item.id} 最终: ok=false, savedBranch=${savedBranch ?? 'none'}`)
+  return { ok: false, prNumber: null, merged: false, followupCount: 0, error: msg, savedBranch }
 }

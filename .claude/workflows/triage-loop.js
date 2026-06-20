@@ -73,6 +73,9 @@ const opts = {
   prsOnly: Boolean(args.prsOnly ?? args['prs-only']),
   labels: parseLabels(args.labels),
   dryRun: Boolean(args.dryRun ?? args['dry-run']),
+  // 默认：item 没成功合并到 dev 就停止整个循环（用户要求「必须合并+同步 dev 才能跑下一个」）。
+  // 传 --continue-on-unmerged 才在未合并/失败时跳过该项继续下一个（批量吞吐模式）。
+  continueOnUnmerged: Boolean(args.continueOnUnmerged ?? args['continue-on-unmerged']),
 }
 
 log(`opts: ${JSON.stringify(opts)}`)
@@ -126,12 +129,23 @@ while (processed + skipped < opts.max) {
     continue
   }
 
-  if (result && result.ok) {
-    log(`  ✓ #${item.id} 完成: pr=#${result.prNumber ?? 'n/a'}, merged=${result.merged ?? false}, followup=${result.followupCount ?? 0}`)
+  // 只有「成功合并到 dev」才算真正完成、才继续下一个 item。
+  if (result && result.ok && result.merged) {
+    log(`  ✓ #${item.id} 已合并到 dev: pr=#${result.prNumber ?? 'n/a'}, followup=${result.followupCount ?? 0}`)
     processed++
   } else {
-    log(`  ✗ #${item.id} 未完成: ${result?.error ?? 'unknown'}`)
+    // 未合并（留人工/REQUEST_CHANGES/NONE/冲突）或失败 —— 默认停止整个循环，等人工处理
+    const why = !result?.ok
+      ? `失败: ${result?.error ?? 'unknown'}${result?.savedBranch ? `（改动已存 ${result.savedBranch}）` : ''}`
+      : `处理完但未合并: ${result?.mergeReason ?? '留人工'}（pr=#${result?.prNumber ?? 'n/a'}）`
     skipped++
+    if (opts.continueOnUnmerged) {
+      log(`  ⏭ #${item.id} ${why} —— --continue-on-unmerged 已开，跳过该项继续下一个`)
+    } else {
+      log(`  ⏸ #${item.id} ${why}`)
+      log(`未成功合并到 dev，按默认停止循环（要无视未合并继续下一个，加 --continue-on-unmerged）。processed=${processed}, skipped=${skipped}`)
+      break
+    }
   }
 }
 
