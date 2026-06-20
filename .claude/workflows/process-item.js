@@ -66,7 +66,12 @@ const SKIP_BDD_KINDS = new Set(['refactor', 'docs', 'fix-ci', 'fix-review', 'sta
 const NEEDS_PLANNER_KINDS = new Set(['feature'])
 // —— 内联结束
 
-const item = args.item
+// args 容错：harness 有时把 args 序列化成 JSON 字符串传入（见 triage-loop.js 同款处理）。
+const A = (typeof args === 'string')
+  ? (() => { try { return JSON.parse(args) } catch { return {} } })()
+  : (args || {})
+
+const item = A.item
 if (!item) throw new Error('process-item: args.item 必填')
 
 // 在主仓库工作目录唯一生成 feature 分支名（BranchCheck 与 Merge & Sync 共用同一个名字，
@@ -303,8 +308,8 @@ try {
   //   最多 maxReviewRounds 轮，防止无限循环（每轮含等 CI + bot review + 修复，注意 budget）。
   //
   // **收紧门禁（用户要求）**：只有 bot 明确 APPROVE 才自动合并；REQUEST_CHANGES / NONE 一律不自动合。
-  const reviewTimeoutMs = args.reviewTimeoutMs ?? 900000  // 默认 15 分钟
-  const maxReviewRounds = args.maxReviewRounds ?? 3
+  const reviewTimeoutMs = Number(A.reviewTimeoutMs ?? 900000) || 900000  // 默认 15 分钟
+  const maxReviewRounds = Number(A.maxReviewRounds ?? 3) || 3
   const pollCount = Math.max(3, Math.floor(reviewTimeoutMs / 20000))  // shell seq 控制轮询次数，间隔 20s
   const REVIEW_SCHEMA = {
     type: 'object',
