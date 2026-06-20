@@ -1,7 +1,9 @@
 using System.Text.Json;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using TenE0.Core.Errors;
 using TenE0.Core.Permissions.Behaviors;
 
@@ -187,7 +189,12 @@ public sealed class TenE0ExceptionHandlerTests
     // ── Helpers ────────────────────────────────────────────────
 
     private static TenE0ExceptionHandler CreateHandler() =>
-        new(new DefaultApiErrorMapper(), NullLogger<TenE0ExceptionHandler>.Instance);
+        // #49 ctor signature now requires an IOptions<JsonOptions>; pass a
+        // default instance so #39 unit tests keep their existing semantics.
+        new(
+            new DefaultApiErrorMapper(),
+            NullLogger<TenE0ExceptionHandler>.Instance,
+            Options.Create(new JsonOptions()));
 
     private static HttpContext NewHttpContext()
     {
