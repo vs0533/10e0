@@ -50,6 +50,7 @@ Workflow({ name: "process-item", args: { item: { id: 42, type: "issue", ... } } 
 | `dry-run` | bool | false | 仅显示将处理什么，不实际派单 |
 | `reviewTimeoutMs` | int | 900000 | process-item 每轮等 CI/review 的超时（15 分钟） |
 | `maxReviewRounds` | int | 3 | process-item review-fix 循环最多重试轮数（REQUEST_CHANGES→修+push→重等 的上限） |
+| `continueOnUnmerged` | bool | false | 默认 item 没成功合并到 dev 就停止整个循环（必须合并+同步 dev 才跑下一个）；开此项则未合并/失败时跳过该项继续 |
 
 ## 派单策略（dispatchKind）
 
@@ -193,6 +194,9 @@ Followup from #<pr-number>: <review 反馈摘要>
 | 自动合并不生效，PR 停在 open | branch protection 要求人工 approve，merge API 422 | 预期行为：Merge & Sync 标 `reason="需人工 approve"` 跳过，需人工合并 |
 | `--dry-run` 重复打印同一项 N 次 | 旧版 dry-run 进 while 循环 rank N 次（Bug D） | 已修：dry-run 只 rank 一次列出整个队列后 return |
 | Watch Review 阶段 CI 早绿却空转卡死 >40min | 旧版让 LLM 自己数 sleep 次数轮询，MiniMax-M3 不可靠（Bug H） | 已修：Watch/Merge 改用确定性 `for i in $(seq 1 N)` shell 循环控制次数，LLM 只执行命令不数数 |
+| item 代码全写完、测试全过，只因缺末尾换行被整个跳过 | TDD-Verify/Tests 的 `dotnet format` 是 `--verify-no-changes` 只验证不修复（小模型必漏换行） | 已修：format 改「先 `dotnet format` 自动修复，再 `--verify-no-changes` 确认」（#49 案例：751 测试全过只卡 formatOk=false） |
+| 失败 item 的改动下一轮被 `checkout -f dev` 丢光 | catch 块没保存就交给 BranchCheck 强切 | 已修：catch 块先 `git add -A && commit && push` WIP 到 feature 分支保住改动，返回 `savedBranch` |
+| `--max 1` 却看到 process-item 跑「两轮」 | UI 显示 process-item 内部 8 个子 agent 阶段，非真重复派单（运行记录 processed=0,skipped=1） | 非 bug，是 UI 显示内部阶段；真要「未合并不继续」用默认 stopOnUnmerged 行为 |
 | 同一 issue 被重做、PR 与 dev 冲突、自愈循环空转 | 已合并 PR 没写 `Closes #N` → issue 遗留 open 被下轮重复处理（#51→#55→#58） | 已修：Open PR 对 issue 强制写 `Closes #<id>`；自愈循环每轮先查 `mergeable`，`CONFLICTING/DIRTY` 立即停留人工 |
 
 ## 相关资源
