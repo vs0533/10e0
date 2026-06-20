@@ -1,6 +1,5 @@
 using Microsoft.EntityFrameworkCore;
 using TenE0.Api.Domain;
-using TenE0.Core.Auth.Jwt.Storage;
 using TenE0.Core.Hosting;
 using TenE0.Core.Permissions.Storage;
 

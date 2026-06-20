@@ -1,4 +1,3 @@
-using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using TenE0.Core.Abstractions;
 using TenE0.Core.Auth.Jwt.Commands;
@@ -6,7 +5,6 @@ using TenE0.Core.Auth.Jwt.Services;
 using TenE0.Core.Auth.Jwt.Storage;
 using TenE0.Core.Errors;
 using TenE0.Core.Permissions.Storage;
-using Moq;
 
 namespace TenE0.Core.Tests.Auth.Jwt.Commands;
 

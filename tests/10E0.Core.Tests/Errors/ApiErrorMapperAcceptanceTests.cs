@@ -1,5 +1,3 @@
-using Microsoft.EntityFrameworkCore;
-using TenE0.Core.Common;
 using TenE0.Core.Errors;
 using TenE0.Core.Permissions.Behaviors;
 

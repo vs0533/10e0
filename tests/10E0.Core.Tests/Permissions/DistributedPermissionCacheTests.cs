@@ -4,7 +4,6 @@ using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Options;
 using TenE0.Core.Caching;
 using TenE0.Core.Permissions;
-using Moq;
 
 namespace TenE0.Core.Tests.Permissions;
 

@@ -1,6 +1,5 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Memory;
-using TenE0.Core.Permissions.Storage;
 
 namespace TenE0.Core.Permissions.Storage;
 

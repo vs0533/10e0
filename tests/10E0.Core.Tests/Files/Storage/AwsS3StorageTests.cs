@@ -1,8 +1,6 @@
 using Amazon.S3;
 using Amazon.S3.Model;
 using Microsoft.Extensions.Options;
-using Moq;
-using TenE0.Core.Files;
 using TenE0.Core.Files.Storage;
 
 namespace TenE0.Core.Tests.Files.Storage;

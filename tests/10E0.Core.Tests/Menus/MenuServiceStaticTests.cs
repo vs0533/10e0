@@ -2,7 +2,6 @@ using System.Reflection;
 using TenE0.Core.Menus;
 using TenE0Menu = TenE0.Core.Menus.Storage.TenE0Menu;
 using StorageMenuType = TenE0.Core.Menus.Storage.MenuType;
-using Microsoft.EntityFrameworkCore;
 
 namespace TenE0.Core.Tests.Menus;
 

@@ -1,8 +1,5 @@
 using Microsoft.Data.Sqlite;
-using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
-using Microsoft.EntityFrameworkCore.Metadata;
-using Moq;
 using TenE0.Core.Abstractions;
 using TenE0.Core.DataContext;
 using TenE0.Core.DynamicFilters;

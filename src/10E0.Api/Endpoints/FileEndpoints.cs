@@ -1,4 +1,3 @@
-using Microsoft.AspNetCore.Http;
 using TenE0.Core.Abstractions;
 using TenE0.Core.Common;
 using TenE0.Core.Errors;

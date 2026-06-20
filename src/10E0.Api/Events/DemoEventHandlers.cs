@@ -1,4 +1,3 @@
-using Microsoft.Extensions.Logging;
 using TenE0.Core.Events;
 
 namespace TenE0.Api.Events;

@@ -6,10 +6,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
-using TenE0.Core.Abstractions;
 using TenE0.Core.Auth.Jwt.Storage;
-using TenE0.Core.DynamicFilters;
-using TenE0.Core.Permissions.DataFilter;
 
 namespace TenE0.Api.Tests;
 

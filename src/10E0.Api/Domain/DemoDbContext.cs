@@ -2,11 +2,8 @@ using System.Linq.Expressions;
 using System.Security.Claims;
 using Microsoft.EntityFrameworkCore;
 using TenE0.Core.Abstractions;
-using TenE0.Core.Auth.Jwt.Storage;
 using TenE0.Core.DataContext;
 using TenE0.Core.DynamicFilters;
-using TenE0.Core.DynamicFilters.Storage;
-using TenE0.Core.Organizations;
 using TenE0.Core.Permissions.DataFilter;
 using TenE0.Core.Permissions.Storage;
 

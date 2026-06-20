@@ -1,4 +1,3 @@
-using FluentAssertions;
 using TenE0.Core.Abstractions;
 using TenE0.Core.Auth;
 

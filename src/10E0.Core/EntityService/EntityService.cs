@@ -1,8 +1,6 @@
 using System.Collections.Concurrent;
 using System.Reflection;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.ChangeTracking;
-using Microsoft.EntityFrameworkCore.Metadata;
 using TenE0.Core.Abstractions;
 using TenE0.Core.EntityService.Relations;
 using TenE0.Core.Permissions;
