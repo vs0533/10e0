@@ -1,5 +1,4 @@
 using System.Data.Common;
-using System.Reflection;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using TenE0.Core.DataContext;
@@ -13,10 +12,36 @@ namespace TenE0.Core.DynamicFilters;
 /// 使用原始 ADO.NET 连接读取过滤规则（绕过 DbContext，避免 OnModelCreating 递归），
 /// 然后在 OnModelCreating 阶段通过 <see cref="FilterExpressionBuilder"/> 将 JSON 规则
 /// 编译为 EF Named Query Filter 注册到模型中。
+///
+/// DbProviderFactory 解析走两层：
+/// 1. <see cref="DbProviderFactories"/> 全局注册表（调用方可用 RegisterFactory 注册）
+/// 2. DI 注入的 <see cref="IDbProviderFactoryDescriptor"/> 集合（框架默认注册 4 个内置 descriptor，
+///    业务可注册自定义 descriptor 接入达梦 / 人大金仓 / OceanBase 等国产 DB）
 /// </summary>
-public sealed class DynamicFilterProvider(ILogger<DynamicFilterProvider> logger) : IDynamicFilterProvider
+public sealed class DynamicFilterProvider : IDynamicFilterProvider
 {
+    private readonly ILogger<DynamicFilterProvider> _logger;
+    private readonly IReadOnlyDictionary<string, IDbProviderFactoryDescriptor> _descriptorsByName;
     private List<TenE0DataFilterRule> _rules = [];
+
+    /// <summary>
+    /// 构造默认实例。
+    /// </summary>
+    /// <param name="logger">日志记录器。</param>
+    /// <param name="descriptors">
+    /// 可选的 <see cref="IDbProviderFactoryDescriptor"/> 集合，由 DI 容器注入。
+    /// 默认 <c>null</c>（向后兼容旧测试 / 无 DI 场景）；若为 <c>null</c> 或空集合，
+    /// <see cref="ResolveFactory"/> 仅依赖 <see cref="DbProviderFactories"/> 注册表。
+    /// </param>
+    public DynamicFilterProvider(
+        ILogger<DynamicFilterProvider> logger,
+        IEnumerable<IDbProviderFactoryDescriptor>? descriptors = null)
+    {
+        _logger = logger;
+        _descriptorsByName = descriptors is null
+            ? new Dictionary<string, IDbProviderFactoryDescriptor>(StringComparer.OrdinalIgnoreCase)
+            : descriptors.ToDictionary(d => d.Name, StringComparer.OrdinalIgnoreCase);
+    }
 
     // ------------------------------------------------------------------
     // 规则加载（ADO.NET 直连，不走 DbContext）
@@ -50,12 +75,12 @@ public sealed class DynamicFilterProvider(ILogger<DynamicFilterProvider> logger)
             }
 
             _rules = rules;
-            logger.LogInformation("已加载 {Count} 条动态数据过滤规则", rules.Count);
+            _logger.LogInformation("已加载 {Count} 条动态数据过滤规则", rules.Count);
         }
         catch (Exception ex)
         {
             // InMemory 数据库、连接失败、表不存在等情况均 graceful 降级为空规则集
-            logger.LogWarning(ex, "无法从数据库加载动态过滤规则，将以空规则集运行");
+            _logger.LogWarning(ex, "无法从数据库加载动态过滤规则，将以空规则集运行");
             _rules = [];
         }
     }
@@ -83,7 +108,7 @@ public sealed class DynamicFilterProvider(ILogger<DynamicFilterProvider> logger)
 
             if (entityType is null)
             {
-                logger.LogWarning(
+                _logger.LogWarning(
                     "实体类型 '{TypeName}' 在当前 DbContext 模型中不存在，跳过其过滤规则",
                     group.Key);
                 continue;
@@ -105,13 +130,13 @@ public sealed class DynamicFilterProvider(ILogger<DynamicFilterProvider> logger)
                     var filterName = $"DynamicFilter:{rule.Id}";
                     entityType.SetQueryFilter(filterName, filter);
 
-                    logger.LogDebug(
+                    _logger.LogDebug(
                         "已注册动态过滤器 '{FilterName}' → 实体 '{EntityType}'",
                         filterName, entityType.ClrType.Name);
                 }
                 catch (Exception ex)
                 {
-                    logger.LogError(ex,
+                    _logger.LogError(ex,
                         "构建过滤规则 '{RuleId}'（实体 '{EntityType}'）失败，已跳过",
                         rule.Id, entityType.ClrType.Name);
                 }
@@ -127,9 +152,9 @@ public sealed class DynamicFilterProvider(ILogger<DynamicFilterProvider> logger)
     /// 根据 providerName 创建对应的 ADO.NET 连接。
     ///
     /// 优先查询 <see cref="DbProviderFactories"/> 注册表；
-    /// 若未注册则回退到已知提供程序的反射发现（Instance 单例字段）。
+    /// 若未注册则回退到 DI 注入的 <see cref="IDbProviderFactoryDescriptor"/> 集合（按 <c>Name</c> 匹配）。
     /// </summary>
-    private static DbConnection CreateDbConnection(string connectionString, string providerName)
+    private DbConnection CreateDbConnection(string connectionString, string providerName)
     {
         var factory = ResolveFactory(providerName);
         var conn = factory.CreateConnection()
@@ -139,9 +164,10 @@ public sealed class DynamicFilterProvider(ILogger<DynamicFilterProvider> logger)
     }
 
     /// <summary>
-    /// 解析 DbProviderFactory：注册表 → 已知提供程序反射回退。
+    /// 解析 DbProviderFactory：注册表 → DI 注入的 descriptor 集合。
+    /// 公开为 <c>internal</c> 便于测试覆盖。
     /// </summary>
-    private static DbProviderFactory ResolveFactory(string providerName)
+    internal DbProviderFactory ResolveFactory(string providerName)
     {
         // 1. 尝试 DbProviderFactories 注册表（调用方可在启动时 RegisterFactory）
         try
@@ -153,44 +179,16 @@ public sealed class DynamicFilterProvider(ILogger<DynamicFilterProvider> logger)
             // 未注册，继续尝试回退
         }
 
-        // 2. 已知 EF Core 提供程序 → 反射获取 Instance 单例
-        if (s_knownFactories.TryGetValue(providerName, out var factoryTypeRef))
+        // 2. DI 注入的 IDbProviderFactoryDescriptor 集合（框架默认注册 4 个内置 descriptor，
+        //    业务可再注册国产 DB descriptor）。Name 比较大小写不敏感。
+        if (_descriptorsByName.TryGetValue(providerName, out var descriptor))
         {
-            var type = Type.GetType(factoryTypeRef, throwOnError: false);
-            var instance = type?
-                .GetField("Instance", BindingFlags.Public | BindingFlags.Static)?
-                .GetValue(null) as DbProviderFactory;
-
-            if (instance is not null) return instance;
+            return descriptor.Factory;
         }
 
         throw new NotSupportedException(
             $"数据库提供程序 '{providerName}' 未注册。" +
             "请在应用启动时调用 DbProviderFactories.RegisterFactory() 注册对应工厂，" +
-            "或在 Add10E0Core 配置中使用受支持的提供程序名称。");
+            $"或注入自定义 IDbProviderFactoryDescriptor（当前已知: {string.Join(", ", _descriptorsByName.Keys)}）。");
     }
-
-    /// <summary>
-    /// 已知 EF Core 数据库提供程序 → 其 DbProviderFactory 类型的 AssemblyQualifiedName。
-    /// 用于在未显式注册 DbProviderFactories 时通过反射回退发现工厂单例。
-    /// </summary>
-    private static readonly Dictionary<string, string> s_knownFactories = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ["Microsoft.Data.SqlClient"] =
-            "Microsoft.Data.SqlClient.SqlClientFactory, Microsoft.Data.SqlClient",
-        ["SqlServer"] =
-            "Microsoft.Data.SqlClient.SqlClientFactory, Microsoft.Data.SqlClient",
-        ["Npgsql"] =
-            "Npgsql.NpgsqlFactory, Npgsql",
-        ["PostgreSQL"] =
-            "Npgsql.NpgsqlFactory, Npgsql",
-        ["MySqlConnector"] =
-            "MySqlConnector.MySqlConnectorFactory, MySqlConnector",
-        ["MySql"] =
-            "MySqlConnector.MySqlConnectorFactory, MySqlConnector",
-        ["Microsoft.Data.Sqlite"] =
-            "Microsoft.Data.Sqlite.SqliteFactory, Microsoft.Data.Sqlite",
-        ["SQLite"] =
-            "Microsoft.Data.Sqlite.SqliteFactory, Microsoft.Data.Sqlite",
-    };
 }
