@@ -44,12 +44,22 @@ public static class FilesExtensions
     /// <summary>
     /// 添加文件上传功能（使用阿里云 OSS）。
     /// TContext 同 <see cref="AddTenE0Files{TContext}"/>。
+    /// <para>
+    /// 配置通过 <c>AddOptions&lt;AliyunOssOptions&gt;().ValidateOnStart()</c>
+    /// 在启动期校验：必填字段为空或含占位符模式
+    /// （<c>TODO</c> / <c>CHANGE_ME</c> / <c>PLACEHOLDER</c> / <c>your-</c>）
+    /// 时聚合所有错误并抛 <see cref="Microsoft.Extensions.Options.OptionsValidationException"/>，
+    /// 比 PR #6 早期"构造函数内 Validate()"更早暴露问题。
+    /// </para>
     /// </summary>
     public static IServiceCollection AddTenE0FilesWithAliyunOss<TContext>(this IServiceCollection services, Action<AliyunOssOptions> configure)
         where TContext : DbContext
     {
         services.TryAddSingleton(TimeProvider.System);
-        services.Configure(configure);
+        services.AddOptions<AliyunOssOptions>()
+            .Configure(configure)
+            .Validate(options => new AliyunOssOptionsValidator().Validate(null, options).Succeeded)
+            .ValidateOnStart();
         services.AddScoped<IFileStorage>(sp => new AliyunOssStorage(
             sp.GetRequiredService<TimeProvider>(),
             sp.GetRequiredService<IOptions<AliyunOssOptions>>().Value));
@@ -62,12 +72,22 @@ public static class FilesExtensions
     /// <summary>
     /// 添加文件上传功能（使用 AWS S3）。
     /// TContext 同 <see cref="AddTenE0Files{TContext}"/>。
+    /// <para>
+    /// 配置通过 <c>AddOptions&lt;AwsS3Options&gt;().ValidateOnStart()</c>
+    /// 在启动期校验：必填字段为空或含占位符模式
+    /// （<c>TODO</c> / <c>CHANGE_ME</c> / <c>PLACEHOLDER</c> / <c>your-</c>）
+    /// 时聚合所有错误并抛 <see cref="Microsoft.Extensions.Options.OptionsValidationException"/>，
+    /// 比 PR #6 早期"构造函数内 Validate()"更早暴露问题。
+    /// </para>
     /// </summary>
     public static IServiceCollection AddTenE0FilesWithAwsS3<TContext>(this IServiceCollection services, Action<AwsS3Options> configure)
         where TContext : DbContext
     {
         services.TryAddSingleton(TimeProvider.System);
-        services.Configure(configure);
+        services.AddOptions<AwsS3Options>()
+            .Configure(configure)
+            .Validate(options => new AwsS3OptionsValidator().Validate(null, options).Succeeded)
+            .ValidateOnStart();
         services.TryAddScoped<IFileStorage, AwsS3Storage>();
         services.TryAddScoped<IImageProcessor, ImageProcessor>();
         services.TryAddScoped<IFileService, FileService<TContext>>();
