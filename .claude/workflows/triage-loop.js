@@ -67,15 +67,23 @@ phase('Rank')
 
 // args 命名约定容错：harness 可能在 kebab-case 与 camelCase 间转换。
 // 优先 camelCase（CLAUDE.md / skill 文档约定），fallback 到 kebab-case。
+// args 容错：harness 有时把整个 args 序列化成 JSON 字符串传入（实测 `/triage --max 2`
+// 收到 args="{\"max\":2}" 字符串 → args.max=undefined → 走默认 3 → 多跑一个 item）。
+// 先规范化成对象，再读字段。
+const A = (typeof args === 'string')
+  ? (() => { try { return JSON.parse(args) } catch { return {} } })()
+  : (args || {})
+
 const opts = {
-  max: args.max ?? 3,
-  issuesOnly: Boolean(args.issuesOnly ?? args['issues-only']),
-  prsOnly: Boolean(args.prsOnly ?? args['prs-only']),
-  labels: parseLabels(args.labels),
-  dryRun: Boolean(args.dryRun ?? args['dry-run']),
+  // max 强制转数字（args 序列化还会把数字变字符串 "2"，见 triage-workflow-runtime-facts）
+  max: Number(A.max ?? 3) || 3,
+  issuesOnly: Boolean(A.issuesOnly ?? A['issues-only']),
+  prsOnly: Boolean(A.prsOnly ?? A['prs-only']),
+  labels: parseLabels(A.labels),
+  dryRun: Boolean(A.dryRun ?? A['dry-run']),
   // 默认：item 没成功合并到 dev 就停止整个循环（用户要求「必须合并+同步 dev 才能跑下一个」）。
   // 传 --continue-on-unmerged 才在未合并/失败时跳过该项继续下一个（批量吞吐模式）。
-  continueOnUnmerged: Boolean(args.continueOnUnmerged ?? args['continue-on-unmerged']),
+  continueOnUnmerged: Boolean(A.continueOnUnmerged ?? A['continue-on-unmerged']),
 }
 
 log(`opts: ${JSON.stringify(opts)}`)
