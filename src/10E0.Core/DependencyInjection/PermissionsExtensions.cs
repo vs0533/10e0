@@ -3,7 +3,6 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using TenE0.Core.Abstractions;
-using TenE0.Core.Caching;
 using TenE0.Core.Permissions;
 using TenE0.Core.Permissions.Behaviors;
 using TenE0.Core.Permissions.DataFilter;
