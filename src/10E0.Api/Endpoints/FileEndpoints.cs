@@ -74,13 +74,19 @@ internal static class FileEndpoints
 
         app.MapDelete("/files/{id}", async (string id, IFileService fileSvc, CancellationToken ct) =>
         {
-            var deleted = await fileSvc.DeleteAsync(id, ct);
-            if (!deleted)
+            var result = await fileSvc.DeleteAsync(id, ct);
+            if (!result.MetadataDeleted)
             {
                 return Results.NotFound(new { error = "文件不存在或已删除" });
             }
 
-            return Results.Ok(new { message = "删除成功" });
+            // 元数据已软删除，但物理文件可能残留（OSS/S3 故障 / 权限过期）。
+            // 仍向客户端返回 200 + 警告字段，让上层做补偿清理（issue #9 Part 2）。
+            return Results.Ok(new
+            {
+                message = "删除成功",
+                storageDeleted = result.StorageDeleted
+            });
         })
         .WithName("DeleteFile")
         .WithDescription("删除文件");

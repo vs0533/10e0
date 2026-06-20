@@ -471,8 +471,9 @@ public sealed class FileServiceTests
         // Act
         var result = await sut.DeleteAsync(fileId);
 
-        // Assert
-        result.Should().BeTrue();
+        // Assert — issue #9 Part 2: 返回 DeleteResult 而非 bool
+        result.MetadataDeleted.Should().BeTrue();
+        result.StorageDeleted.Should().BeTrue();
 
         await using var verifyCtx = factory.CreateDbContext();
         var deleted = await verifyCtx.FileAttachments.FindAsync(fileId);
@@ -498,8 +499,9 @@ public sealed class FileServiceTests
         // Act
         var result = await sut.DeleteAsync("nonexistent");
 
-        // Assert
-        result.Should().BeFalse();
+        // Assert — 文件不存在：两个维度都视为"未删除"
+        result.MetadataDeleted.Should().BeFalse();
+        result.StorageDeleted.Should().BeFalse();
         storage.Verify(s => s.DeleteAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
@@ -538,8 +540,9 @@ public sealed class FileServiceTests
         // Act
         var result = await sut.DeleteAsync(fileId);
 
-        // Assert
-        result.Should().BeFalse();
+        // Assert — 已软删除：两个维度都视为"未删除"，幂等
+        result.MetadataDeleted.Should().BeFalse();
+        result.StorageDeleted.Should().BeFalse();
         storage.Verify(s => s.DeleteAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
@@ -583,8 +586,9 @@ public sealed class FileServiceTests
         // Act
         var result = await sut.DeleteAsync(fileId);
 
-        // Assert
-        result.Should().BeTrue();
+        // Assert — 元数据已软删除，但 storage 删除失败 → MetadataDeleted=true, StorageDeleted=false
+        result.MetadataDeleted.Should().BeTrue();
+        result.StorageDeleted.Should().BeFalse();
 
         await using var verifyCtx = factory.CreateDbContext();
         var deleted = await verifyCtx.FileAttachments.FindAsync(fileId);
@@ -630,8 +634,9 @@ public sealed class FileServiceTests
         // Act
         var result = await sut.DeleteAsync(fileId);
 
-        // Assert
-        result.Should().BeTrue();
+        // Assert — 主文件 + 缩略图都删除成功
+        result.MetadataDeleted.Should().BeTrue();
+        result.StorageDeleted.Should().BeTrue();
         storage.Verify(s => s.DeleteAsync("/files/with-thumb.jpg", It.IsAny<CancellationToken>()), Times.Once);
         storage.Verify(s => s.DeleteAsync("/files/thumb_with-thumb.jpg", It.IsAny<CancellationToken>()), Times.Once);
     }
@@ -799,5 +804,222 @@ public sealed class FileServiceTests
 
         // Assert
         url.Should().BeNull();
+    }
+
+    // ──────────────────────────────────────────
+    // DeleteResult — issue #9 Part 2: 区分 metadata 删除 vs storage 删除
+    // ──────────────────────────────────────────
+
+    [Fact]
+    public async Task DeleteAsync_BothSucceed_ReturnsDeleteResultWithBothTrue()
+    {
+        // Arrange
+        var dbName = Guid.NewGuid().ToString("N");
+        var fileId = Guid.NewGuid().ToString("N");
+        var attachment = new TenE0FileAttachment
+        {
+            Id = fileId,
+            FileName = "happy-path.txt",
+            StoragePath = "/files/happy-path.txt",
+            ContentType = "text/plain",
+            StorageBackend = "Local",
+            FileSize = 10
+        };
+
+        var factory = CreateFactory(dbName);
+        await using (var seedCtx = factory.CreateDbContext())
+        {
+            seedCtx.FileAttachments.Add(attachment);
+            await seedCtx.SaveChangesAsync();
+        }
+
+        var storage = new Mock<IFileStorage>(MockBehavior.Loose);
+        storage.Setup(s => s.DeleteAsync("/files/happy-path.txt", It.IsAny<CancellationToken>()))
+               .ReturnsAsync(true);
+
+        var sut = new FileService<TestFileDbContext>(
+            factory,
+            storage.Object,
+            Mock.Of<IImageProcessor>(),
+            NullLogger<FileService<TestFileDbContext>>.Instance);
+
+        // Act
+        DeleteResult result = await sut.DeleteAsync(fileId);
+
+        // Assert
+        result.Should().NotBeNull();
+        result.MetadataDeleted.Should().BeTrue("软删除元数据应成功");
+        result.StorageDeleted.Should().BeTrue("storage 物理删除应成功");
+
+        await using var verifyCtx = factory.CreateDbContext();
+        var deleted = await verifyCtx.FileAttachments.FindAsync(fileId);
+        deleted!.IsDeleted.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task DeleteAsync_StorageFails_StillMarksMetadataAndReturnsStorageDeletedFalse()
+    {
+        // Arrange
+        var dbName = Guid.NewGuid().ToString("N");
+        var fileId = Guid.NewGuid().ToString("N");
+        var attachment = new TenE0FileAttachment
+        {
+            Id = fileId,
+            FileName = "partial-fail.txt",
+            StoragePath = "/files/partial-fail.txt",
+            ContentType = "text/plain",
+            StorageBackend = "Local",
+            FileSize = 20
+        };
+
+        var factory = CreateFactory(dbName);
+        await using (var seedCtx = factory.CreateDbContext())
+        {
+            seedCtx.FileAttachments.Add(attachment);
+            await seedCtx.SaveChangesAsync();
+        }
+
+        var storage = new Mock<IFileStorage>(MockBehavior.Loose);
+        // storage 删除失败（OSS/S3 SDK 抛异常被 catch → false）
+        storage.Setup(s => s.DeleteAsync("/files/partial-fail.txt", It.IsAny<CancellationToken>()))
+               .ReturnsAsync(false);
+
+        var logger = NullLogger<FileService<TestFileDbContext>>.Instance;
+
+        var sut = new FileService<TestFileDbContext>(
+            factory,
+            storage.Object,
+            Mock.Of<IImageProcessor>(),
+            logger);
+
+        // Act
+        DeleteResult result = await sut.DeleteAsync(fileId);
+
+        // Assert — 调用方可观察到 storage 失败，便于重试/上报
+        result.Should().NotBeNull();
+        result.MetadataDeleted.Should().BeTrue("元数据软删除应仍成功");
+        result.StorageDeleted.Should().BeFalse("storage 物理删除失败时必须明确报告");
+
+        await using var verifyCtx = factory.CreateDbContext();
+        var verify = await verifyCtx.FileAttachments.FindAsync(fileId);
+        verify!.IsDeleted.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task DeleteAsync_MissingFile_ReturnsDeleteResultWithBothFalse()
+    {
+        // Arrange
+        var dbName = Guid.NewGuid().ToString("N");
+        var storage = new Mock<IFileStorage>(MockBehavior.Strict);
+
+        var factory = CreateFactory(dbName);
+
+        var sut = new FileService<TestFileDbContext>(
+            factory,
+            storage.Object,
+            Mock.Of<IImageProcessor>(),
+            NullLogger<FileService<TestFileDbContext>>.Instance);
+
+        // Act
+        DeleteResult result = await sut.DeleteAsync("nonexistent");
+
+        // Assert — 文件不存在时 metadata 和 storage 都不算"删除成功"
+        result.Should().NotBeNull();
+        result.MetadataDeleted.Should().BeFalse();
+        result.StorageDeleted.Should().BeFalse();
+
+        // 不应触发任何 storage 调用
+        storage.Verify(s => s.DeleteAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task DeleteAsync_AlreadySoftDeleted_ReturnsDeleteResultWithBothFalse()
+    {
+        // Arrange
+        var dbName = Guid.NewGuid().ToString("N");
+        var fileId = Guid.NewGuid().ToString("N");
+        var attachment = new TenE0FileAttachment
+        {
+            Id = fileId,
+            FileName = "ghost.txt",
+            StoragePath = "/files/ghost.txt",
+            ContentType = "text/plain",
+            StorageBackend = "Local",
+            FileSize = 5,
+            IsDeleted = true
+        };
+
+        var factory = CreateFactory(dbName);
+        await using (var seedCtx = factory.CreateDbContext())
+        {
+            seedCtx.FileAttachments.Add(attachment);
+            await seedCtx.SaveChangesAsync();
+        }
+
+        var storage = new Mock<IFileStorage>(MockBehavior.Strict);
+
+        var sut = new FileService<TestFileDbContext>(
+            factory,
+            storage.Object,
+            Mock.Of<IImageProcessor>(),
+            NullLogger<FileService<TestFileDbContext>>.Instance);
+
+        // Act
+        DeleteResult result = await sut.DeleteAsync(fileId);
+
+        // Assert — 已软删除的视为"不存在"，返回全 false，幂等
+        result.Should().NotBeNull();
+        result.MetadataDeleted.Should().BeFalse();
+        result.StorageDeleted.Should().BeFalse();
+
+        storage.Verify(s => s.DeleteAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task DeleteAsync_FileWithThumbnail_StorageFailsForThumbnail_ReportsStorageDeletedFalse()
+    {
+        // Arrange — 主文件 storage 删除成功，缩略图失败
+        var dbName = Guid.NewGuid().ToString("N");
+        var fileId = Guid.NewGuid().ToString("N");
+        var attachment = new TenE0FileAttachment
+        {
+            Id = fileId,
+            FileName = "with-thumb.jpg",
+            StoragePath = "/files/with-thumb.jpg",
+            ContentType = "image/jpeg",
+            StorageBackend = "Local",
+            FileSize = 200,
+            ThumbnailPath = "/files/thumb_with-thumb.jpg"
+        };
+
+        var factory = CreateFactory(dbName);
+        await using (var seedCtx = factory.CreateDbContext())
+        {
+            seedCtx.FileAttachments.Add(attachment);
+            await seedCtx.SaveChangesAsync();
+        }
+
+        var storage = new Mock<IFileStorage>(MockBehavior.Loose);
+        storage.Setup(s => s.DeleteAsync("/files/with-thumb.jpg", It.IsAny<CancellationToken>()))
+               .ReturnsAsync(true);
+        storage.Setup(s => s.DeleteAsync("/files/thumb_with-thumb.jpg", It.IsAny<CancellationToken>()))
+               .ReturnsAsync(false);
+
+        var sut = new FileService<TestFileDbContext>(
+            factory,
+            storage.Object,
+            Mock.Of<IImageProcessor>(),
+            NullLogger<FileService<TestFileDbContext>>.Instance);
+
+        // Act
+        DeleteResult result = await sut.DeleteAsync(fileId);
+
+        // Assert — 缩略图删除失败 → StorageDeleted=false（任一失败就算失败）
+        result.Should().NotBeNull();
+        result.MetadataDeleted.Should().BeTrue();
+        result.StorageDeleted.Should().BeFalse();
+
+        storage.Verify(s => s.DeleteAsync("/files/with-thumb.jpg", It.IsAny<CancellationToken>()), Times.Once);
+        storage.Verify(s => s.DeleteAsync("/files/thumb_with-thumb.jpg", It.IsAny<CancellationToken>()), Times.Once);
     }
 }
