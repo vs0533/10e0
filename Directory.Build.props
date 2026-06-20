@@ -11,6 +11,17 @@
     <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
   </PropertyGroup>
 
+  <!-- NuGet 安全审计：精确豁免单个 advisory（其它漏洞审计照常生效） -->
+  <!-- GHSA-2m69-gcr7-jv3q / CVE-2025-6965: SQLitePCLRaw.lib.e_sqlite3 ≤2.1.11 捆绑的
+       SQLite <3.50.2 有聚合项内存损坏漏洞。它是 Microsoft.Data.Sqlite / EF Core Sqlite 10.0.0
+       的传递依赖，仅 tests/10E0.Core.Tests 用于内存 SQLite 测试（非生产代码，实际风险低）。
+       2026-06-20 公告发布后，TreatWarningsAsErrors 把 NU1903 变成 error，restore 失败、阻塞全仓库 CI。
+       上游 SQLitePCLRaw 暂无修复版（advisory: "no solution available yet"），故精确豁免此 advisory。
+       TODO: 上游发布 bundle SQLite≥3.50.2 的版本后，升级依赖并移除此豁免。 -->
+  <ItemGroup>
+    <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-2m69-gcr7-jv3q" />
+  </ItemGroup>
+
   <!-- Source Link: embed git metadata in PDBs for debugger source stepping -->
   <PropertyGroup>
     <PublishRepositoryUrl>true</PublishRepositoryUrl>
