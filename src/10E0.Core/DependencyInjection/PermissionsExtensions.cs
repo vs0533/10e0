@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using TenE0.Core.Abstractions;
+using TenE0.Core.Caching;
 using TenE0.Core.Permissions;
 using TenE0.Core.Permissions.Behaviors;
 using TenE0.Core.Permissions.DataFilter;
@@ -28,6 +29,10 @@ public static class PermissionsExtensions
             services.Configure(configure);
         else
             services.AddOptions<PermissionsOptions>();
+
+        // #42: DistributedPermissionCache 现在依赖 IAtomicCounter + IMultiLevelCache
+        // 这两个抽象。注册默认实现（业务项目可用 services.Replace(...) 覆盖）。
+        services.AddTenE0Caching();
 
         services.TryAddScoped<IPermissionEvaluator, PermissionEvaluator>();
         services.TryAddScoped<IPermissionCache, DistributedPermissionCache>();
