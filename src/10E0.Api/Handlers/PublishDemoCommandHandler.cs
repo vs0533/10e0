@@ -13,7 +13,7 @@ internal sealed class PublishDemoCommandHandler(IDbContextFactory<DemoDbContext>
         var demo = await dc.Demos.FirstOrDefaultAsync(d => d.Id == command.Id, ct);
         if (demo is null)
         {
-            errs.Add("Demo 不存在", code: "NOT_FOUND");
+            errs.Add("Demo 不存在", code: ErrorCodes.NotFound);
             return false;
         }
 

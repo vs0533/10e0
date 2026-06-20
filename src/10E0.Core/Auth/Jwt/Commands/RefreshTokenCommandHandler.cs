@@ -49,7 +49,7 @@ public sealed class RefreshTokenCommandHandler<TUser, TContext>(
 
         if (record is null)
         {
-            errs.Add("refresh token 无效", code: "TOKEN_INVALID");
+            errs.Add("refresh token 无效", code: ErrorCodes.TokenInvalid);
             return null!;
         }
 
@@ -70,20 +70,20 @@ public sealed class RefreshTokenCommandHandler<TUser, TContext>(
             record.RevokedReason = RevokedReasonReuseDetected;
             await dc.SaveChangesAsync(ct);
 
-            errs.Add("refresh token 已撤销，请重新登录", code: "TOKEN_REVOKED");
+            errs.Add("refresh token 已撤销，请重新登录", code: ErrorCodes.TokenRevoked);
             return null!;
         }
 
         if (now >= record.ExpiresAt)
         {
-            errs.Add("refresh token 已过期", code: "TOKEN_EXPIRED");
+            errs.Add("refresh token 已过期", code: ErrorCodes.TokenExpired);
             return null!;
         }
 
         var user = await dc.Set<TUser>().FirstOrDefaultAsync(u => u.UserCode == record.UserCode, ct);
         if (user is null || !user.IsActive)
         {
-            errs.Add("账号不可用", code: "AUTH_DISABLED");
+            errs.Add("账号不可用", code: ErrorCodes.AuthDisabled);
             return null!;
         }
 

@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Options;
+using TenE0.Core.Abstractions;
 using TenE0.Core.Caching;
 
 namespace TenE0.Core.Permissions;
@@ -13,13 +14,16 @@ namespace TenE0.Core.Permissions;
 /// 缓存 key 拼上版本，旧 key 自动失效（靠 TTL 兜底）。
 /// 替代原本"GetString → Parse → +1 → SetString"的非原子三步操作，
 /// 避免并发丢增。
+///
+/// #37: 所有 cache key 都从 <see cref="ICacheKeyNamespace"/> 走，业务方可注入
+/// 多租户 namespace 顶层前缀（如 "acme"），多租户共享 Redis 不串数据。
 /// </summary>
 internal sealed class DistributedPermissionCache(
     IDistributedCache cache,
     IAtomicCounter counter,
+    ICacheKeyNamespace keyNamespace,
     IOptions<PermissionsOptions> options) : IPermissionCache
 {
-    private const string VersionKey = "perm-cache:version";
     private readonly PermissionsOptions _options = options.Value;
 
     public async Task<IReadOnlySet<string>?> GetRolePermissionsAsync(string roleCode, CancellationToken cancellationToken = default)
@@ -50,12 +54,13 @@ internal sealed class DistributedPermissionCache(
     public async Task InvalidateAllAsync(CancellationToken cancellationToken = default)
     {
         // 原子自增：所有并发调用方拿到的都是单调递增的版本号，无丢增风险。
-        await counter.IncrementAsync(VersionKey, cancellationToken);
+        // #37: key 走 ICacheKeyNamespace —— 多租户下 InvalidateAll 只清本租户的版本号。
+        await counter.IncrementAsync(keyNamespace.PermissionVersionKey(), cancellationToken);
     }
 
     private async Task<string> BuildKeyAsync(string roleCode, CancellationToken cancellationToken)
     {
-        var version = await counter.GetAsync(VersionKey, cancellationToken);
-        return $"perm-role:v{version}:{roleCode}";
+        var version = await counter.GetAsync(keyNamespace.PermissionVersionKey(), cancellationToken);
+        return keyNamespace.PermissionRoleKey(version, roleCode);
     }
 }

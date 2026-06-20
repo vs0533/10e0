@@ -33,6 +33,10 @@ public static class PermissionsExtensions
         // 这两个抽象。注册默认实现（业务项目可用 services.Replace(...) 覆盖）。
         services.AddTenE0Caching();
 
+        // #37: DistributedPermissionCache 现在还依赖 ICacheKeyNamespace（多租户 cache key 隔离）。
+        // AddTenE0CoreContracts 用 TryAdd，业务方已注册的（Replace）不会被覆盖。
+        services.AddTenE0CoreContracts();
+
         services.TryAddScoped<IPermissionEvaluator, PermissionEvaluator>();
         services.TryAddScoped<IPermissionCache, DistributedPermissionCache>();
         services.TryAddSingleton<PermissionCatalog>();
