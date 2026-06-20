@@ -1,8 +1,6 @@
-using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using TenE0.Core.Hosting;
-using Moq;
 
 namespace TenE0.Core.Tests.Hosting;
 

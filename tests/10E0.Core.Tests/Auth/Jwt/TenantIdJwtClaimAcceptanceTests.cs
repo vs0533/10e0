@@ -3,7 +3,6 @@ using System.Security.Claims;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Time.Testing;
 using TenE0.Core.Abstractions;
-using TenE0.Core.Auth.Jwt;
 using TenE0.Core.Auth.Jwt.Services;
 
 namespace TenE0.Core.Auth.Jwt.Tests;

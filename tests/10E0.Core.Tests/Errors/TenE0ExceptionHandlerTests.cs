@@ -1,9 +1,7 @@
 using System.Text.Json;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
-using TenE0.Core.Common;
 using TenE0.Core.Errors;
 using TenE0.Core.Permissions.Behaviors;
 

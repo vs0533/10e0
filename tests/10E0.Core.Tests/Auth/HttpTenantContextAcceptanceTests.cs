@@ -1,7 +1,5 @@
-using System.Collections.Generic;
 using System.Security.Claims;
 using Microsoft.AspNetCore.Http;
-using Moq;
 using TenE0.Core.Abstractions;
 using TenE0.Core.Auth;
 

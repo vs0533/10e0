@@ -8,6 +8,11 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <AnalysisLevel>latest</AnalysisLevel>
     <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <!-- 开 doc file 让 IDE0005（冗余 using）能在 build 检查（Roslyn #41640：IDE0005 in build 需要 doc file）。
+         随之 NoWarn 掉「缺/多余 XML 注释」类噪音（不强制每个 public 成员写 doc）。
+         这样 build 与 dotnet format 都会拦冗余 using：#64 那种 PR 直接 CI 红，triage format 阶段顺手清。 -->
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591;CS1573;CS1572;CS1574;CS1570;CS1734</NoWarn>
     <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
   </PropertyGroup>
 

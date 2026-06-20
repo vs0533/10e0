@@ -1,8 +1,5 @@
 using System.IdentityModel.Tokens.Jwt;
-using System.Security.Claims;
-using System.Text;
 using Microsoft.Extensions.Options;
-using Microsoft.IdentityModel.Tokens;
 using TenE0.Core.Abstractions;
 using TenE0.Core.Auth.Jwt;
 using TenE0.Core.Auth.Jwt.Services;

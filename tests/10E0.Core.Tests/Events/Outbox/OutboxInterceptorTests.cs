@@ -1,5 +1,4 @@
 using System.Text.Json;
-using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Time.Testing;
 using TenE0.Core.Events;
 using TenE0.Core.Events.Outbox;
