@@ -305,6 +305,36 @@ try {
     // 严格成功判据：ensureLabels.ok && createSubs.createdCount≥1 && makeEpic.epicLabeled=true
     // 不满足任一条件 → throw 让外层 catch + triage-loop skipped++（不留半成品）
     if (!plan.decomposable) {
+      // C: L3 递归深度限制——若本 item 本身就是上一层 L3 拆出的子 issue（带 followup-from: 标签），
+      // 却又被 planner 判不可分，说明一层拆分仍不够小。禁止二次自动拆分（防无限递归 / 碎片化成
+      // 一堆过小 issue），转人工：加 needs-manual-split 标签 + comment，return manualSplit 让 loop 继续。
+      const isL3Child = (item.labels || []).some(l => /^followup-from:/.test(l))
+      if (isL3Child) {
+        log(`#${item.id} 已是 L3 子 issue 但 planner 仍判不可分——拒绝二次自动拆分，转人工`)
+        await agent(
+          `#${item.id}（${item.title}）是上一层 L3 拆出的子 issue（带 followup-from: 标签），` +
+          `但 planner 又判定它仍需进一步拆分。triage 禁止对 L3 子 issue 二次自动拆分（防无限递归/碎片化），转人工。\n\n` +
+          `**操作**：\n` +
+          `1. 确保标签存在：\`gh label create needs-manual-split --color "d93f0b" --description "L3 子 issue 仍过大，需人工拆分"\`（已存在则忽略 already exists）\n` +
+          `2. 给 #${item.id} 加 \`needs-manual-split\` 标签（get_issue 拿现有 labels → 合并去重 → update_issue，不覆盖原 labels）\n` +
+          `3. 发 comment："⚠️ triage 检测到本 issue 是 L3 拆分的子任务，但仍被判定过大需再拆。为防止无限递归拆分，已转人工。planner 理由：${plan.reason}。请人工拆分或缩小范围后移除本标签。"\n\n` +
+          `回报 schema：{ ok: boolean, errors: string[] }`,
+          { phase: 'Decompose to Epic', agentType: 'general-purpose', schema: {
+            type: 'object', required: ['ok'],
+            properties: { ok: { type: 'boolean' }, errors: { type: 'array', items: { type: 'string' } } },
+          } }
+        )
+        return {
+          ok: true,
+          manualSplit: true,
+          merged: false,
+          decomposed: false,
+          followupCount: 0,
+          fixedCount: 0,
+          botVerdict: 'NONE',
+          summary: `已达 L3 深度上限（本 issue 是 L3 子任务但仍判不可分），标 needs-manual-split 转人工。planner reason: ${plan.reason}`,
+        }
+      }
       const subIssues = Array.isArray(plan.subIssues) ? plan.subIssues : []
       if (subIssues.length === 0) {
         throw new Error(`#${item.id} Planner 判 L3 但 subIssues 为空——planner 必须给出可派单的子任务列表`)

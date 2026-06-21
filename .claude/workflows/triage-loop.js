@@ -157,6 +157,11 @@ while (processed + skipped < opts.max) {
     // L3 summary 含 planner reason / linkDeps 数 / epic 状态，便于事后审计
     if (result.summary) log(`    summary: ${result.summary}`)
     processed++
+  } else if (result && result.ok && result.manualSplit) {
+    // L3 深度上限：子 issue 仍过大，已标 needs-manual-split 转人工 —— 妥善处理，继续下一个
+    log(`  🚧 #${item.id} 已达 L3 拆分深度上限，已标 needs-manual-split 转人工，继续`)
+    if (result.summary) log(`    summary: ${result.summary}`)
+    processed++
   } else {
     // 未合并（留人工/REQUEST_CHANGES/NONE/冲突）或失败 —— 默认停止整个循环，等人工处理
     const why = !result?.ok
