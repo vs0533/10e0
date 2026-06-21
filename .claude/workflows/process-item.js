@@ -351,7 +351,7 @@ try {
         `对**每个** subIssue 调 \`mcp__github__create_issue\`：\n` +
         `- owner/repo: vs0533/10e0\n` +
         `- title: subIssue.title\n` +
-        `- body: \`Part of #${item.id}\\n\\n${subIssue.description}\\n\\n依赖：${subIssue.dependsOn?.length ? '创建后回填实际 issue 号' : '无'}\\n\\n自动从 #${item.id} 拆分（triage L3）\`\n` +
+        `- body: \`Part of #${item.id}\\n\\n\${subIssue.description}\\n\\n依赖：\${subIssue.dependsOn?.length ? '创建后回填实际 issue 号' : '无'}\\n\\n自动从 #${item.id} 拆分（triage L3）\`\n` +
         `- labels: [\`followup-from:#${item.id}\`, \`enhancement\`, ...(subIssue.labels || [])]\n\n` +
         `**严格统计**：\n` +
         `- createdCount: 实际创建成功的 issue 数\n` +
