@@ -6,7 +6,7 @@
 
 | 文件 | 扩展方法 | 注册内容 |
 |------|----------|----------|
-| `ServiceCollectionExtensions.cs` | `AddTenE0Core()` | 核心：HttpContextAccessor、TimeProvider、DistributedCache、ICurrentUserContext、IErrs、IDataAccessPolicy、AuditInterceptor、DbContext 工厂 |
+| `ServiceCollectionExtensions.cs` | `AddTenE0Core()` | 核心：HttpContextAccessor、TimeProvider、DistributedCache、ICurrentUserContext、ITenantContext、IErrs、IDataAccessPolicy、IUserInfoLoader、AuditInterceptor、DbContext 工厂 |
 | `CqrsServiceCollectionExtensions.cs` | `AddTenE0Cqrs()` | CommandDispatcher + LoggingBehavior + 程序集扫描 ICommandHandler |
 | `IdentityExtensions.cs` | `AddTenE0Identity<TUser, TRole, TContext>()` | 一站式注册：JWT + 权限 + 组织 |
 | `JwtAuthExtensions.cs` | `AddTenE0JwtAuth<TUser>()` | TokenService、PasswordHasher、3 个命令处理器、JWT Bearer 配置 |
@@ -17,9 +17,11 @@
 | `SequencesExtensions.cs` | `AddTenE0Sequences()` | SequenceGenerator 注册 |
 | `DomainEventsExtensions.cs` | `AddTenE0DomainEvents()` | DomainEventDispatcher + 程序集扫描 IDomainEventHandler |
 | `DynamicFiltersExtensions.cs` | `AddTenE0DynamicFilters()` | DynamicFilterProvider + DataFilterRuleService |
+| `AppModuleExtensions.cs` | `AddAppModule<TModule>()` / `MapAppModules()` | 业务模块注册/路由挂载；`IAppModule` 契约（#43 前置） |
 
 ## 设计决策
 
 - **对比旧 `AddE0Context()`**：旧版一个方法注册所有东西，无法按需裁剪。新版每个模块独立注册
 - **`AddTenE0Identity<>()`** 是"一站式"快捷方法，内部调用 JWT + 权限 + 组织的各扩展
 - Handler 和 DomainEventHandler 通过程序集扫描自动注册，无需手动配置
+- **`AddTenE0Core()` 默认注册 `NullUserInfoLoader`**（`Auth/NullUserInfoLoader.cs`）作为 `IUserInfoLoader` 的空实现，业务模块在 `IAppModule.ConfigureServices` 里用 `services.Replace(...)` 覆盖为自己的实现

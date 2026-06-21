@@ -1,8 +1,6 @@
 using System.Collections.Concurrent;
 using System.Reflection;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.ChangeTracking;
-using Microsoft.EntityFrameworkCore.Metadata;
 using TenE0.Core.Abstractions;
 using TenE0.Core.EntityService.Relations;
 using TenE0.Core.Permissions;
@@ -82,7 +80,7 @@ internal sealed class EntityService(
         var dbEntity = await query.FirstOrDefaultAsync(e => e.Id == entity.Id, cancellationToken);
         if (dbEntity is null)
         {
-            errs.Add("更新的数据不存在", key: nameof(entity.Id), code: "NOT_FOUND");
+            errs.Add("更新的数据不存在", key: nameof(entity.Id), code: ErrorCodes.NotFound);
             return false;
         }
 
@@ -124,7 +122,7 @@ internal sealed class EntityService(
             .AnyAsync(e => e.Id == entity.Id, cancellationToken);
         if (!exists)
         {
-            errs.Add("删除的数据不存在", key: nameof(entity.Id), code: "NOT_FOUND");
+            errs.Add("删除的数据不存在", key: nameof(entity.Id), code: ErrorCodes.NotFound);
             return false;
         }
 
@@ -188,7 +186,7 @@ internal sealed class EntityService(
             var ok = await permissions.HasAsync(requiredKey, cancellationToken);
             if (!ok)
             {
-                errs.Add($"字段 {fieldName} 需要权限：{requiredKey}", key: fieldName, code: "FIELD_PERM");
+                errs.Add($"字段 {fieldName} 需要权限：{requiredKey}", key: fieldName, code: ErrorCodes.FieldPermission);
                 allOk = false;
             }
         }

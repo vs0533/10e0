@@ -1,6 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Memory;
-using TenE0.Core.Permissions.Storage;
+using TenE0.Core.Abstractions;
 
 namespace TenE0.Core.Permissions.Storage;
 
@@ -10,9 +10,12 @@ namespace TenE0.Core.Permissions.Storage;
 /// L1 策略：版本号本身是"高频读、低频写、单调递增"的特征数据，5 秒 TTL 完全够用。
 /// 5 秒窗内即使管理员 revoke 了一次 token，也最多 5 秒内才生效 — 比原来 30 分钟
 /// access token 寿命短一个数量级，仍远低于"安全可接受"的容忍度。
+///
+/// #37: cache key 走 <see cref="ICacheKeyNamespace"/> —— 多租户场景下按 tenantId 隔离。
 /// </summary>
 public sealed class EfRoleVersionStore<TContext>(
     IDbContextFactory<TContext> contextFactory,
+    ICacheKeyNamespace keyNamespace,
     IMemoryCache cache,
     TimeProvider timeProvider) : IRoleVersionStore
     where TContext : DbContext
@@ -74,5 +77,5 @@ public sealed class EfRoleVersionStore<TContext>(
         return result;
     }
 
-    private static string CacheKey(string roleCode) => $"role-version:{roleCode}";
+    private string CacheKey(string roleCode) => keyNamespace.RoleVersionKey(roleCode);
 }

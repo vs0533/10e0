@@ -15,16 +15,23 @@
 
 - **触发**: PR opened / synchronize
 - **方式**: 安装 `@anthropic-ai/claude-code` CLI，通过 `claude -p` headless 模式审查 diff
-- **后端**: 阿里云百炼 API (Qwen 3.7-max)，非 Anthropic 官方
+- **后端**: MiniMax API (MiniMax-M3)，非 Anthropic 官方
 - **超时**: 30 分钟
-- **输出**: 作为 PR comment 发布，分 🔴 Critical / 🟡 Suggestion / 🟢 Nit
+- **输出**: 末尾强制输出 `VERDICT: APPROVE`（无 🔴 Critical）或 `VERDICT: REQUEST_CHANGES`（有 🔴 Critical / 解析失败保守拒绝）；分 🔴 Critical / 🟡 Suggestion / 🟢 Nit
+- **发布方式**: 有 `REVIEW_BOT_TOKEN` (PAT) 且非 self-approve 时用 `pulls.createReview` 发**正式 review**（计入 branch protection approval）；否则降级为 issue comment（**不计入 approval**）
 
-关键环境变量（与本机 `~/.claude/settings.json` 一致）:
+关键环境变量:
 ```
-ANTHROPIC_AUTH_TOKEN = secrets.ALIBABA_API_KEY
-ANTHROPIC_BASE_URL = https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic
-ANTHROPIC_MODEL    = qwen3.7-max
+ANTHROPIC_AUTH_TOKEN = secrets.MINIMAX_API_KEY
+ANTHROPIC_BASE_URL   = https://api.minimaxi.com/anthropic
+ANTHROPIC_MODEL      = MiniMax-M3
 ```
+
+> **triage 消费方契约（厂商无关）**：`.claude/workflows/process-item.js` 靠两个**与模型无关**的稳定标识认本 bot 评论并解析结论：
+> ① HTML marker `<!-- triage-review-bot -->`（+ `## 🤖 Automated Code Review` header）定位是 bot 评论；
+> ② `Verdict: **APPROVE|REQUEST_CHANGES**` 行作最终结论。
+> **换 review 后端模型只改本文件的 `ANTHROPIC_MODEL` 等 env 即可**——marker / Verdict 格式不变，triage 侧零改动。
+> 反之，**若改了 marker 或 VERDICT 输出格式，必须同步 process-item.js 的 Watch Review 解析逻辑**。
 
 ### `release.yml` — 自动发版
 

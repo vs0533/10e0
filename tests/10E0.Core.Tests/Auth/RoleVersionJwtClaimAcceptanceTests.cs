@@ -1,9 +1,7 @@
 using System.IdentityModel.Tokens.Jwt;
-using System.Security.Claims;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Time.Testing;
 using TenE0.Core.Abstractions;
-using TenE0.Core.Auth.Jwt;
 using TenE0.Core.Auth.Jwt.Services;
 
 namespace TenE0.Core.Auth.Jwt.Tests;
@@ -33,7 +31,11 @@ public sealed class RoleVersionJwtClaimAcceptanceTests
     };
 
     private static JwtTokenService CreateService() =>
-        new(Options.Create(CreateOptions()), new FakeTimeProvider());
+        new(
+            Options.Create(CreateOptions()),
+            new FakeTimeProvider(),
+            // #37: 测试走默认 ITokenClaimNames
+            new JwtClaimsTokenClaimNames());
 
     private static IReadOnlyDictionary<string, long> ParseRoleVersionClaim(JwtSecurityToken jwt)
     {

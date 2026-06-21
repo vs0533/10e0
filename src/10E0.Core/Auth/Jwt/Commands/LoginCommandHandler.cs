@@ -32,13 +32,13 @@ public sealed class LoginCommandHandler<TUser, TContext>(
 
         if (user is null || !verified)
         {
-            errs.Add("用户名或密码错误", code: "AUTH_INVALID");
+            errs.Add("用户名或密码错误", code: ErrorCodes.AuthInvalid);
             return null!;
         }
 
         if (!user.IsActive)
         {
-            errs.Add("账号已被禁用", code: "AUTH_DISABLED");
+            errs.Add("账号已被禁用", code: ErrorCodes.AuthDisabled);
             return null!;
         }
 

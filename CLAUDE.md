@@ -68,20 +68,20 @@ dotnet run --project src/10E0.Api
 | Workflow | 触发 | 说明 |
 |----------|------|------|
 | `pr-build.yml` | PR 到 dev/main | restore → build → test + coverage |
-| `claude-review.yml` | PR opened/synchronize | 阿里云百炼 API (MiniMax-M3) headless 审查 |
+| `claude-review.yml` | PR opened/synchronize | MiniMax API (MiniMax-M3) headless 审查 |
 | `release.yml` | push 到 main | 自动 patch+1 → tag → Release → NuGet pack |
 
 ### Code Review 配置
 
-Claude Code CLI 以 headless 模式（`claude -p`）运行在 GitHub Actions，使用阿里云百炼 API 而非 Anthropic 官方：
+Claude Code CLI 以 headless 模式（`claude -p`）运行在 GitHub Actions，使用 MiniMax API 而非 Anthropic 官方：
 
 ```
-ANTHROPIC_AUTH_TOKEN   → secrets.ALIBABA_API_KEY
-ANTHROPIC_BASE_URL     → https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic
-ANTHROPIC_MODEL        → qwen3.7-max
+ANTHROPIC_AUTH_TOKEN   → secrets.MINIMAX_API_KEY
+ANTHROPIC_BASE_URL     → https://api.minimaxi.com/anthropic
+ANTHROPIC_MODEL        → MiniMax-M3
 ```
 
-与本机 `~/.claude/settings.json` 中的配置一致。
+bot 末尾输出 `VERDICT: APPROVE|REQUEST_CHANGES`；有 `REVIEW_BOT_TOKEN` (PAT) 时发正式 review（计入 branch protection approval），否则降级为 comment。triage 的 Merge & Sync 会解析此 VERDICT 决定是否自动合并。
 
 ### 发版流程
 
@@ -97,7 +97,8 @@ ANTHROPIC_MODEL        → qwen3.7-max
 
 | Secret | 用途 |
 |--------|------|
-| `ALIBABA_API_KEY` | 阿里云百炼 API 密钥（Code Review 必须） |
+| `MINIMAX_API_KEY` | MiniMax API 密钥（Code Review 必须） |
+| `REVIEW_BOT_TOKEN` | PAT，让 bot 发正式 review 计入 branch protection approval（可选，缺则降级 comment） |
 | `NUGET_API_KEY` | NuGet.org 发布密钥（可选） |
 
 ## 开发工具

@@ -1,8 +1,9 @@
 using System.Text.Json;
-using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.Json;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using TenE0.Core.Common;
 
 namespace TenE0.Core.Errors;
@@ -21,20 +22,27 @@ namespace TenE0.Core.Errors;
 ///
 /// Once the handler is registered, every endpoint gets the same uniform
 /// JSON error envelope — no more per-handler try/catch blocks (issue #39).
+///
+/// #49 followup: the constructor takes an
+/// <see cref="IOptions{JsonOptions}"/> dependency so the error body is
+/// serialized with the host's configured
+/// <see cref="JsonOptions.SerializerOptions"/> — the SAME options the
+/// success path uses (matching naming policy, ignore-null condition,
+/// dictionary-key policy, etc.). This eliminates the wire-shape
+/// divergence between success and error envelopes.
 /// </summary>
 public sealed class TenE0ExceptionHandler(
     IApiErrorMapper mapper,
-    ILogger<TenE0ExceptionHandler> logger) : IExceptionHandler
+    ILogger<TenE0ExceptionHandler> logger,
+    IOptions<JsonOptions> jsonOptions) : IExceptionHandler
 {
     /// <summary>
-    /// JSON options used when writing the error body. Mirrors the API
-    /// project's default (lowerCamelCase) so the wire shape matches the
-    /// success-path <c>ApiResult</c> envelope.
+    /// Host-configured JSON options, injected via DI. Step 3/3 reads
+    /// <c>jsonOptions.Value.SerializerOptions</c> so the error envelope
+    /// is serialized with the SAME <see cref="JsonSerializerOptions"/>
+    /// the API host uses for the success path (issue #49).
     /// </summary>
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-    };
+    private readonly IOptions<JsonOptions> _jsonOptions = jsonOptions;
 
     public async ValueTask<bool> TryHandleAsync(
         HttpContext httpContext,
@@ -74,7 +82,7 @@ public sealed class TenE0ExceptionHandler(
         await JsonSerializer.SerializeAsync(
             httpContext.Response.Body,
             body,
-            JsonOptions,
+            _jsonOptions.Value.SerializerOptions,
             cancellationToken);
 
         return true;

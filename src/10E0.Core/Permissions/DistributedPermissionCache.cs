@@ -1,6 +1,8 @@
 using System.Text.Json;
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Options;
+using TenE0.Core.Abstractions;
+using TenE0.Core.Caching;
 
 namespace TenE0.Core.Permissions;
 
@@ -8,14 +10,20 @@ namespace TenE0.Core.Permissions;
 /// IPermissionCache 基于 IDistributedCache 的默认实现。
 /// 一期的 AddTenE0Core 已注册 AddDistributedMemoryCache；生产可换 Redis。
 ///
-/// "InvalidateAll" 由于 IDistributedCache 缺少枚举能力，采用 version stamp 策略：
-/// 每次 InvalidateAll 递增一个版本号，缓存 key 拼上版本，旧 key 自动失效（靠 TTL 兜底）。
+/// "InvalidateAll" 通过 <see cref="IAtomicCounter"/> 原子自增版本号实现，
+/// 缓存 key 拼上版本，旧 key 自动失效（靠 TTL 兜底）。
+/// 替代原本"GetString → Parse → +1 → SetString"的非原子三步操作，
+/// 避免并发丢增。
+///
+/// #37: 所有 cache key 都从 <see cref="ICacheKeyNamespace"/> 走，业务方可注入
+/// 多租户 namespace 顶层前缀（如 "acme"），多租户共享 Redis 不串数据。
 /// </summary>
 internal sealed class DistributedPermissionCache(
     IDistributedCache cache,
+    IAtomicCounter counter,
+    ICacheKeyNamespace keyNamespace,
     IOptions<PermissionsOptions> options) : IPermissionCache
 {
-    private const string VersionKey = "perm-cache:version";
     private readonly PermissionsOptions _options = options.Value;
 
     public async Task<IReadOnlySet<string>?> GetRolePermissionsAsync(string roleCode, CancellationToken cancellationToken = default)
@@ -45,15 +53,14 @@ internal sealed class DistributedPermissionCache(
 
     public async Task InvalidateAllAsync(CancellationToken cancellationToken = default)
     {
-        // 通过自增 version 让所有旧 key 失效；旧条目靠 TTL 自然清理
-        var current = await cache.GetStringAsync(VersionKey, cancellationToken);
-        var next = (long.TryParse(current, out var v) ? v : 0) + 1;
-        await cache.SetStringAsync(VersionKey, next.ToString(), cancellationToken);
+        // 原子自增：所有并发调用方拿到的都是单调递增的版本号，无丢增风险。
+        // #37: key 走 ICacheKeyNamespace —— 多租户下 InvalidateAll 只清本租户的版本号。
+        await counter.IncrementAsync(keyNamespace.PermissionVersionKey(), cancellationToken);
     }
 
     private async Task<string> BuildKeyAsync(string roleCode, CancellationToken cancellationToken)
     {
-        var version = await cache.GetStringAsync(VersionKey, cancellationToken) ?? "0";
-        return $"perm-role:v{version}:{roleCode}";
+        var version = await counter.GetAsync(keyNamespace.PermissionVersionKey(), cancellationToken);
+        return keyNamespace.PermissionRoleKey(version, roleCode);
     }
 }

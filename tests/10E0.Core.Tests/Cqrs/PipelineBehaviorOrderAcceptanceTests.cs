@@ -1,5 +1,4 @@
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Options;
 using TenE0.Core.Abstractions;
 using TenE0.Core.Cqrs;
 using TenE0.Core.Cqrs.Behaviors;

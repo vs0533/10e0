@@ -23,6 +23,12 @@ csharp_style_namespace_declarations = file_scoped:suggestion
 # Prefer async methods
 dotnet_diagnostic.CA1849.severity = suggestion
 
+# Remove unnecessary using directives（冗余 using）
+# 默认 IDE0005 是 silent → 冗余 using 全程漏过 CI（#64 教训）。提到 warning 后：
+# - CI 的 format step（dotnet format --verify-no-changes）会因冗余 using 失败 → PR 红
+# - triage 的 format 自动修复阶段（dotnet format）会顺手移除冗余 using
+dotnet_diagnostic.IDE0005.severity = warning
+
 # Naming conventions
 dotnet_naming_rule.async_methods_end_in_async.severity = suggestion
 dotnet_naming_rule.async_methods_end_in_async.symbols = async_methods

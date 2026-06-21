@@ -47,6 +47,10 @@ public static class ServiceCollectionExtensions
         // 数据访问策略默认实现 — 从不 bypass；Permissions 模块可覆盖
         services.TryAddScoped<IDataAccessPolicy, DefaultDataAccessPolicy>();
 
+        // #43 下沉：默认 IUserInfoLoader 空实现。框架不依赖具体 IdP；
+        // 业务模块在 IAppModule.ConfigureServices 中 services.Replace(...) 覆盖。
+        services.TryAddScoped<IUserInfoLoader, NullUserInfoLoader>();
+
         // 审计拦截器
         services.AddScoped<AuditInterceptor>();
 

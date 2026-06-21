@@ -1,9 +1,7 @@
 using TenE0.Core.Abstractions;
-using TenE0.Core.EntityService;
 using TenE0.Core.Errors;
 using EntitySvc = TenE0.Core.EntityService.EntityService;
 using TenE0.Core.Permissions;
-using TenE0.Core.Sequences;
 
 namespace TenE0.Core.Tests.EntityService;
 

@@ -36,7 +36,7 @@ internal sealed class FieldUniqueValidator<TEntity> : IUniqueValidator
                 query = query.Where(e => e.Id != _entity.Id);
 
             if (await query.AnyAsync(cancellationToken))
-                errs.Add($"{GetDisplayName(property)} 不能重复", key: property.Name, code: "UNIQUE");
+                errs.Add($"{GetDisplayName(property)} 不能重复", key: property.Name, code: ErrorCodes.Unique);
         }
     }
 
@@ -112,7 +112,7 @@ internal sealed class GroupUniqueValidator<TEntity> : IUniqueValidator
         if (await query.AnyAsync(cancellationToken))
         {
             var names = string.Join(", ", _properties.Select(p => p.Name));
-            errs.Add($"组合字段 [{names}] 已存在，不能重复", key: names, code: "UNIQUE_GROUP");
+            errs.Add($"组合字段 [{names}] 已存在，不能重复", key: names, code: ErrorCodes.UniqueGroup);
         }
     }
 

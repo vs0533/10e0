@@ -3,7 +3,6 @@ using System.Security.Claims;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Time.Testing;
 using TenE0.Core.Abstractions;
-using TenE0.Core.Auth.Jwt;
 using TenE0.Core.Auth.Jwt.Services;
 
 namespace TenE0.Core.Auth.Jwt.Tests;
@@ -38,7 +37,9 @@ public sealed class TenantIdJwtClaimAcceptanceTests
                 AccessTokenLifetime = TimeSpan.FromMinutes(30),
                 RefreshTokenLifetime = TimeSpan.FromDays(7),
             }),
-            new FakeTimeProvider());
+            new FakeTimeProvider(),
+            // #37: 测试走默认 ITokenClaimNames（JwtClaims 常量），保持向后兼容
+            new JwtClaimsTokenClaimNames());
 
     // ── 静态 contract: claim 常量与解析逻辑 ─────────────────────
 

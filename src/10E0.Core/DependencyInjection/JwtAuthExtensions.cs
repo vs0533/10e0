@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.IdentityModel.Tokens;
+using TenE0.Core.Abstractions;
 using TenE0.Core.Auth.Jwt;
 using TenE0.Core.Auth.Jwt.Commands;
 using TenE0.Core.Auth.Jwt.Services;
@@ -34,6 +35,11 @@ public static class JwtAuthExtensions
         services.TryAddSingleton<IPasswordHasher, Pbkdf2PasswordHasher>();
         services.TryAddScoped<IJwtTokenService, JwtTokenService>();
 
+        // #37: 注册全局字符串契约（ITokenClaimNames + ICacheKeyNamespace 默认实现）。
+        // 业务方在 AddTenE0JwtAuth 之前调 AddTenE0CoreContracts 也行 —— 这里用 TryAdd，
+        // 已有注册（如业务方的 Replace）不会被覆盖。
+        services.AddTenE0CoreContracts();
+
         // 泛型命令处理器：手动注册（程序集扫描不能注册开放泛型 + 具体类型组合）
         services.AddScoped<TenE0.Core.Abstractions.ICommandHandler<LoginCommand, AuthResult>,
             LoginCommandHandler<TUser, TContext>>();
@@ -48,14 +54,18 @@ public static class JwtAuthExtensions
             {
                 using var sp = services.BuildServiceProvider();
                 var opt = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<JwtOptions>>().Value;
+                // #37: NameClaimType / RoleClaimType 走 ITokenClaimNames，否则
+                // 业务方切到 Keycloak preferred_username / groups 后 ClaimsPrincipal
+                // 找不到 Name/Role —— Authorization / User.Identity.Name 会全空。
+                var claimNames = sp.GetRequiredService<ITokenClaimNames>();
 
                 // 禁用 inbound claim 自动映射，保留 JWT 原始 claim 名（sub / role / user_type）
                 jwt.MapInboundClaims = false;
 
                 jwt.TokenValidationParameters = new TokenValidationParameters
                 {
-                    NameClaimType = TenE0.Core.Abstractions.JwtClaims.Name,
-                    RoleClaimType = TenE0.Core.Abstractions.JwtClaims.Role,
+                    NameClaimType = claimNames.Name,
+                    RoleClaimType = claimNames.Role,
 
                     ValidateIssuer = true,
                     ValidIssuer = opt.Issuer,

@@ -1,4 +1,3 @@
-using Microsoft.EntityFrameworkCore;
 using TenE0.Core.Auth.Jwt.Storage;
 
 namespace TenE0.Core.Tests.Auth.Jwt.Storage;

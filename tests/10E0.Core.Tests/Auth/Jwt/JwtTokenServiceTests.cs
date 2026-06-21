@@ -1,8 +1,5 @@
 using System.IdentityModel.Tokens.Jwt;
-using System.Security.Claims;
-using System.Text;
 using Microsoft.Extensions.Options;
-using Microsoft.IdentityModel.Tokens;
 using TenE0.Core.Abstractions;
 using TenE0.Core.Auth.Jwt;
 using TenE0.Core.Auth.Jwt.Services;
@@ -24,7 +21,8 @@ public sealed class JwtTokenServiceTests
         });
 
         var tp = timeProvider ?? TimeProvider.System;
-        return new JwtTokenService(options.Object, tp);
+        // #37: 默认 ITokenClaimNames 实现 —— claim 名与遗留 JwtClaims 常量一致
+        return new JwtTokenService(options.Object, tp, new JwtClaimsTokenClaimNames());
     }
 
     [Fact]

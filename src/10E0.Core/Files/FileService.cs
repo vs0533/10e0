@@ -1,7 +1,6 @@
 using System.Security.Cryptography;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
-using TenE0.Core.Files.Storage;
 
 namespace TenE0.Core.Files;
 
@@ -130,33 +129,42 @@ public class FileService<TContext>(
         return (stream, attachment);
     }
 
-    public async Task<bool> DeleteAsync(string fileId, CancellationToken ct = default)
+    public async Task<DeleteResult> DeleteAsync(string fileId, CancellationToken ct = default)
     {
         await using var context = await contextFactory.CreateDbContextAsync(ct);
         var attachment = await context.Set<TenE0FileAttachment>().FindAsync(new object[] { fileId }, ct);
         if (attachment == null || attachment.IsDeleted)
         {
-            return false;
+            // 文件不存在或已软删除：两个维度都视为"未删除"，无副作用
+            return new DeleteResult(MetadataDeleted: false, StorageDeleted: false);
         }
 
-        // 从存储中删除
-        var deleted = await storage.DeleteAsync(attachment.StoragePath, ct);
-        if (!deleted)
-        {
-            logger.LogWarning("文件存储删除失败: {StoragePath}", attachment.StoragePath);
-        }
-
-        // 删除缩略图
-        if (!string.IsNullOrEmpty(attachment.ThumbnailPath))
-        {
-            await storage.DeleteAsync(attachment.ThumbnailPath, ct);
-        }
-
-        // 软删除元数据
+        // 软删除元数据（无论 storage 是否成功，元数据都要置 IsDeleted=true，
+        // 否则 DownloadAsync/GetMetadataAsync 还会返回这条记录 → 业务方拿到的 URL
+        // 指向一个已请求删除的对象，造成"按 ID 查得到但下载 404"的诡异体验）。
         attachment.IsDeleted = true;
         await context.SaveChangesAsync(ct);
 
-        return true;
+        // 物理文件删除：主文件 + 缩略图，任一失败就置 StorageDeleted=false
+        var storageDeleted = true;
+        var mainDeleted = await storage.DeleteAsync(attachment.StoragePath, ct);
+        if (!mainDeleted)
+        {
+            logger.LogWarning("文件存储删除失败: {StoragePath}", attachment.StoragePath);
+            storageDeleted = false;
+        }
+
+        if (!string.IsNullOrEmpty(attachment.ThumbnailPath))
+        {
+            var thumbDeleted = await storage.DeleteAsync(attachment.ThumbnailPath, ct);
+            if (!thumbDeleted)
+            {
+                logger.LogWarning("缩略图存储删除失败: {ThumbnailPath}", attachment.ThumbnailPath);
+                storageDeleted = false;
+            }
+        }
+
+        return new DeleteResult(MetadataDeleted: true, StorageDeleted: storageDeleted);
     }
 
     public async Task<TenE0FileAttachment?> GetMetadataAsync(string fileId, CancellationToken ct = default)

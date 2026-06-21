@@ -1,5 +1,3 @@
-using Microsoft.EntityFrameworkCore;
-using TenE0.Core.Common;
 using TenE0.Core.Errors;
 using TenE0.Core.Permissions.Behaviors;
 
@@ -15,7 +13,7 @@ namespace TenE0.Core.Tests.Errors;
 ///   1. <see cref="PermissionDeniedException"/>  → 403 / PERM_DENIED
 ///   2. <see cref="ArgumentException"/>         → 400 / VALIDATION_ERROR
 ///   3. <see cref="InvalidOperationException"/>  → 400 / INVALID_OPERATION
-///   4. <see cref="DbUpdateException"/>         → 409 / CONFLICT
+///   4. <see cref="DbUpdateException"/> (no classifiable inner) → 409 / DB_CONSTRAINT  (#51 supersedes the pre-#51 CONFLICT)
 ///   5. any other exception                    → 500 / INTERNAL_ERROR (no stack leak)
 ///
 /// Each scenario encodes the Given/When/Then business behavior; the mapper
@@ -92,10 +90,16 @@ public sealed class ApiErrorMapperAcceptanceTests
         body.success.Should().BeFalse();
     }
 
-    // ── DbUpdateException (unique conflict) ────────────────────
+    // ── DbUpdateException (no classifiable inner) ──────────────
+    // #51 supersedes the pre-#51 "CONFLICT" code: a plain
+    // DbUpdateException with no recognised provider inner now
+    // surfaces as DB_CONSTRAINT so clients can still tell it apart
+    // from a unique-key / FK / concurrency-specific 409. Disambiguated
+    // scenarios (unique / FK / deadlock / concurrency) live in
+    // DbUpdateExceptionMappingAcceptanceTests.
 
     [Fact]
-    public void GivenDbUpdateException_WhenMapped_ThenReturns409WithConflictCode()
+    public void GivenDbUpdateException_WhenMapped_ThenReturns409WithDbConstraintCode()
     {
         // Arrange
         var mapper = CreateMapper();
@@ -106,8 +110,11 @@ public sealed class ApiErrorMapperAcceptanceTests
 
         // Assert
         status.Should().Be(409,
-            "DB unique-key violations are resource conflicts → 409 Conflict");
-        body.errorCode.Should().Be("CONFLICT");
+            "DB update failures are resource conflicts → 409 Conflict");
+        body.errorCode.Should().Be("DB_CONSTRAINT",
+            "with no classifiable inner the mapper must fall back to a " +
+            "generic 'unknown DB constraint' code, NOT the legacy 'CONFLICT' " +
+            "code that pre-#51 used for every DbUpdateException");
         body.success.Should().BeFalse();
     }
 

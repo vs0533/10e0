@@ -17,6 +17,31 @@ public sealed class OutboxRelayOptions
 
     /// <summary>单条消息的最大重试次数（达到后保留在表中并记录错误，不再尝试）。</summary>
     public int MaxAttempts { get; set; } = 8;
+
+    /// <summary>
+    /// 锁租约时长（TryAcquire 时写入 <c>LockedUntil</c> 的偏移量）。
+    /// 默认 30s：远长于单次 publish 调用的预期耗时（通常毫秒级），
+    /// 但短到一旦实例崩溃，另一实例能在可接受时间内接管（&lt; 1 分钟）。
+    /// </summary>
+    public TimeSpan LockLeaseDuration { get; set; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// 当前实例的唯一标识；同时作为 <c>LockedByInstance</c> 写入行。
+    /// 默认 <c>Environment.MachineName + Guid.NewGuid()</c>：
+    /// 同机多实例（容器/端口隔离场景）天然不冲突；跨机部署天然不冲突。
+    /// 若需更强隔离（例如蓝绿部署需保证不同批次不互踩），可通过配置显式覆盖。
+    /// </summary>
+    public string LockInstanceId { get; set; } =
+        $"{Environment.MachineName}-{Guid.NewGuid():N}";
+
+    /// <summary>
+    /// 行级锁 provider 选择：决定 <c>IOutboxLock</c> 实际注入哪种实现。
+    /// 默认 <see cref="OutboxLockProviderKind.None"/> — 与 <see cref="NoOpOutboxLock"/> 等价，
+    /// 让 0/1 实例部署零感知。配置为 <see cref="OutboxLockProviderKind.RowLock"/> 后，
+    /// DI 层会按底层 EF Core ProviderName（SqlServer / PostgreSQL）命名匹配选择具体实现。
+    /// <see cref="OutboxLockProviderKind.Distributed"/> 留给后续 Redis 等分布式锁场景。
+    /// </summary>
+    public OutboxLockProviderKind LockProvider { get; set; } = OutboxLockProviderKind.None;
 }
 
 /// <summary>
