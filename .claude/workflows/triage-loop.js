@@ -47,7 +47,7 @@ const RANK_SCHEMA = {
 const RANK_PROMPT =
   '返回当前仓库未处理 issue/PR 的优先级排序（按 bug > failing-ci > review-feedback > feature > refactor > docs > stale）。' +
   '每项必须含 id, type(issue|pr), url, title, body, labels(array), priority(number)。' +
-  '排除已有关联 PR 的 issue、已 close 的项、stale > 30 天且无活动的项。' +
+  '排除已有关联 PR 的 issue、已 close 的项、stale > 30 天且无活动的项、带 epic 标签的 tracking issue（它只是 L3 拆分出的子任务进度看板，不直接派单处理）。' +
   '请把数组放在 items 字段下返回（schema 要求）。'
 
 // 把 labels 字符串转成数组（CLI 传过来是字符串）
@@ -84,6 +84,9 @@ const opts = {
   // 默认：item 没成功合并到 dev 就停止整个循环（用户要求「必须合并+同步 dev 才能跑下一个」）。
   // 传 --continue-on-unmerged 才在未合并/失败时跳过该项继续下一个（批量吞吐模式）。
   continueOnUnmerged: Boolean(A.continueOnUnmerged ?? A['continue-on-unmerged']),
+  // plan-driven TDD 步数上限（仅 feature 走 Planner 时生效）；透传给 process-item。
+  // 默认 6；用户传 --max-steps 8 → process-item 的 A.maxSteps = 8
+  maxSteps: Number(A.maxSteps ?? A['max-steps'] ?? 6) || 6,
 }
 
 log(`opts: ${JSON.stringify(opts)}`)
@@ -130,16 +133,20 @@ while (processed + skipped < opts.max) {
   // 跳过该项继续下一轮，而不是让整个 triage-loop 崩溃。
   let result
   try {
-    result = await workflow('process-item', { item, followupFromPr: null })
+    result = await workflow('process-item', { item, followupFromPr: null, maxSteps: opts.maxSteps })
   } catch (e) {
     log(`  ✗ #${item.id} 抛错（已捕获，跳过）: ${e?.message ?? String(e)}`)
     skipped++
     continue
   }
 
-  // 只有「成功合并到 dev」才算真正完成、才继续下一个 item。
+  // 「成功合并到 dev」或「L3 拆分成功」才算真正完成、才继续下一个 item。
   if (result && result.ok && result.merged) {
     log(`  ✓ #${item.id} 已合并到 dev: pr=#${result.prNumber ?? 'n/a'}, followup=${result.followupCount ?? 0}`)
+    processed++
+  } else if (result && result.ok && result.decomposed) {
+    // L3：大 feature 已展开为子 issue + 原 issue 转 tracking epic —— 妥善处理，继续下一个
+    log(`  🧩 #${item.id} 已拆分为 ${result.splitInto?.length ?? 0} 个子 issue（原 issue 转 tracking epic），继续`)
     processed++
   } else {
     // 未合并（留人工/REQUEST_CHANGES/NONE/冲突）或失败 —— 默认停止整个循环，等人工处理

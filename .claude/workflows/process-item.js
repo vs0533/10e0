@@ -1,10 +1,20 @@
 // 单 issue/PR 完整工作流（meta.phases 列表是事实源）
-//   BranchCheck → Dispatch → [Planner] → BDD → TDD-Schema → TDD-Impl
-//   → Tests → Local Review → Open PR → [review-fix 循环: Watch Review → (REQUEST_CHANGES 时) Handle Review]
+//   BranchCheck → Dispatch → [feature: Planner + 动态分支]
+//   → BDD → TDD → Tests → Local Review → Open PR
+//   → [review-fix 循环: Watch Review → (REQUEST_CHANGES 时) Handle Review]
+//   → Merge & Sync
 // 末段 Watch/Handle/Merge 是一个**循环**（最多 maxReviewRounds 轮）：
 //   等 CI + 解析 bot VERDICT → APPROVE 才合并；REQUEST_CHANGES 则修能修的+push 重等、不能修的开 followup issue；
 //   NONE 不合并留人工。**收紧门禁：只有 bot 明确 APPROVE 才自动合并。**
 // 派单策略（dispatchKind）已内联到本文件底部（harness 不支持 relative import）
+//
+// **feature L2/L3 动态分支**（仅 feature 类型，其它 kind 不走 Planner，直接默认固定 2 步 TDD）：
+//   Planner 用 PLAN_SCHEMA 返回结构化 {decomposable, reason, steps?, subIssues?}。
+//   - L2：decomposable=true + steps[] → plan-driven 多步 TDD（每步 <5 文件，总量不限）；
+//          步数由 maxSteps（默认 6）限上限，超出 trim。
+//   - L3：decomposable=false + subIssues[] → 自动建有序子 issue（followup-from:#<epic> + 依赖标注），
+//          原 issue 转 tracking epic（加 `epic` 标签 + checklist body），提前 return { decomposed:true }
+//          让 triage-loop 把它当"妥善处理"跳过该 issue。
 //
 // worktree 策略（与 SKILL.md 一致）：
 //   triage-loop.js 调本工作流时**不带** isolation——本工作流顺序执行，所有阶段
@@ -13,19 +23,23 @@
 //   否则会发生「第 N 个 item 的分支基于第 N-1 个 item 分支」的基线污染。
 //
 // 输入：args.item = { id, type, url, title, body, labels, priority }
-// 输出：{ ok, prNumber, prUrl, merged, followupCount, error? }
-//   失败：返回 { ok:false, error, stage } —— 让 triage-loop 跳过本项继续，而不是崩溃整个循环。
+//       args.maxSteps?: number —— plan-driven TDD 步数上限（仅 feature，默认 6）
+// 输出：
+//   成功合并：{ ok:true, prNumber, prUrl, merged:true, followupCount, fixedCount, botVerdict }
+//   L3 拆分：{ ok:true, decomposed:true, splitInto:[sub_issue_numbers], merged:false }
+//   失败：{ ok:false, error, savedBranch? } —— 让 triage-loop 跳过本项继续，而不是崩溃整个循环。
 
 export const meta = {
   name: 'process-item',
-  description: '单 issue/PR 走完整流程：BranchCheck→BDD→TDD→tests→review→PR→盯 review→分类→合并到 dev+同步本地',
+  description: '单 issue/PR 走完整流程：BranchCheck→BDD→TDD→tests→review→PR→盯 review→分类→合并到 dev+同步本地（feature 含 L2/L3 动态分支）',
   phases: [
     { title: 'BranchCheck' },
     { title: 'Dispatch' },
     { title: 'Planner' },
+    { title: 'Decompose to Epic' },  // L3 拆分时才走（动态 phase，feature decomposable=false）
     { title: 'BDD' },
-    { title: 'TDD-Schema' },
-    { title: 'TDD-Impl' },
+    { title: 'TDD-Schema' },         // 仅默认 2 步；plan-driven 不走此 phase
+    { title: 'TDD-Impl' },           // 默认第 2 步 或 plan-driven 多步共用此名前缀
     { title: 'Tests' },
     { title: 'Local Review' },
     { title: 'Open PR' },
@@ -65,6 +79,87 @@ const SKIP_BDD_KINDS = new Set(['refactor', 'docs', 'fix-ci', 'fix-review', 'sta
 const NEEDS_PLANNER_KINDS = new Set(['feature'])
 // —— 内联结束
 
+// PLAN_SCHEMA：Planner agent 产出的结构化计划（取代旧的「写 plan markdown」）。
+//   decomposable=true  → L2 plan-driven 多步 TDD（steps[]，每步 ≤5 文件）
+//   decomposable=false → L3 自动拆有序子 issue（subIssues[]），原 issue 转 tracking epic
+// reason 字段记录判定依据（review 时可核对，避免 planner 拍脑袋）
+const PLAN_SCHEMA = {
+  type: 'object',
+  required: ['decomposable', 'reason'],
+  properties: {
+    decomposable: { type: 'boolean' },
+    reason: { type: 'string' },
+    steps: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['title', 'description'],
+        properties: {
+          title: { type: 'string', minLength: 1 },
+          description: { type: 'string' },
+          files: { type: 'array', items: { type: 'string' } },
+        },
+      },
+    },
+    subIssues: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['title', 'description'],
+        properties: {
+          title: { type: 'string', minLength: 1 },
+          description: { type: 'string' },
+          dependsOn: { type: 'array', items: { type: 'number' } },  // 序号 0-indexed 指向同数组内其它 sub-issue
+          labels: { type: 'array', items: { type: 'string' } },
+        },
+      },
+    },
+  },
+}
+
+// L3 split 拆 4 个独立 agent + 各自 schema + 严格成功判据（避免 5 步压一 agent 的高风险）：
+//   1. ensureLabels    —— gh label list/create 防护（CRITICAL #1）
+//   2. createSubs      —— 建子 issue（CRITICAL #2 part A）
+//   3. linkDeps        —— 回填依赖（CRITICAL #2 part B，独立因为序号↔号转换易错）
+//   4. makeEpic        —— 原 issue 转 epic（CRITICAL #2 part C，关键不变量）
+// 关键不变量「ensureLabels.ok && createSubs.createdCount≥1 && makeEpic.epicLabeled=true」满足才 decomposed:true。
+const L3_ENSURE_LABELS_SCHEMA = {
+  type: 'object',
+  required: ['ok', 'followupFromExists', 'epicExists'],
+  properties: {
+    ok: { type: 'boolean' },
+    followupFromExists: { type: 'boolean' },
+    epicExists: { type: 'boolean' },
+    errors: { type: 'array', items: { type: 'string' } },
+  },
+}
+const L3_CREATE_SUBS_SCHEMA = {
+  type: 'object',
+  required: ['createdCount', 'splitInto'],
+  properties: {
+    createdCount: { type: 'number' },
+    splitInto: { type: 'array', items: { type: 'number' } },
+    errors: { type: 'array', items: { type: 'string' } },
+  },
+}
+const L3_LINK_DEPS_SCHEMA = {
+  type: 'object',
+  required: ['linked'],
+  properties: {
+    linked: { type: 'number' },
+    errors: { type: 'array', items: { type: 'string' } },
+  },
+}
+const L3_MAKE_EPIC_SCHEMA = {
+  type: 'object',
+  required: ['epicLabeled'],
+  properties: {
+    epicLabeled: { type: 'boolean' },
+    bodyRewritten: { type: 'boolean' },
+    errors: { type: 'array', items: { type: 'string' } },
+  },
+}
+
 // args 容错：harness 有时把 args 序列化成 JSON 字符串传入（见 triage-loop.js 同款处理）。
 const A = (typeof args === 'string')
   ? (() => { try { return JSON.parse(args) } catch { return {} } })()
@@ -72,6 +167,9 @@ const A = (typeof args === 'string')
 
 const item = A.item
 if (!item) throw new Error('process-item: args.item 必填')
+
+// plan-driven TDD 步数上限（仅 feature 走 Planner 时生效；planner steps 超出则 trim）
+const maxSteps = Number(A.maxSteps ?? 6) || 6
 
 // 在主仓库工作目录唯一生成 feature 分支名（BranchCheck 与 Merge & Sync 共用同一个名字，
 // 避免「创建模板」与「识别正则」两处规则不一致的历史 bug）
@@ -132,9 +230,17 @@ const workBranch = branchCheck.featureBranch || featureBranch
 const kind = dispatchKind(item)
 log(`#${item.id} 派单: ${kind} (${item.title})`)
 
+// l3SplitInto 必须在 try 块**外**声明（catch 块访问不到 try 内的 let）——
+// L3 createSubs 后赋值；catch 块检测非空 → 调补救 agent 给已建 sub-issue + 原 issue
+// 加 `epic` 标签（让 issue-prioritizer 排除这些 orphan sub-issue，避免下轮 triage 重复派单）
+let l3SplitInto = null
+
 // 整个处理流程包在 try 里：单 item 失败返回 { ok:false } 让 triage-loop 跳过继续，
 // 而不是 throw 崩溃整个循环（双保险——triage-loop 侧也有 try/catch）。
 try {
+  // planSteps：仅 feature 走 Planner 后才赋值；null = 走默认固定 2 步 TDD（bug/refactor/fix-*）
+  let planSteps = null
+
   // stale / 简单 issue 不走完整流程
   if (kind === 'stale') {
     await agent(
@@ -157,49 +263,218 @@ try {
     )
   }
 
-  // 2. Planner（仅 feature 大改先规划）
+  // 2. Planner（仅 feature）—— 产出 PLAN_SCHEMA 结构化计划，供下游 L2/L3 分支决策
   if (NEEDS_PLANNER_KINDS.has(kind)) {
-    await agent(
-      `为 #${item.id} "${item.title}" 写实现 plan：涉及哪些模块、新增哪些类型、` +
-      `对现有 API 的影响、是否需要数据库迁移。产出 plan markdown 不超过 200 行。`,
-      { phase: 'Planner', agentType: 'planner' }
+    const plan = await agent(
+      `为 feature #${item.id} "${item.title}" 设计结构化实现计划。\n\n` +
+      `Issue body:\n${item.body}\n\n` +
+      `**任务**：判断本 feature 能否用 plan-driven 多步 TDD 在一个 PR 内完成；不能则拆成子 issue。\n\n` +
+      `**判定标准**：\n` +
+      `- **decomposable=true**（L2 路径）：总改动 ≤ ${maxSteps * 5} 文件、改动**同质**（不跨多模块/不需架构决策/不需新增外部依赖）。\n` +
+      `  返回 steps[]，每步 ≤5 文件、最多 ${maxSteps} 步；steps 超出上限**保留前 ${maxSteps} 步并在 reason 写明「trim 到上限」**。\n` +
+      `- **decomposable=false**（L3 路径）：需跨多 PR / 架构决策 / 引入新依赖 / 跨多模块 / 每步 >5 文件且不同质。\n` +
+      `  返回 subIssues[]，每项是独立可派单的工作单元；用 dependsOn[] 标依赖（序号 0-indexed 指向同数组内其它 sub-issue）。\n\n` +
+      `**硬约束**：\n` +
+      `- plan-driven 每步 ≤5 文件；steps 数组只列 ≤${maxSteps} 项\n` +
+      `- 严格按 schema 返回（decomposable/reason 必填，steps/subIssues 二选一）\n` +
+      `- reason 必须可解释判定依据（review 时核对）\n\n` +
+      `**回报 schema**：\n` +
+      `- decomposable: boolean\n` +
+      `- reason: string（解释为什么这么判定）\n` +
+      `- steps?: [{ title, description, files?: [string] }]（decomposable=true 时填）\n` +
+      `- subIssues?: [{ title, description, dependsOn?: [number], labels?: [string] }]（decomposable=false 时填）`,
+      { phase: 'Planner', agentType: 'planner', schema: PLAN_SCHEMA }
     )
+    log(`#${item.id} planner: decomposable=${plan?.decomposable} reason=${plan?.reason?.slice(0, 100)}`)
+    if (!plan || typeof plan.decomposable !== 'boolean') {
+      throw new Error(`#${item.id} Planner 返回非法（缺少 decomposable 字段）：${JSON.stringify(plan)}`)
+    }
+
+    // L3：decomposable=false → 4 个独立 agent 串行：ensureLabels → createSubs → linkDeps → makeEpic
+    // 严格成功判据：ensureLabels.ok && createSubs.createdCount≥1 && makeEpic.epicLabeled=true
+    // 不满足任一条件 → throw 让外层 catch + triage-loop skipped++（不留半成品）
+    if (!plan.decomposable) {
+      const subIssues = Array.isArray(plan.subIssues) ? plan.subIssues : []
+      if (subIssues.length === 0) {
+        throw new Error(`#${item.id} Planner 判 L3 但 subIssues 为空——planner 必须给出可派单的子任务列表`)
+      }
+      log(`#${item.id} L3 拆分: ${subIssues.length} 个子 issue（4-agent 流水线）`)
+
+      // Agent 1: ensureLabels —— 防护 followup-from / epic 标签不存在（CRITICAL #1）
+      const labels = await agent(
+        `为即将执行的 L3 issue 拆分准备 GitHub labels。\n\n` +
+        `**目标**：确保仓库存在 \`followup-from\` 和 \`epic\` 两个 label；不存在则创建。\n\n` +
+        `**操作**：\n` +
+        `1. \`gh label list --json name --jq '.[].name'\` 拿仓库现有 labels\n` +
+        `2. \`followup-from\` 不存在 → \`gh label create followup-from --description "子任务关联的 epic issue" --color "cccccc"\`\n` +
+        `3. \`epic\` 不存在 → \`gh label create epic --description "L3 拆分出的 tracking epic 看板" --color "5319e7"\`\n` +
+        `4. **不**创建已有 label（避免冲突）\n\n` +
+        `**边缘 case（关键）**：\n` +
+        `- \`gh label create <name>\` 在 label 已存在时返回 **exit code 1** + stderr \`already exists\` —— **这不是错误**\n` +
+        `- 判定：若 exit code = 1 且 stderr 含 \`already exists\`（或 stdout/list 已确认存在）→ 该 label 已就位，照填 \`*: true\`\n` +
+        `- 只在 exit code ≠ 0 且不是 "already exists" 时才算创建失败，填 \`*: false\` + errors\n\n` +
+        `**严格回报 schema**（按字段填实际状态，不要乐观）：\n` +
+        `- ok: boolean（所有必需 label 已就绪）\n` +
+        `- followupFromExists: boolean（创建后或本来就存在为 true）\n` +
+        `- epicExists: boolean（同上）\n` +
+        `- errors: string[]（每条失败描述，不致命但要记）\n\n` +
+        `**注意**：本 agent 失败时 throw——后续 createSubs 必然依赖 label 存在。`,
+        { phase: 'Decompose to Epic', agentType: 'general-purpose', schema: L3_ENSURE_LABELS_SCHEMA }
+      )
+      log(`#${item.id} L3 ensureLabels: ok=${labels?.ok} followup=${labels?.followupFromExists} epic=${labels?.epicExists} errors=${labels?.errors?.length ?? 0}`)
+      if (!labels?.ok) {
+        throw new Error(`#${item.id} L3 ensureLabels 失败：${JSON.stringify(labels?.errors ?? [])}`)
+      }
+
+      // Agent 2: createSubs —— 建子 issue（核心；至少 1 个成功才继续）
+      const createResult = await agent(
+        `对 issue #${item.id}（原标题：${item.title}）执行 L3 子 issue 创建。\n\n` +
+        `**planner 给的子任务列表**（subIssues，按执行顺序）：\n${JSON.stringify(subIssues, null, 2)}\n\n` +
+        `**操作**：\n` +
+        `对**每个** subIssue 调 \`mcp__github__create_issue\`：\n` +
+        `- owner/repo: vs0533/10e0\n` +
+        `- title: subIssue.title\n` +
+        `- body: \`Part of #${item.id}\\n\\n${subIssue.description}\\n\\n依赖：${subIssue.dependsOn?.length ? '创建后回填实际 issue 号' : '无'}\\n\\n自动从 #${item.id} 拆分（triage L3）\`\n` +
+        `- labels: [\`followup-from:#${item.id}\`, \`enhancement\`, ...(subIssue.labels || [])]\n\n` +
+        `**严格统计**：\n` +
+        `- createdCount: 实际创建成功的 issue 数\n` +
+        `- splitInto: 实际创建的 issue number 数组，**严格按 subIssues 顺序**（失败的占 null 占位）\n` +
+        `- errors: 失败描述数组（每个失败一条）\n\n` +
+        `**关键**：返回 splitInto 数组**长度等于 subIssues.length**，失败的填 null——这样 linkDeps 步骤才能正确对齐序号。`,
+        { phase: 'Decompose to Epic', agentType: 'general-purpose', schema: L3_CREATE_SUBS_SCHEMA }
+      )
+      log(`#${item.id} L3 createSubs: created=${createResult?.createdCount}/${subIssues.length} errors=${createResult?.errors?.length ?? 0}`)
+      if ((createResult?.createdCount ?? 0) < 1) {
+        throw new Error(`#${item.id} L3 createSubs 全部失败（createdCount=${createResult?.createdCount}）：${JSON.stringify(createResult?.errors ?? [])}——L3 拆分失败，留人工`)
+      }
+      // 记录到外层作用域，供 catch 块补救（避免 makeEpic/linkDeps 失败时 orphan sub-issue）
+      l3SplitInto = createResult.splitInto
+
+      // Agent 3: linkDeps —— 回填依赖（独立因为序号↔实际 issue 号转换易错）
+      const linkResult = await agent(
+        `对 L3 拆分的子 issue 回填依赖关系。\n\n` +
+        `**原始 subIssues（含 dependsOn 序号）**：\n${JSON.stringify(subIssues, null, 2)}\n\n` +
+        `**实际创建的子 issue（splitInto，按 subIssues 顺序，null = 该位置创建失败）**：\n${JSON.stringify(createResult.splitInto)}\n\n` +
+        `**操作**：\n` +
+        `对 splitInto 中**非 null 且有 dependsOn.length > 0** 的 issue，调 \`mcp__github__update_issue\`：\n` +
+        `- owner/repo: vs0533/10e0\n` +
+        `- issue_number: splitInto[i]\n` +
+        `- body: 现有 body + \`\\n\\n**依赖**：#${createResult.splitInto.map(n => n ?? '?').join(', #')}\`（把依赖序号 → 实际号；null 占位变 ?）\n\n` +
+        `**关键**：用 \`mcp__github__get_issue\` 拿现有 body 再追加，不要直接覆盖（保留 issue 原有内容）。\n\n` +
+        `**严格回报**：\n` +
+        `- linked: 成功回填依赖的 issue 数\n` +
+        `- errors: 失败描述数组`,
+        { phase: 'Decompose to Epic', agentType: 'general-purpose', schema: L3_LINK_DEPS_SCHEMA }
+      )
+      log(`#${item.id} L3 linkDeps: linked=${linkResult?.linked} errors=${linkResult?.errors?.length ?? 0}`)
+      // linkDeps 失败 swallow（依赖回填是 nice-to-have，不阻塞 L3 主结果）
+
+      // Agent 4: makeEpic —— 原 issue 转 tracking epic（关键不变量：epicLabeled=true 才算 L3 成功）
+      const epicResult = await agent(
+        `把原 issue #${item.id}（${item.title}）转 tracking epic。\n\n` +
+        `**子 issue 创建结果**（用于填 checklist body）：\n${JSON.stringify(createResult.splitInto)}\n\n` +
+        `**操作**（按顺序，每步单独调 MCP）：\n` +
+        `1. \`mcp__github__get_issue\` 拿 issue #${item.id} 的**现有 labels 和 body**（保留用户原有内容）\n` +
+        `2. \`mcp__github__update_issue\` 加 \`epic\` 标签：labels = 现有 labels + [\`epic\`]（**去重合并**，不要覆盖）\n` +
+        `3. \`mcp__github__update_issue\` 改 body 为 checklist（**完全替换**，原内容已搬到 checklist 里）：\n\n` +
+        `\`\`\`\n# Tracking Epic for #${item.id}\n\n${item.title}\n\n（本 issue 由 triage L3 自动拆分为 ${subIssues.length} 个子任务；本身不含可直接实现的工作，子 issue 全部关闭后人工关闭本 epic）\n\n## 子任务进度\n${subIssues.map((si, i) => `- [ ] ${createResult.splitInto[i] ? '#' + createResult.splitInto[i] : '#? (创建失败)'} ${si.title}`).join('\\n')}\n\`\`\`\n\n` +
+        `4. **不**修改 state（保持 open 作 epic 看板）\n\n` +
+        `**严格回报 schema**（关键不变量 epicLabeled）：\n` +
+        `- epicLabeled: boolean（**必须 true**；false = L3 失败）\n` +
+        `- bodyRewritten: boolean（失败 swallow）\n` +
+        `- errors: 失败描述数组`,
+        { phase: 'Decompose to Epic', agentType: 'general-purpose', schema: L3_MAKE_EPIC_SCHEMA }
+      )
+      log(`#${item.id} L3 makeEpic: epicLabeled=${epicResult?.epicLabeled} bodyRewritten=${epicResult?.bodyRewritten} errors=${epicResult?.errors?.length ?? 0}`)
+      if (!epicResult?.epicLabeled) {
+        throw new Error(`#${item.id} L3 makeEpic 关键不变量失败（epicLabeled=false）：${JSON.stringify(epicResult?.errors ?? [])}——L3 拆分失败，留人工`)
+      }
+
+      // 全部通过 → 返回 decomposed:true
+      return {
+        ok: true,
+        prNumber: null,
+        prUrl: null,
+        merged: false,
+        decomposed: true,
+        splitInto: createResult.splitInto.filter(n => n != null),
+        followupCount: 0,
+        fixedCount: 0,
+        botVerdict: 'NONE',
+        summary: `L3 拆分为 ${createResult.createdCount}/${subIssues.length} 个子 issue（planner reason: ${plan.reason}；linkDeps: ${linkResult?.linked ?? 0}/${createResult.createdCount}；epic OK）`,
+      }
+    }
+
+    // L2：decomposable=true → 准备 planSteps 给下游 TDD 循环
+    // 边界 case：steps 为空数组 / 全 falsy / 超过 maxSteps → 容错
+    const rawSteps = Array.isArray(plan.steps) ? plan.steps : []
+    const trimmed = rawSteps.slice(0, maxSteps).filter(s => s && s.title)
+    if (rawSteps.length === 0) {
+      log(`#${item.id} planner 返回 decomposable=true 但 steps 为空，降级走默认固定 2 步 TDD`)
+    } else if (trimmed.length === 0) {
+      // 步骤数 >0 但 filter 后全 falsy（planner 返回了空 step 对象等异常）→ 降级
+      log(`#${item.id} planner steps=${rawSteps.length} 但 filter 后为空，降级走默认固定 2 步 TDD`)
+    } else {
+      planSteps = trimmed
+      if (rawSteps.length > maxSteps) {
+        log(`#${item.id} planner steps=${rawSteps.length} 超过 maxSteps=${maxSteps}，trim 到 ${planSteps.length}`)
+      }
+    }
   }
 
-  // 2 步 TDD（避免单 agent 撑爆 context）：
-  //   1. schema/接口（DB 模型、新接口签名、DI 注册）—— 改动 < 5 文件
-  //   2. 实现（handler/service/evaluator 改写）+ 补边界单元测试 —— 改动 < 5 文件
-  // 每步独立 agent，靠文件系统接力；如果上一步没产出，本步就少干点。
-  // 最终 build/test/format 门禁统一交给下面 Tests 阶段（schema 化），不再单设 TDD-Verify
-  // 重复跑一遍（含最慢的 coverage——其返回值/coverage 数字本就无人消费，纯浪费）。
-  //
-  // 关于 needsDownstream：小 issue（无新 schema/无新接口）Step 1 会返回
-  // { needsDownstream: true, reason } —— 这是**正常**流，不是错误。Step 2 接力做完整实现。
-  await agent(
-    `TDD Step 1/2 (schema & interfaces) for #${item.id} "${item.title}"\n\n` +
-    `Issue body:\n${item.body}\n\n` +
-    `范围：仅改 DB 模型/实体（加字段/迁移）、新接口/抽象、DI 注册扩展。\n` +
-    `**硬约束**：\n` +
-    `- 改动 < 5 个文件，超了就 throw 退出，让上层拆 issue\n` +
-    `- 不写 handler、不写 service、不写 tests\n` +
-    `- 完成后 \`DOTNET_CLI_UI_LANGUAGE=en-US dotnet build 10e0.slnx 2>&1 | tail -10\`，必须通过（已有 RED 测试无所谓）\n` +
-    `- 回报：{ filesChanged, buildOk, newInterfaces } 结构化数据\n\n` +
-    `如果发现本步需要改 handler/service（说明 issue 拆得不够细），回报 { needsDownstream: true, reason } 并退出。`,
-    { phase: 'TDD-Schema', agentType: 'tdd-guide' }
-  )
+  // 3. TDD —— feature 有结构化 plan 时走 plan-driven 多步（每步 <5 文件，总量不限，解决"改动大但同质"）；
+  //    其它（bug/refactor/fix-*）走默认固定 2 步（schema→impl）。每步独立 agent 接力同一 workspace，
+  //    最终 build/test/format 门禁由下面 Tests 阶段统一兜底。
+  if (planSteps) {
+    log(`#${item.id} plan-driven TDD: ${planSteps.length} 步`)
+    for (let s = 0; s < planSteps.length; s++) {
+      const step = planSteps[s]
+      const files = Array.isArray(step.files) ? step.files : []
+      await agent(
+        `Plan-driven TDD Step ${s + 1}/${planSteps.length}: ${step.title}\n\n` +
+        `feature #${item.id} "${item.title}"\n\n` +
+        `**本步范围**：${step.description}\n` +
+        `**只许改这些文件**（plan 指定，≤5）：\n${files.length ? files.map(f => `- ${f}`).join('\n') : '（plan 未列具体文件，按描述做最小改动）'}\n\n` +
+        `**硬约束**：\n` +
+        `- 严格限定本步范围，不做后续步骤的事（靠接力）\n` +
+        `- 改动 ≤5 文件；若本步实际需 >5 文件，说明 plan 拆得不够细，回报 { needsResplit: true, reason } 并退出\n` +
+        `- 用 Read 看前面步骤已就位的代码/接口/RED 测试\n` +
+        `- 本步收尾 \`DOTNET_CLI_UI_LANGUAGE=en-US dotnet build 10e0.slnx 2>&1 | tail -10\` 应通过（已有 RED 测试无所谓）\n` +
+        `- 回报：{ filesChanged, buildOk, note } 结构化数据`,
+        { phase: 'TDD-Impl', agentType: 'tdd-guide' }
+      )
+    }
+  } else {
+    // 默认固定 2 步（bug/refactor/fix-ci/fix-review）：
+    //   1. schema/接口（DB 模型、新接口签名、DI 注册）—— 改动 < 5 文件
+    //   2. 实现（handler/service/evaluator）+ 补边界测试 —— 改动 < 5 文件
+    // 关于 needsDownstream：小 issue（无新 schema）Step 1 返回 { needsDownstream:true } 是正常流，Step 2 接力。
+    await agent(
+      `TDD Step 1/2 (schema & interfaces) for #${item.id} "${item.title}"\n\n` +
+      `Issue body:\n${item.body}\n\n` +
+      `范围：仅改 DB 模型/实体（加字段/迁移）、新接口/抽象、DI 注册扩展。\n` +
+      `**硬约束**：\n` +
+      `- 改动 < 5 个文件，超了就 throw 退出，让上层拆 issue\n` +
+      `- 不写 handler、不写 service、不写 tests\n` +
+      `- 完成后 \`DOTNET_CLI_UI_LANGUAGE=en-US dotnet build 10e0.slnx 2>&1 | tail -10\`，必须通过（已有 RED 测试无所谓）\n` +
+      `- 回报：{ filesChanged, buildOk, newInterfaces } 结构化数据\n\n` +
+      `如果发现本步需要改 handler/service（说明 issue 拆得不够细），回报 { needsDownstream: true, reason } 并退出。`,
+      { phase: 'TDD-Schema', agentType: 'tdd-guide' }
+    )
 
-  await agent(
-    `TDD Step 2/2 (implementation) for #${item.id} "${item.title}"\n\n` +
-    `**前置条件**：Step 1 已完成（schema/接口就位）。用 Read 工具看新接口定义和已有 RED 测试。\n` +
-    `范围：让 RED 验收测试和已有所有测试全 GREEN——改 handler/service/evaluator。\n` +
-    `**硬约束**：\n` +
-    `- 改动 < 5 个文件\n` +
-    `- 跑 \`DOTNET_CLI_UI_LANGUAGE=en-US dotnet test 10e0.slnx --nologo 2>&1 | tail -30\` 必须显示 "Failed: 0"（既有测试不许破）\n` +
-    `- 写必要的新单元测试覆盖边界（但 < 3 个测试文件）\n` +
-    `- 回报：{ filesChanged, testsPass, newUnitTests, remainingRed } 结构化数据\n\n` +
-    `如果本步跑超过 30 分钟还没 GREEN，先 commit 当前进度，回报 { stalled: true, partialFiles, remainingFails } 退出。`,
-    { phase: 'TDD-Impl', agentType: 'tdd-guide' }
-  )
+    await agent(
+      `TDD Step 2/2 (implementation) for #${item.id} "${item.title}"\n\n` +
+      `**前置条件**：Step 1 已完成（schema/接口就位）。用 Read 工具看新接口定义和已有 RED 测试。\n` +
+      `范围：让 RED 验收测试和已有所有测试全 GREEN——改 handler/service/evaluator。\n` +
+      `**硬约束**：\n` +
+      `- 改动 < 5 个文件\n` +
+      `- 跑 \`DOTNET_CLI_UI_LANGUAGE=en-US dotnet test 10e0.slnx --nologo 2>&1 | tail -30\` 必须显示 "Failed: 0"（既有测试不许破）\n` +
+      `- 写必要的新单元测试覆盖边界（但 < 3 个测试文件）\n` +
+      `- 回报：{ filesChanged, testsPass, newUnitTests, remainingRed } 结构化数据\n\n` +
+      `如果本步跑超过 30 分钟还没 GREEN，先 commit 当前进度，回报 { stalled: true, partialFiles, remainingFails } 退出。`,
+      { phase: 'TDD-Impl', agentType: 'tdd-guide' }
+    )
+  }
 
   // 4. tests (红就 fail) — schema 验证，process-item 直接看 failed 字段，不依赖正则
   //    （这一步已是唯一的 build/test/format 门禁，原 TDD-Verify 因与本步重复且结果无人消费已删）
@@ -517,6 +792,44 @@ try {
     log(`#${item.id} 失败改动保护: ${JSON.stringify(saveResult)}`)
   } catch (se) {
     log(`#${item.id} 改动保护也失败（忽略）: ${se?.message ?? String(se)}`)
+  }
+
+  // H1 补救：L3 失败时若 createSubs 已建了 sub-issue（l3SplitInto 非 null），
+  // 调补救 agent 给原 issue + 所有已建 sub-issue 加 `epic` 标签，让 issue-prioritizer 排除，
+  // 避免下轮 triage 把这些 orphan sub-issue 当新派单对象处理（重复处理会与原 feature 冲突）。
+  if (Array.isArray(l3SplitInto) && l3SplitInto.length > 0) {
+    const validSubs = l3SplitInto.filter(n => n != null)
+    log(`#${item.id} L3 失败补救: ${validSubs.length} 个 orphan sub-issue + 原 issue 加 epic 标签`)
+    try {
+      await agent(
+        `L3 拆分失败后的补救——避免 orphan sub-issue 被下轮 triage 重复派单。\n\n` +
+        `**原 issue** #${item.id}（${item.title}）\n` +
+        `**已建 sub-issue 列表**（splitInto，按 planner 顺序，null = 该位置创建失败）：\n${JSON.stringify(l3SplitInto)}\n\n` +
+        `**操作**：\n` +
+        `1. 给**原 issue** #${item.id} 加 \`epic\` 标签：用 \`mcp__github__get_issue\` 拿现有 labels → 合并 ['epic'] 去重 → \`mcp__github__update_issue\`\n` +
+        `2. 给每个 splitInto 中**非 null 的 sub-issue** 也加 \`epic\` 标签（同样 get→merge→update 流程，避免覆盖原 labels）\n` +
+        `3. **不**改任何 body（保留原内容；补救只防重复派单，不重做 epic 化）\n` +
+        `4. **不**修改 state（保持 open，等人工处理）\n` +
+        `5. 给原 issue 发一个 comment 说明："⚠️ triage L3 拆分失败，本 issue 已标 epic 但未做 checklist 改造。` +
+        `已建 sub-issue ${validSubs.length} 个也标 epic 防重复派单。请人工检查并决定后续处理。"\n\n` +
+        `**严格回报 schema**：\n` +
+        `- ok: boolean（原 issue 加 epic 成功 + 至少 1 个 sub-issue 加 epic 成功）\n` +
+        `- subIssueLabeledCount: number（成功加 epic 的 sub-issue 数）\n` +
+        `- errors: string[]（失败描述）\n\n` +
+        `**关键**：即使补救失败，原 try 块仍会返回 ok:false + error（本补救 swallow 异常，避免二次失败掩盖原错误）`,
+        { phase: 'Decompose to Epic', agentType: 'general-purpose', schema: {
+          type: 'object',
+          required: ['ok', 'subIssueLabeledCount'],
+          properties: {
+            ok: { type: 'boolean' },
+            subIssueLabeledCount: { type: 'number' },
+            errors: { type: 'array', items: { type: 'string' } },
+          },
+        } }
+      )
+    } catch (re) {
+      log(`#${item.id} L3 补救失败（已忽略，不掩盖原错误）: ${re?.message ?? re}`)
+    }
   }
 
   log(`#${item.id} 最终: ok=false, savedBranch=${savedBranch ?? 'none'}`)
