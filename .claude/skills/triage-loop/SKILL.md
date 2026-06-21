@@ -51,6 +51,7 @@ Workflow({ name: "process-item", args: { item: { id: 42, type: "issue", ... } } 
 | `reviewTimeoutMs` | int | 900000 | process-item 每轮等 CI/review 的超时（15 分钟） |
 | `maxReviewRounds` | int | 3 | process-item review-fix 循环最多重试轮数（REQUEST_CHANGES→修+push→重等 的上限） |
 | `continueOnUnmerged` | bool | false | 默认 item 没成功合并到 dev 就停止整个循环（必须合并+同步 dev 才跑下一个）；开此项则未合并/失败时跳过该项继续 |
+| `maxSteps` | int | 6 | （仅 feature）plan-driven 多步 TDD 的最大步数；planner 判定需 > 此上限×5 文件则改走 L3 拆分。triage-loop 通过 `--max-steps N` 透传；直接调 process-item 也可手动传 `args: { item, maxSteps: N }` |
 
 ## 派单策略（dispatchKind）
 
@@ -62,7 +63,7 @@ Workflow({ name: "process-item", args: { item: { id: 42, type: "issue", ... } } 
 | `failing-ci` / `ci-failing` | `fix-ci` | 跳 BDD，走 TDD+tests+review+PR+盯+handle |
 | `review-feedback` / `changes-requested` | `fix-review` | 跳 BDD，走 TDD+tests+review+PR+盯+handle |
 | `bug`/`critical` 或标题含 fix/bug/error/exception/crash | `bug` | **完整流程**：BranchCheck→BDD→TDD(×2)→Tests→Review→Open PR→Watch→Handle→Merge |
-| `feature` / `enhancement` | `feature` | 完整流程 + 前置 planner |
+| `feature` / `enhancement` | `feature` | 完整流程 + planner 产出**结构化分步计划**：可拆→plan-driven 多步 TDD（每步<5文件、总量不限）；太大→**L3 拆成有序子 issue + 原 issue 转 tracking epic** |
 | `refactor` / `tech-debt` / `dead-code` | `refactor` | 跳 BDD+planner，走 TDD+tests+review+PR+盯+handle |
 | `docs` / `documentation` | `docs` | 跳 BDD，让 doc-updater 写 |
 | 其它 | `default` | 走 general-purpose 兜底 |
@@ -74,14 +75,15 @@ Workflow({ name: "process-item", args: { item: { id: 42, type: "issue", ... } } 
 每个 item 必走（kind 决定哪些步跳过）：
 
 ```
-1.  BranchCheck  general-purpose   schema 化 preflight：强制 `git checkout -f dev` + pull，再切干净 feature 分支（baseSynced=false 直接 throw）
-2.  BDD          bdd-guide         写 Given/When/Then 验收测试，必须 RED
-3.  Planner      planner           写 plan markdown（仅 feature）
-4.  TDD-Schema   tdd-guide         DB/接口/DI，< 5 文件
-5.  TDD-Impl     tdd-guide         handler/service 实现 + 补边界测试，让测试 GREEN
-6.  Tests        general-purpose   schema 化 build/test/format 门禁（buildOk / testsOk / failed / passed / formatOk）
-7.  Local Review code-reviewer     本地扫 diff，处理 CRITICAL/HIGH
-8.  Open PR      general-purpose   push feature 分支，mcp__github__create_pull_request（base=dev）
+1.  BranchCheck      general-purpose   schema 化 preflight：强制 `git checkout -f dev` + pull，再切干净 feature 分支（baseSynced=false 直接 throw）
+2.  Dispatch         —                kind 判定（stale/fix-ci/fix-review/bug/feature/refactor/docs/default）
+3.  Planner          planner           **仅 feature**：用 PLAN_SCHEMA 返回 {decomposable, reason, steps?, subIssues?}
+3'. Decompose to Epic general-purpose  **仅 feature decomposable=false**：建 sub-issue + 给原 issue 加 `epic` 标签 + body 改 checklist，提前 return { decomposed:true }
+4.  BDD              bdd-guide         写 Given/When/Then 验收测试，必须 RED（refactor/docs/fix-*/stale/default 跳）
+5.  TDD              tdd-guide         feature 走 **plan-driven 多步**（每步 ≤5 文件、最多 maxSteps=6 步、总改动不限）；其它走**默认固定 2 步**（schema→impl）
+6.  Tests            general-purpose   schema 化 build/test/format 门禁（buildOk / testsOk / failed / passed / formatOk）
+7.  Local Review     code-reviewer     本地扫 diff，处理 CRITICAL/HIGH
+8.  Open PR          general-purpose   push feature 分支，mcp__github__create_pull_request（base=dev）
 9-11. review-fix 循环（最多 `maxReviewRounds`=3 轮，Watch/Handle/Merge 反复跑）：
         每轮 Watch Review 等 CI + 拉三类评论 + 解析 bot VERDICT →
         - **APPROVE** → Merge & Sync：CI 绿 + mergeable 时 squash 合并到 dev + 同步本地，结束
@@ -89,6 +91,15 @@ Workflow({ name: "process-item", args: { item: { id: 42, type: "issue", ... } } 
           不能修的开可追溯 followup issue。本轮没 push 任何修复 → 停（留人工，issue 已追溯）
         - **NONE**（bot 没产出 VERDICT）→ 不合并，留人工
 ```
+
+**Feature L2/L3 分支决策**（仅 feature 类型走 Planner，其它走默认 2 步）：
+
+| plan.decomposable | 下游走法 | process-item return |
+|---|---|---|
+| `true` + steps[] | L2 plan-driven 多步 TDD（每步独立 agent 接力，每步 ≤5 文件，步数 ≤maxSteps） | 正常 PR 路径，最终 `{ ok:true, merged:true, ... }` |
+| `false` + subIssues[] | L3 拆分子 issue + 原 issue 转 tracking epic（建 N 个 sub-issue + `epic` 标签 + checklist body） | 提前 return `{ ok:true, decomposed:true, splitInto:[N], merged:false }` |
+
+> triage-loop 侧对 L3 拆分结果特殊识别：`result.ok && result.decomposed` 视为「妥善处理」，processed++ 不等 PR 合并。sub-issue 由后续轮 triage 拉起处理。
 
 > **收紧门禁（合并模式）**：**只有 bot 明确 `VERDICT: APPROVE` 才自动合并**；`REQUEST_CHANGES` / `NONE` 一律不自动合。
 > 三层叠加：① bot VERDICT=APPROVE（脚本层确定性判断）→ ② CI(`pr-build.yml`) 绿 + mergeable → ③ branch protection（422 则标记 reason 跳过，不崩溃）。
@@ -170,7 +181,7 @@ Followup from #<pr-number>: <review 反馈摘要>
 - **`--dry-run` 必走一遍**：实际派单前先 dry-run 确认队列内容。
 - **issue-prioritizer 会同时返回 PR 和 issue**：用 `issues-only` / `prs-only` 过滤。
 - **review 反馈必须分类**：能修在本 PR 就修，不能修的开新 issue（标 `followup-from:#<pr>`），不要全收。
-- **planner / bdd-guide / tdd-guide 拆三步**：feature 类型依次走完三步（占 3 轮子派单），不是 1 轮。
+- **planner / bdd-guide / tdd-guide 拆三步（feature 路径）**：Planner 用 PLAN_SCHEMA 返回结构化计划；BDD 写 RED 测试；TDD 走 plan-driven 多步（feature）或默认固定 2 步（其它）。三阶段顺序接力、不并发。
 - **linter 看不到顶层 return 是 consumer**：return 前用 `log()` 显式打印关键变量，避 `noUnused` 警告。
 - **workflow 脚本无 fs / Date / Math.random**：需要持久化或时间戳就传到 agent 内部。
 
