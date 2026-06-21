@@ -33,6 +33,15 @@ public sealed class OutboxRelayOptions
     /// </summary>
     public string LockInstanceId { get; set; } =
         $"{Environment.MachineName}-{Guid.NewGuid():N}";
+
+    /// <summary>
+    /// 行级锁 provider 选择：决定 <c>IOutboxLock</c> 实际注入哪种实现。
+    /// 默认 <see cref="OutboxLockProviderKind.None"/> — 与 <see cref="NoOpOutboxLock"/> 等价，
+    /// 让 0/1 实例部署零感知。配置为 <see cref="OutboxLockProviderKind.RowLock"/> 后，
+    /// DI 层会按底层 EF Core ProviderName（SqlServer / PostgreSQL）命名匹配选择具体实现。
+    /// <see cref="OutboxLockProviderKind.Distributed"/> 留给后续 Redis 等分布式锁场景。
+    /// </summary>
+    public OutboxLockProviderKind LockProvider { get; set; } = OutboxLockProviderKind.None;
 }
 
 /// <summary>
