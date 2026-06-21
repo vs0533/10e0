@@ -345,7 +345,8 @@ try {
         `对**每个** subIssue 调 \`mcp__github__create_issue\`：\n` +
         `- owner/repo: vs0533/10e0\n` +
         `- title: subIssue.title\n` +
-        `- body: \`Part of #${item.id}\\n\\n\${subIssue.description}\\n\\n依赖：\${subIssue.dependsOn?.length ? '创建后回填实际 issue 号' : '无'}\\n\\n自动从 #${item.id} 拆分（triage L3）\`\n` +
+        `- body: \`Part of #${item.id}\\n\\n\${subIssue.description}\\n\\nDepends-on: \${subIssue.dependsOn?.length ? 'PENDING' : 'none'}\\n\\n自动从 #${item.id} 拆分（triage L3）\`\n` +
+        `  （\`Depends-on:\` 是机器可读标记：none=无前置依赖可立即派单；PENDING=有依赖，linkDeps 步骤会回填实际 issue 号供下一轮 triage 判断能否派单）\n` +
         `- labels: [\`followup-from:#${item.id}\`, \`enhancement\`, ...(subIssue.labels || [])]\n\n` +
         `**严格统计**：\n` +
         `- createdCount: 实际创建成功的 issue 数\n` +
@@ -363,15 +364,15 @@ try {
 
       // Agent 3: linkDeps —— 回填依赖（独立因为序号↔实际 issue 号转换易错）
       const linkResult = await agent(
-        `对 L3 拆分的子 issue 回填依赖关系。\n\n` +
-        `**原始 subIssues（含 dependsOn 序号）**：\n${JSON.stringify(subIssues, null, 2)}\n\n` +
-        `**实际创建的子 issue（splitInto，按 subIssues 顺序，null = 该位置创建失败）**：\n${JSON.stringify(createResult.splitInto)}\n\n` +
-        `**操作**：\n` +
-        `对 splitInto 中**非 null 且有 dependsOn.length > 0** 的 issue，调 \`mcp__github__update_issue\`：\n` +
-        `- owner/repo: vs0533/10e0\n` +
-        `- issue_number: splitInto[i]\n` +
-        `- body: 现有 body + \`\\n\\n**依赖**：#${createResult.splitInto.map(n => n ?? '?').join(', #')}\`（把依赖序号 → 实际号；null 占位变 ?）\n\n` +
-        `**关键**：用 \`mcp__github__get_issue\` 拿现有 body 再追加，不要直接覆盖（保留 issue 原有内容）。\n\n` +
+        `对 L3 拆分的子 issue 回填依赖关系——把 planner 的 dependsOn 序号映射成实际 issue 号，写进统一的 \`Depends-on:\` 标记（triage 下一轮据此判断子 issue 能否派单）。\n\n` +
+        `**原始 subIssues（含 dependsOn 序号，0-indexed 指向同数组内其它 sub）**：\n${JSON.stringify(subIssues, null, 2)}\n\n` +
+        `**实际创建号 splitInto（按 subIssues 顺序，null = 该位置创建失败）**：\n${JSON.stringify(createResult.splitInto)}\n\n` +
+        `**操作**：对 splitInto 中**非 null 且对应 subIssue 有 dependsOn.length > 0** 的**每个** issue：\n` +
+        `1. 算它的依赖实际号：把该 subIssue 的 dependsOn 里每个序号 i 映射到 splitInto[i]，丢弃映射结果为 null 的\n` +
+        `2. \`mcp__github__get_issue\`（owner/repo: vs0533/10e0, issue_number: 该 issue 的实际号）拿现有 body\n` +
+        `3. 把 body 里的 \`Depends-on: PENDING\` **整行**替换成 \`Depends-on: #A, #B\`（A/B = 第 1 步映射出的实际号，逗号分隔）；若没有该行则在 body 末尾追加这一行\n` +
+        `4. \`mcp__github__update_issue\` 写回（**只改 Depends-on 行，保留其余内容**）\n\n` +
+        `**关键**：每个 issue 只填**它自己** dependsOn 指向的号，绝不要把所有子 issue 都列上（旧 bug：曾对所有 issue 写全量 splitInto）。\n\n` +
         `**严格回报**：\n` +
         `- linked: 成功回填依赖的 issue 数\n` +
         `- errors: 失败描述数组`,

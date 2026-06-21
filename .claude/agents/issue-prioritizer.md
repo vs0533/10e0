@@ -320,6 +320,7 @@ gh issue list --state open --limit 200 --json number,title,body \
 10. **自动化 PR 隔离**：Dependabot 提的依赖升级 PR（label `dependencies`）归到 P3 单独一栏，与人工 PR 隔离
 11. **PR 排除复核**：当某 PR 已被 issue 承接但 issue 关闭后，PR 需重新进入待办——避免「issue 关了 PR 没人管」的孤儿状态
 12. **Epic tracking issue 跳过**：带 `epic` 标签的 issue 是 triage L3 拆分大 feature 时生成的**子任务进度看板**（正文是 `- [ ] #N` checklist），本身不含可直接实现的工作——**从派单/排序中排除**（等同 closed 处理）。其真实工作由它列出的子 issue（带 `followup-from:#<epic>`）承接；子 issue 全部关闭后由人工关闭 epic
+13. **依赖未就绪的 L3 子 issue 跳过**：带 `followup-from:#<epic>` 的子 issue 若 body 含 `Depends-on: #X[, #Y]`（实际 issue 号），逐个检查这些前置 issue 的 state——**任一仍 open 则本子 issue 暂不可派单**（从排序/综合顺序中排除，等价于 blocked），等前置全部 closed 后再纳入。这保证 L3 拆分的有序子任务按依赖拓扑顺序执行，避免后置任务因前置接口未就绪而 TDD 失败。`Depends-on: none`/`PENDING` 或无此行不受限。被 schema 调用（StructuredOutput 模式）时同样遵守此排除规则
 
 ## 边界情况处理
 

@@ -48,6 +48,7 @@ const RANK_PROMPT =
   '返回当前仓库未处理 issue/PR 的优先级排序（按 bug > failing-ci > review-feedback > feature > refactor > docs > stale）。' +
   '每项必须含 id, type(issue|pr), url, title, body, labels(array), priority(number)。' +
   '排除已有关联 PR 的 issue、已 close 的项、stale > 30 天且无活动的项、带 epic 标签的 tracking issue（它只是 L3 拆分出的子任务进度看板，不直接派单处理）。' +
+  '排除「依赖未就绪」的 L3 子 issue：若某 issue body 含 `Depends-on: #X[, #Y...]`（实际 issue 号），逐个检查这些前置 issue——任一仍 open（未关闭）则本项暂不可派单、从结果中排除（等前置全部 closed 后的下一轮再排），保证有序子任务按依赖拓扑推进；`Depends-on: none`/`PENDING` 或无此行不受此限。' +
   '请把数组放在 items 字段下返回（schema 要求）。'
 
 // 把 labels 字符串转成数组（CLI 传过来是字符串）
