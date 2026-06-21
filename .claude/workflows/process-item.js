@@ -407,7 +407,6 @@ try {
         `- owner/repo: vs0533/10e0\n` +
         `- title: subIssue.title\n` +
         `- body: \`Part of #${item.id}\\n\\n\${subIssue.description}\\n\\nDepends-on: \${subIssue.dependsOn?.length ? 'PENDING' : 'none'}\\n\\n自动从 #${item.id} 拆分（triage L3）\`\n` +
-        `  （\`Depends-on:\` 是机器可读标记：none=无前置依赖可立即派单；PENDING=有依赖，linkDeps 步骤会回填实际 issue 号供下一轮 triage 判断能否派单）\n` +
         `- labels: [\`followup-from:#${item.id}\`, \`enhancement\`, ...(subIssue.labels || [])]\n\n` +
         `**严格统计**：\n` +
         `- createdCount: 实际创建成功的 issue 数\n` +
@@ -433,7 +432,7 @@ try {
         `2. \`mcp__github__get_issue\`（owner/repo: vs0533/10e0, issue_number: 该 issue 的实际号）拿现有 body\n` +
         `3. 把 body 里的 \`Depends-on: PENDING\` **整行**替换成 \`Depends-on: #A, #B\`（A/B = 第 1 步映射出的实际号，逗号分隔）；若没有该行则在 body 末尾追加这一行\n` +
         `4. \`mcp__github__update_issue\` 写回（**只改 Depends-on 行，保留其余内容**）\n\n` +
-        `**关键**：每个 issue 只填**它自己** dependsOn 指向的号，绝不要把所有子 issue 都列上（旧 bug：曾对所有 issue 写全量 splitInto）。\n\n` +
+        `**关键**：每个 issue 只填**它自己** dependsOn 指向的号，绝不要把所有子 issue 都列上。\n\n` +
         `**严格回报**：\n` +
         `- linked: 成功回填依赖的 issue 数\n` +
         `- errors: 失败描述数组`,
