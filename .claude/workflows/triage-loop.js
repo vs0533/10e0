@@ -30,7 +30,7 @@ const ITEM_SCHEMA = {
   },
 }
 
-// 注意：不能直接用顶层 type:'array'，Qwen 子代理调用 StructuredOutput 时
+// 注意：不能直接用顶层 type:'array'，子代理调用 StructuredOutput 时
 // 用的是命名对象参数（id/type/url...），而校验器要求 input 整体就是数组。
 // 标准修复：把数组包到 items 字段里，下游 unwrap。
 const RANK_SCHEMA = {

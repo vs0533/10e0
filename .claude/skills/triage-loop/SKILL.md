@@ -6,7 +6,7 @@ description: 自动循环处理仓库的 issues 和 PRs。每一轮从 issue-pri
 # Triage Loop / 循环分诊
 
 > **执行入口**：`.claude/workflows/triage-loop.js`（外层 while 循环）
-> **子工作流**：`.claude/workflows/process-item.js`（单 issue/PR 完整 9 步）
+> **子工作流**：`.claude/workflows/process-item.js`（单 issue/PR 完整流程，见下方步骤表）
 >
 > 本文件**只描述规则与派单策略**；具体执行逻辑请读 workflow 脚本注释。
 > 用户在 Claude Code 中调用 `Workflow({ name: "triage-loop", args: { ... } })` 触发。
@@ -61,7 +61,7 @@ Workflow({ name: "process-item", args: { item: { id: 42, type: "issue", ... } } 
 | `stale` | `stale` | 只让 `issue-prioritizer` 加 stale label / 评论（不开发） |
 | `failing-ci` / `ci-failing` | `fix-ci` | 跳 BDD，走 TDD+tests+review+PR+盯+handle |
 | `review-feedback` / `changes-requested` | `fix-review` | 跳 BDD，走 TDD+tests+review+PR+盯+handle |
-| `bug`/`critical` 或标题含 fix/bug/error/exception/crash | `bug` | **完整流程**：BranchCheck→BDD→TDD(×3)→Tests→Review→Open PR→Watch→Handle→Merge |
+| `bug`/`critical` 或标题含 fix/bug/error/exception/crash | `bug` | **完整流程**：BranchCheck→BDD→TDD(×2)→Tests→Review→Open PR→Watch→Handle→Merge |
 | `feature` / `enhancement` | `feature` | 完整流程 + 前置 planner |
 | `refactor` / `tech-debt` / `dead-code` | `refactor` | 跳 BDD+planner，走 TDD+tests+review+PR+盯+handle |
 | `docs` / `documentation` | `docs` | 跳 BDD，让 doc-updater 写 |
@@ -74,16 +74,15 @@ Workflow({ name: "process-item", args: { item: { id: 42, type: "issue", ... } } 
 每个 item 必走（kind 决定哪些步跳过）：
 
 ```
-1.  BranchCheck  general-purpose   schema 化 preflight：强制 `git checkout -f dev` + pull，再切干净 feature 分支
+1.  BranchCheck  general-purpose   schema 化 preflight：强制 `git checkout -f dev` + pull，再切干净 feature 分支（baseSynced=false 直接 throw）
 2.  BDD          bdd-guide         写 Given/When/Then 验收测试，必须 RED
 3.  Planner      planner           写 plan markdown（仅 feature）
 4.  TDD-Schema   tdd-guide         DB/接口/DI，< 5 文件
-5.  TDD-Impl     tdd-guide         handler/service 实现，让测试 GREEN
-6.  TDD-Verify   general-purpose   build/test/format 兜底验证
-7.  Tests        general-purpose   schema 化报数字（buildOk / testsOk / failed / passed / formatOk）
-8.  Local Review code-reviewer     本地扫 diff，处理 CRITICAL/HIGH
-9.  Open PR      general-purpose   push feature 分支，mcp__github__create_pull_request（base=dev）
-10-12. review-fix 循环（最多 `maxReviewRounds`=3 轮，Watch/Handle/Merge 反复跑）：
+5.  TDD-Impl     tdd-guide         handler/service 实现 + 补边界测试，让测试 GREEN
+6.  Tests        general-purpose   schema 化 build/test/format 门禁（buildOk / testsOk / failed / passed / formatOk）
+7.  Local Review code-reviewer     本地扫 diff，处理 CRITICAL/HIGH
+8.  Open PR      general-purpose   push feature 分支，mcp__github__create_pull_request（base=dev）
+9-11. review-fix 循环（最多 `maxReviewRounds`=3 轮，Watch/Handle/Merge 反复跑）：
         每轮 Watch Review 等 CI + 拉三类评论 + 解析 bot VERDICT →
         - **APPROVE** → Merge & Sync：CI 绿 + mergeable 时 squash 合并到 dev + 同步本地，结束
         - **REQUEST_CHANGES** → Handle Review：能在本 PR 修的修 + `git push`（触发新 CI+新 review）→ **下一轮重等**；
@@ -181,7 +180,7 @@ Followup from #<pr-number>: <review 反馈摘要>
 |---|---|---|
 | 队列始终不空 | issue-prioritizer 把已派单也返回 | issue-prioritizer prompt 加 `!has linked pr` 过滤 |
 | BDD 写的测试 TDD 看不到 | 给 BDD 加了 `isolation: "worktree"` | 删掉 isolation，让 TDD 接力 |
-| PR review 等不到 | claude-review.yml 没跑 / secret 缺失 | 检查 `ALIBABA_API_KEY`；改短 `reviewTimeoutMs` |
+| PR review 等不到 | claude-review.yml 没跑 / review API secret 缺失 | 检查 claude-review.yml 里配的 review API key secret（以该文件 env 为准）；改短 `reviewTimeoutMs` |
 | 子 agent 返回 schema 不匹配 | prompt 没强调字段 | schema 必填字段在 prompt 重复一次 |
 | 循环第 1 项就卡住 | agent prompt 缺上下文 | 至少传 `id, url, title, body` |
 | max 太小跑不完 | feature 走 BDD+planner+TDD+PR 实际 3-5 轮 | `max: 20+` |
@@ -193,8 +192,9 @@ Followup from #<pr-number>: <review 反馈摘要>
 | 失败 item 留下脏工作区，后续每轮都卡 | 旧 BranchCheck「脏即 throw」（Bug E） | 已修：BranchCheck 用 `git checkout -f dev` 丢弃 feature 分支残留（dev/main 脏时仍 throw 保护用户改动） |
 | 自动合并不生效，PR 停在 open | branch protection 要求人工 approve，merge API 422 | 预期行为：Merge & Sync 标 `reason="需人工 approve"` 跳过，需人工合并 |
 | `--dry-run` 重复打印同一项 N 次 | 旧版 dry-run 进 while 循环 rank N 次（Bug D） | 已修：dry-run 只 rank 一次列出整个队列后 return |
-| Watch Review 阶段 CI 早绿却空转卡死 >40min | 旧版让 LLM 自己数 sleep 次数轮询，MiniMax-M3 不可靠（Bug H） | 已修：Watch/Merge 改用确定性 `for i in $(seq 1 N)` shell 循环控制次数，LLM 只执行命令不数数 |
-| item 代码全写完、测试全过，只因缺末尾换行被整个跳过 | TDD-Verify/Tests 的 `dotnet format` 是 `--verify-no-changes` 只验证不修复（小模型必漏换行） | 已修：format 改「先 `dotnet format` 自动修复，再 `--verify-no-changes` 确认」（#49 案例：751 测试全过只卡 formatOk=false） |
+| Watch Review 阶段 CI 早绿却空转卡死 >40min | 旧版让 LLM 自己数 sleep 次数轮询，小模型自己数数不可靠（Bug H） | 已修：Watch/Merge 改用确定性 `for i in $(seq 1 N)` shell 循环控制次数，LLM 只执行命令不数数 |
+| item 代码全写完、测试全过，只因缺末尾换行被整个跳过 | Tests 的 `dotnet format` 是 `--verify-no-changes` 只验证不修复（小模型必漏换行） | 已修：format 改「先 `dotnet format` 自动修复，再 `--verify-no-changes` 确认」（#49 案例：751 测试全过只卡 formatOk=false） |
+| feature 分支基于过期 dev，Merge 阶段撞 BEHIND/CONFLICTING | BranchCheck 的 `git pull` 失败但 agent 没把原因写进 error，baseSynced=false 被静默放过 | 已修：process-item 对 `baseSynced=false` 直接 throw，triage-loop 跳过该项；多为网络/远端抖动，重跑即可 |
 | 失败 item 的改动下一轮被 `checkout -f dev` 丢光 | catch 块没保存就交给 BranchCheck 强切 | 已修：catch 块先 `git add -A && commit && push` WIP 到 feature 分支保住改动，返回 `savedBranch` |
 | `--max 1` 却看到 process-item 跑「两轮」 | UI 显示 process-item 内部 8 个子 agent 阶段，非真重复派单（运行记录 processed=0,skipped=1） | 非 bug，是 UI 显示内部阶段；真要「未合并不继续」用默认 stopOnUnmerged 行为 |
 | 同一 issue 被重做、PR 与 dev 冲突、自愈循环空转 | 已合并 PR 没写 `Closes #N` → issue 遗留 open 被下轮重复处理（#51→#55→#58） | 已修：Open PR 对 issue 强制写 `Closes #<id>`；自愈循环每轮先查 `mergeable`，`CONFLICTING/DIRTY` 立即停留人工 |
@@ -211,7 +211,7 @@ Followup from #<pr-number>: <review 反馈摘要>
   - `get_pull_request_reviews` / `get_pull_request_comments`：拉 review
   - `create_issue`：开 followup issue
   - `create_pull_request`：开 PR
-- **CI**：`.github/workflows/claude-review.yml`（PR 自动 review, Qwen headless）
+- **CI**：`.github/workflows/claude-review.yml`（PR 自动 review bot, headless；后端模型见该文件 env，triage 侧不绑型号）
 - **项目级**：`/Users/wilder/dev/10e0/CLAUDE.md`（开发规范）、`/agents/issue-prioritizer.md`
 
 ## 调优建议
