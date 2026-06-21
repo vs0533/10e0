@@ -110,6 +110,10 @@ public sealed class OutboxLockAcceptanceTests
             "租约时长必须为正；否则锁瞬间过期等于未锁");
         options.LockInstanceId.Should().NotBeNullOrWhiteSpace(
             "实例 ID 不能为空；否则拿不到任何锁的归属信息");
+        options.LockProvider.Should().Be(
+            OutboxLockProviderKind.None,
+            "LockProvider 默认必须是 None — 与 #80 NoOpOutboxLock 等价；"
+            + "0/1 实例部署不感知多实例锁逻辑");
     }
 
     [Fact]

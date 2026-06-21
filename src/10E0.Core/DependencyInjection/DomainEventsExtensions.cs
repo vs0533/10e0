@@ -56,8 +56,11 @@ public static class DomainEventsExtensions
         services.AddSingleton<IOutboxAdmin>(sp =>
             new OutboxAdminService<TContext>(sp, sp.GetRequiredService<IOptions<OutboxRelayOptions>>()));
 
-        // 行级锁契约（#80）：0/1 实例部署零感知；多实例部署 Replace 为 provider 实现。
-        services.AddOutboxLocking();
+        // 行级锁契约（#80 / #81）：0/1 实例部署零感知；多实例部署按 IOptions<OutboxRelayOptions>.LockProvider
+        // + IDbContextFactory<TContext> 的 ProviderName 探测自动注册 SqlServer / Postgres provider 实现。
+        // 沿用 OutboxAdminService<TContext> 已有泛型签名惯例 — 调用方一次 AddTenE0DomainEvents<TContext>()
+        // 即可获得完整 Outbox 基础设施（后台投递 + 运维管理 + 行级锁）。
+        services.AddOutboxLocking<TContext>();
 
         // Schema 升级 seeder（#80）：为既有库幂等补齐 LockedUntil / LockedByInstance 列与复合索引。
         // Order=0：先于任何业务 Seeder（业务 Seeder 通常 Order=10+），保证后续 seeder 写出的行能落在新列上。
