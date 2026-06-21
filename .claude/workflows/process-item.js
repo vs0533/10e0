@@ -188,6 +188,37 @@ const maxSteps = (() => {
   return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 6
 })()
 
+// B: type=pr 专属路径——PR 已有分支和代码，不能走 issue 的 BranchCheck（会 git checkout -f dev
+// 丢弃 PR 分支）+ BDD/Planner/TDD/Open PR（会重新开发并开一个新 PR）。改为：checkout PR 的
+// head 分支后，直接进 review 自愈循环（REQUEST_CHANGES→修+push / APPROVE→合并 / CI 未绿留下轮）。
+// 放在 featureBranch / BranchCheck 之前，避免 issue 的 preflight 把 PR 分支冲掉。
+if (item.type === 'pr') {
+  log(`#${item.id} 是 PR——走 PR 专属路径（checkout PR 分支 + review 自愈循环，不重新开发）`)
+  const co = await agent(
+    `处理 PR #${item.id}（${item.title}）前，把工作区切到该 PR 的分支。\n\n` +
+    `操作（任一步 fatal 就把原因写进 error 返回，不要猜）：\n` +
+    `1. \`git checkout -f dev\`（丢弃上一轮残留改动是安全的：成功的 item 已 push）\n` +
+    `2. \`gh pr checkout ${item.id}\`（fetch 并切到该 PR 的 head 分支）\n` +
+    `3. \`git branch --show-current\` 拿当前分支名填 headBranch（必须非空，且不是 dev/main）\n` +
+    `4. \`gh pr view ${item.id} --json url -q .url\` 填 prUrl\n\n` +
+    `回报 schema：{ headBranch: string, prUrl?: string, error?: string }`,
+    { phase: 'BranchCheck', agentType: 'general-purpose', schema: {
+      type: 'object', required: ['headBranch'],
+      properties: { headBranch: { type: 'string' }, prUrl: { type: 'string' }, error: { type: 'string' } },
+    } }
+  )
+  log(`#${item.id} PR checkout: ${JSON.stringify(co)}`)
+  if (co.error || !co.headBranch || co.headBranch === 'dev' || co.headBranch === 'main') {
+    return { ok: false, prNumber: item.id, merged: false, followupCount: 0,
+      error: `PR #${item.id} checkout 失败或分支异常: ${co.error ?? co.headBranch}` }
+  }
+  try {
+    return await runReviewLoop(item.id, co.prUrl || item.url, co.headBranch)
+  } catch (e) {
+    return { ok: false, prNumber: item.id, merged: false, followupCount: 0, error: e?.message ?? String(e) }
+  }
+}
+
 // 在主仓库工作目录唯一生成 feature 分支名（BranchCheck 与 Merge & Sync 共用同一个名字，
 // 避免「创建模板」与「识别正则」两处规则不一致的历史 bug）
 const featureBranch = `feature/${item.id}-${(item.title || 'fix')
@@ -630,6 +661,77 @@ try {
   const prUrl = prInfo.prUrl
   if (!prNumber) throw new Error(`PR 创建失败: ${JSON.stringify(prInfo)}`)
 
+  // 7-9. review-fix 循环已抽成顶层 runReviewLoop（PR 路径复用同一逻辑）
+  return await runReviewLoop(prNumber, prUrl, workBranch)
+} catch (e) {
+  // 单 item 失败：不崩溃整个 triage-loop，返回 ok:false 让上层处理。
+  const msg = e?.message ?? String(e)
+  log(`#${item.id} 处理失败（已捕获）: ${msg}`)
+
+  // 失败改动保护：把工作区已有改动 commit + push 到 feature 分支（WIP），
+  // 否则下一轮 BranchCheck 的 `git checkout -f dev` 会丢掉它们——
+  // 本次 #49 案例就是代码全写完、751 测试全过，只因 format 卡，改动差点被丢。
+  // 内层 try/catch 包住：保护本身失败也不让异常逃出 process-item。
+  let savedBranch = null
+  try {
+    const saveResult = await agent(
+      `process-item 处理 #${item.id} 失败了，但工作区可能有有价值的改动（如代码已写完只是某步卡住）。\n` +
+      `**抢救改动，别让它被下一轮 \`git checkout -f dev\` 丢掉：**\n` +
+      `1. \`git status --porcelain\`——没有任何改动就返回 { saved:false, reason:"无改动" }\n` +
+      `2. 有改动 → 确认当前在 feature 分支 \`${workBranch}\`（不是 dev/main）；若不在则返回 { saved:false, reason:"不在 feature 分支" }\n` +
+      `3. \`git add -A\` → \`git commit -m "wip: #${item.id} 处理中断保存"\`\n` +
+      `4. \`git push -u origin ${workBranch}\`（推远端彻底安全；push 失败也没关系，本地 commit 已保住）\n` +
+      `回报 schema：{ saved: boolean, branch?: string, reason?: string }`,
+      { phase: 'BranchCheck', agentType: 'general-purpose', schema: {
+        type: 'object', required: ['saved'],
+        properties: { saved: { type: 'boolean' }, branch: { type: 'string' }, reason: { type: 'string' } },
+      } }
+    )
+    if (saveResult?.saved) savedBranch = saveResult.branch || workBranch
+    log(`#${item.id} 失败改动保护: ${JSON.stringify(saveResult)}`)
+  } catch (se) {
+    log(`#${item.id} 改动保护也失败（忽略）: ${se?.message ?? String(se)}`)
+  }
+
+  // H1 补救：L3 失败时若 createSubs 已建了 sub-issue（l3SplitInto 非 null），
+  // 调补救 agent 给原 issue + 所有已建 sub-issue 加 `epic` 标签，让 issue-prioritizer 排除，
+  // 避免下轮 triage 把这些 orphan sub-issue 当新派单对象处理（重复处理会与原 feature 冲突）。
+  if (Array.isArray(l3SplitInto) && l3SplitInto.length > 0) {
+    const validSubs = l3SplitInto.filter(n => n != null)
+    log(`#${item.id} L3 失败补救: ${validSubs.length} 个 orphan sub-issue + 原 issue 加 epic 标签`)
+    try {
+      await agent(
+        `L3 拆分失败后的补救——避免 orphan sub-issue 被下轮 triage 重复派单。\n\n` +
+        `**原 issue** #${item.id}（${item.title}）\n` +
+        `**已建 sub-issue 列表**（splitInto，按 planner 顺序，null = 该位置创建失败）：\n${JSON.stringify(l3SplitInto)}\n\n` +
+        `**操作**：\n` +
+        `1. 给**原 issue** #${item.id} 加 \`epic\` 标签：用 \`mcp__github__get_issue\` 拿现有 labels → 合并 ['epic'] 去重 → \`mcp__github__update_issue\`\n` +
+        `2. 给每个 splitInto 中**非 null 的 sub-issue** 也加 \`epic\` 标签（同样 get→merge→update 流程，避免覆盖原 labels）\n` +
+        `3. **不**改任何 body（保留原内容；补救只防重复派单，不重做 epic 化）\n` +
+        `4. **不**修改 state（保持 open，等人工处理）\n` +
+        `5. 给原 issue 发一个 comment 说明："⚠️ triage L3 拆分失败，本 issue 已标 epic 但未做 checklist 改造。` +
+        `已建 sub-issue ${validSubs.length} 个也标 epic 防重复派单。请人工检查并决定后续处理。"\n\n` +
+        `**严格回报 schema**：\n` +
+        `- ok: boolean（原 issue 加 epic 成功 + 至少 1 个 sub-issue 加 epic 成功）\n` +
+        `- subIssueLabeledCount: number（成功加 epic 的 sub-issue 数）\n` +
+        `- errors: string[]（失败描述）\n\n` +
+        `**关键**：即使补救失败，原 try 块仍会返回 ok:false + error（本补救 swallow 异常，避免二次失败掩盖原错误）`,
+        { phase: 'Decompose to Epic', agentType: 'general-purpose', schema: L3_REMEDIATE_SCHEMA }
+      )
+    } catch (re) {
+      log(`#${item.id} L3 补救失败（已忽略，不掩盖原错误）: ${re?.message ?? re}`)
+    }
+  }
+
+  log(`#${item.id} 最终: ok=false, savedBranch=${savedBranch ?? 'none'}`)
+  return { ok: false, prNumber: null, merged: false, followupCount: 0, error: msg, savedBranch }
+}
+
+
+// ===== 抽出的 review 自愈循环：issue 路径 Open PR 后调用，PR 路径 checkout 后调用 =====
+// 闭包访问顶层 item / A；prNumber·prUrl·workBranch 作参数（issue 与 PR 路径传入不同来源）。
+// 顶层 try/catch 之外定义，async function 声明 hoist，调用处（try 内 / PR 分流）均可见。
+async function runReviewLoop(prNumber, prUrl, workBranch) {
   // 7-9. review-fix 循环（收紧门禁 + 自动修复重试）：
   //   每轮：等 CI settled → 拉三类评论 + 解析 bot VERDICT →
   //     - APPROVE：CI 绿 + mergeable 时 squash 合并到 dev + 同步本地，结束
@@ -859,66 +961,4 @@ try {
     fixedCount: totalFixed,
     summary: lastSummary,
   }
-} catch (e) {
-  // 单 item 失败：不崩溃整个 triage-loop，返回 ok:false 让上层处理。
-  const msg = e?.message ?? String(e)
-  log(`#${item.id} 处理失败（已捕获）: ${msg}`)
-
-  // 失败改动保护：把工作区已有改动 commit + push 到 feature 分支（WIP），
-  // 否则下一轮 BranchCheck 的 `git checkout -f dev` 会丢掉它们——
-  // 本次 #49 案例就是代码全写完、751 测试全过，只因 format 卡，改动差点被丢。
-  // 内层 try/catch 包住：保护本身失败也不让异常逃出 process-item。
-  let savedBranch = null
-  try {
-    const saveResult = await agent(
-      `process-item 处理 #${item.id} 失败了，但工作区可能有有价值的改动（如代码已写完只是某步卡住）。\n` +
-      `**抢救改动，别让它被下一轮 \`git checkout -f dev\` 丢掉：**\n` +
-      `1. \`git status --porcelain\`——没有任何改动就返回 { saved:false, reason:"无改动" }\n` +
-      `2. 有改动 → 确认当前在 feature 分支 \`${workBranch}\`（不是 dev/main）；若不在则返回 { saved:false, reason:"不在 feature 分支" }\n` +
-      `3. \`git add -A\` → \`git commit -m "wip: #${item.id} 处理中断保存"\`\n` +
-      `4. \`git push -u origin ${workBranch}\`（推远端彻底安全；push 失败也没关系，本地 commit 已保住）\n` +
-      `回报 schema：{ saved: boolean, branch?: string, reason?: string }`,
-      { phase: 'BranchCheck', agentType: 'general-purpose', schema: {
-        type: 'object', required: ['saved'],
-        properties: { saved: { type: 'boolean' }, branch: { type: 'string' }, reason: { type: 'string' } },
-      } }
-    )
-    if (saveResult?.saved) savedBranch = saveResult.branch || workBranch
-    log(`#${item.id} 失败改动保护: ${JSON.stringify(saveResult)}`)
-  } catch (se) {
-    log(`#${item.id} 改动保护也失败（忽略）: ${se?.message ?? String(se)}`)
-  }
-
-  // H1 补救：L3 失败时若 createSubs 已建了 sub-issue（l3SplitInto 非 null），
-  // 调补救 agent 给原 issue + 所有已建 sub-issue 加 `epic` 标签，让 issue-prioritizer 排除，
-  // 避免下轮 triage 把这些 orphan sub-issue 当新派单对象处理（重复处理会与原 feature 冲突）。
-  if (Array.isArray(l3SplitInto) && l3SplitInto.length > 0) {
-    const validSubs = l3SplitInto.filter(n => n != null)
-    log(`#${item.id} L3 失败补救: ${validSubs.length} 个 orphan sub-issue + 原 issue 加 epic 标签`)
-    try {
-      await agent(
-        `L3 拆分失败后的补救——避免 orphan sub-issue 被下轮 triage 重复派单。\n\n` +
-        `**原 issue** #${item.id}（${item.title}）\n` +
-        `**已建 sub-issue 列表**（splitInto，按 planner 顺序，null = 该位置创建失败）：\n${JSON.stringify(l3SplitInto)}\n\n` +
-        `**操作**：\n` +
-        `1. 给**原 issue** #${item.id} 加 \`epic\` 标签：用 \`mcp__github__get_issue\` 拿现有 labels → 合并 ['epic'] 去重 → \`mcp__github__update_issue\`\n` +
-        `2. 给每个 splitInto 中**非 null 的 sub-issue** 也加 \`epic\` 标签（同样 get→merge→update 流程，避免覆盖原 labels）\n` +
-        `3. **不**改任何 body（保留原内容；补救只防重复派单，不重做 epic 化）\n` +
-        `4. **不**修改 state（保持 open，等人工处理）\n` +
-        `5. 给原 issue 发一个 comment 说明："⚠️ triage L3 拆分失败，本 issue 已标 epic 但未做 checklist 改造。` +
-        `已建 sub-issue ${validSubs.length} 个也标 epic 防重复派单。请人工检查并决定后续处理。"\n\n` +
-        `**严格回报 schema**：\n` +
-        `- ok: boolean（原 issue 加 epic 成功 + 至少 1 个 sub-issue 加 epic 成功）\n` +
-        `- subIssueLabeledCount: number（成功加 epic 的 sub-issue 数）\n` +
-        `- errors: string[]（失败描述）\n\n` +
-        `**关键**：即使补救失败，原 try 块仍会返回 ok:false + error（本补救 swallow 异常，避免二次失败掩盖原错误）`,
-        { phase: 'Decompose to Epic', agentType: 'general-purpose', schema: L3_REMEDIATE_SCHEMA }
-      )
-    } catch (re) {
-      log(`#${item.id} L3 补救失败（已忽略，不掩盖原错误）: ${re?.message ?? re}`)
-    }
-  }
-
-  log(`#${item.id} 最终: ok=false, savedBranch=${savedBranch ?? 'none'}`)
-  return { ok: false, prNumber: null, merged: false, followupCount: 0, error: msg, savedBranch }
 }
