@@ -319,7 +319,10 @@ try {
       `**硬约束**：\n` +
       `- plan-driven 每步 ≤5 文件；steps 数组只列 ≤${maxSteps} 项\n` +
       `- 严格按 schema 返回（decomposable/reason 必填，steps/subIssues 二选一）\n` +
-      `- reason 必须可解释判定依据（review 时核对）\n\n` +
+      `- reason 必须可解释判定依据（review 时核对）\n` +
+      `- **核实前提**：用 Read/Grep 确认计划依赖的项目机制真实存在再写进 steps——` +
+      `如声称「迁移」前先确认是 EF Migrations 还是 EnsureCreated（\`grep -rn "Migrate\\|EnsureCreated\\|Migrations" src/\`），` +
+      `声称「复用某服务/接口」前确认它存在。基于虚构前提的 step 会让 TDD 阶段无法执行、卡住整个 PR（#80 Step 5 教训）。\n\n` +
       `**回报 schema**：\n` +
       `- decomposable: boolean\n` +
       `- reason: string（解释为什么这么判定）\n` +
@@ -605,17 +608,39 @@ try {
     `}`,
     { phase: 'Tests', agentType: 'general-purpose', schema: TESTS_SCHEMA }
   )
+  // Tests 自愈：plan-driven 多步实现常留跨步零散 RED（缺 DI 注册 / 默认值不一致 / 收口遗漏），
+  // 给 fix agent 最多 maxTestFixRounds 次机会修剩余失败再重测，还失败才 throw。
+  // 仅未全绿时触发——成功路径零成本。补齐 review 阶段已有自愈、而本地 Tests 缺失的一环。
+  const isTestFailing = (r) => !r?.buildOk || !r?.testsOk || !r?.formatOk || (r?.failed ?? 1) > 0
+  const maxTestFixRounds = Number(A.maxTestFixRounds ?? 1) || 1
+  let tr = testResult
+  for (let r = 1; r <= maxTestFixRounds && isTestFailing(tr); r++) {
+    log(`#${item.id} Tests 未全绿(build=${tr?.buildOk} test=${tr?.testsOk} format=${tr?.formatOk} failed=${tr?.failed ?? '?'})，Tests 自愈第 ${r}/${maxTestFixRounds} 轮`)
+    tr = await agent(
+      `当前 build/test/format 未全绿，修复剩余失败后重新验证回报。\n\n` +
+      `**失败快照**：build=${tr?.buildOk} test=${tr?.testsOk} format=${tr?.formatOk} failed=${tr?.failed ?? '?'}\n` +
+      `**失败原始输出**：\n${(tr?.raw || '').slice(0, 1500)}\n\n` +
+      `修复剩余失败（plan-driven 多步常留收口问题：缺 DI 注册 / 默认值不一致 / 缺接口实现）。` +
+      `**不要改测试去迁就错误实现**，除非测试本身断言写错（如断言了错误的默认值）。\n\n` +
+      `修完**重跑这三条**（都带 DOTNET_CLI_UI_LANGUAGE=en-US）并按 schema 回报最终状态：\n` +
+      `1. \`dotnet build 10e0.slnx 2>&1 | tail -20\` → buildOk\n` +
+      `2. \`dotnet test 10e0.slnx --nologo 2>&1 | tail -30\` → testsOk + failed/passed/skipped 数字\n` +
+      `3. \`dotnet format 10e0.slnx --severity warn\` 再 \`--verify-no-changes --severity warn\` → formatOk\n\n` +
+      `回报同 schema：{ buildOk, testsOk, failed, passed, skipped, formatOk, raw }`,
+      { phase: 'Tests', agentType: 'general-purpose', schema: TESTS_SCHEMA }
+    )
+  }
   // 字段判断（替代旧的正则）：3 个 boolean 都 true 且 failed === 0
-  if (!testResult?.buildOk || !testResult?.testsOk || !testResult?.formatOk || (testResult?.failed ?? 0) > 0) {
+  if (isTestFailing(tr)) {
     throw new Error(
-      `tests failed: buildOk=${testResult?.buildOk} testsOk=${testResult?.testsOk} ` +
-      `formatOk=${testResult?.formatOk} failed=${testResult?.failed ?? '?'} passed=${testResult?.passed ?? '?'} ` +
-      `| ${(testResult?.raw || '').slice(0, 500)}`
+      `tests failed（自愈 ${maxTestFixRounds} 轮仍未全绿）: buildOk=${tr?.buildOk} testsOk=${tr?.testsOk} ` +
+      `formatOk=${tr?.formatOk} failed=${tr?.failed ?? '?'} passed=${tr?.passed ?? '?'} ` +
+      `| ${(tr?.raw || '').slice(0, 500)}`
     )
   }
   // 加固：防 agent 没真跑 dotnet test 就空报 testsOk:true / failed:0。
   // raw 必须含真实 dotnet test 输出特征（Passed!/Passed: <n>/Failed: <n>），否则字段不可信。
-  const testsRaw = String(testResult?.raw || '')
+  const testsRaw = String(tr?.raw || '')
   if (!/Passed!|Passed:\s*\d+|Failed:\s*\d+/.test(testsRaw)) {
     throw new Error(
       `#${item.id} tests 可疑：testsOk=${testResult?.testsOk} 但 raw 无真实 dotnet test 输出特征` +
