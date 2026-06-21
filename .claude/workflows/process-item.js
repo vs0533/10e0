@@ -606,13 +606,21 @@ try {
   const pollCount = Math.max(3, Math.floor(reviewTimeoutMs / 20000))  // shell seq 控制轮询次数，间隔 20s
   const REVIEW_SCHEMA = {
     type: 'object',
-    required: ['items', 'botVerdict'],
+    required: ['items', 'botVerdict', 'ciSettled'],
     properties: {
       // claude-review.yml bot 的结论：APPROVE / REQUEST_CHANGES（有 🔴 Critical）/ NONE（没找到 bot 评论）
       botVerdict: { type: 'string', enum: ['APPROVE', 'REQUEST_CHANGES', 'NONE'] },
       // PR 与 dev 的可合并状态（用于冲突门禁，防自愈循环对着 merge 冲突空转）
       mergeable: { type: 'string' },         // MERGEABLE / CONFLICTING / UNKNOWN
       mergeStateStatus: { type: 'string' },  // CLEAN / DIRTY / BLOCKED / BEHIND / UNSTABLE / UNKNOWN
+      // CI 是否真的全绿可合（**门禁硬指标**：bucket 全部 pass/skipping/cancel + mergeStateStatus=CLEAN）
+      // 修复（2026-06-21）：原版只解析 bot 评论判 verdict，导致 CI 还在 IN_PROGRESS 时
+      // 旧 bot 评论里的 "VERDICT: APPROVE" 被误用作合并依据；Merge 阶段靠兜底拒合救回，
+      // 但 phase 显示混乱。现强制 ciSettled 必填，未绿则 verdict 强制 NONE + 不调 Merge，
+      // 留到下一轮 triage 自然重试。
+      ciSettled: { type: 'boolean' },
+      // ciSettled=false 时填：哪几个 check 还 pending/fail，或 mergeStateStatus 是哪个非 CLEAN 值
+      checksNotSettled: { type: 'string' },
       items: {
         type: 'array',
         items: {
@@ -676,6 +684,18 @@ try {
       `done\n` +
       `gh pr checks $PR --json name,state,bucket\n` +
       '```\n\n' +
+      `**🔴 硬门禁（违反任一就立刻停，不准返回 APPROVE）**：\n` +
+      `- **所有 check 必须 COMPLETED 且 bucket 不含 fail**：\n` +
+      `  - bucket ∈ {pass, skipping, cancel} 算 OK\n` +
+      `  - bucket = pending → 还在跑\n` +
+      `  - bucket = fail → 已失败\n` +
+      `  - 任何 pending/fail → **立刻返回 ciSettled=false + botVerdict="NONE" + checksNotSettled 写明具体哪些 check pending/fail**，**不要**返回 APPROVE\n` +
+      `- **mergeStateStatus 必须 CLEAN**（PR 处于"可干净合并"状态）：\n` +
+      `  - CLEAN = 全绿可合\n` +
+      `  - UNSTABLE = 还有 check 跑 → 视为未 settled\n` +
+      `  - DIRTY / BLOCKED / BEHIND / UNKNOWN = 异常状态 → 视为未 settled\n` +
+      `  - **不满足 → 立刻返回 ciSettled=false + botVerdict="NONE" + checksNotSettled 写"mergeStateStatus=XXX"**\n\n` +
+      `**第二、三、四步只在 ciSettled=true 时才执行**：\n\n` +
       `**第二步：拉三类评论（缺一不可——bot 可能发正式 review，也可能降级成 issue comment）+ PR 可合并状态：**\n` +
       '```bash\n' +
       `gh pr view ${prNumber} --json reviews\n` +
@@ -688,15 +708,30 @@ try {
       `**只按时间最新的那条 bot 评论判 verdict**（本 PR 可能已 push 过多轮，别被旧评论干扰）。\n\n` +
       `**第四步：解析最新 bot VERDICT**（bot 评论的厂商无关特征：HTML marker "<!-- triage-review-bot -->" 或 "🤖 Automated Code Review" header 定位是 bot 评论；正文 "VERDICT:" / "Verdict:" 行作最终结论。**别靠具体模型名认 bot**，后端模型可换）：\n` +
       `- 含 "VERDICT: REQUEST_CHANGES" / "Verdict: **REQUEST_CHANGES**" → "REQUEST_CHANGES"\n` +
-      `- 含 "VERDICT: APPROVE" / "Verdict: **APPROVE**" → "APPROVE"\n` +
+      `- 含 "VERDICT: APPROVE" / "Verdict: **APPROVE**" → "APPROVE"（**仅在 ciSettled=true 时才返回**；ciSettled=false 时已提前 return NONE）\n` +
       `- 找不到 bot 评论 → "NONE"\n\n` +
-      `返回 schema: { botVerdict, mergeable, mergeStateStatus, items: [{ id, user, body, path?, line?, state }] }（数组放 items 字段下）。无评论返回 { botVerdict:"NONE", items: [], mergeable, mergeStateStatus }。`,
+      `**CI 状态总结（必填，写入 schema）**：\n` +
+      `- 所有 check bucket ∈ {pass, skipping, cancel} + mergeStateStatus=CLEAN → ciSettled=true\n` +
+      `- 其他情况 → ciSettled=false + checksNotSettled 写明具体未 settled 的项（如 "Build & Test pending"/"mergeStateStatus=UNSTABLE"）\n\n` +
+      `返回 schema: { botVerdict, mergeable, mergeStateStatus, ciSettled, checksNotSettled?: string, items: [{ id, user, body, path?, line?, state }] }（数组放 items 字段下）。无评论返回 { botVerdict:"NONE", items: [], mergeable, mergeStateStatus, ciSettled, checksNotSettled }。`,
       { phase: 'Watch Review', schema: REVIEW_SCHEMA, agentType: 'general-purpose' }
     )
     const reviews = reviewResult?.items ?? []
     const botVerdict = reviewResult?.botVerdict ?? 'NONE'
+    const ciSettled = reviewResult?.ciSettled ?? false
     finalVerdict = botVerdict
-    log(`PR #${prNumber} 轮 ${round}: ${reviews.length} 条评论, verdict=${botVerdict}, mergeable=${reviewResult?.mergeable ?? '?'}/${reviewResult?.mergeStateStatus ?? '?'}`)
+    log(`PR #${prNumber} 轮 ${round}: ${reviews.length} 条评论, verdict=${botVerdict}, ciSettled=${ciSettled}, mergeable=${reviewResult?.mergeable ?? '?'}/${reviewResult?.mergeStateStatus ?? '?'}`)
+
+    // (1.5) CI settled 硬门禁：bucket 还有 pending/fail 或 mergeStateStatus != CLEAN → 不调 Merge
+    //   修复（2026-06-21）：原版只看 bot 旧评论里的 "VERDICT: APPROVE" 就走合并路径，
+    //   忽略了 CI 实际还在 IN_PROGRESS；Merge agent 靠兜底拒合救回，但 phase 显示混乱。
+    //   现强制：ciSettled=false → 立刻 break，verdict 仅供记录，不触发合并，留到下一轮 triage 重试。
+    //   防御深度：即使 prompt 漏校验，workflow 侧也兜底再 check 一次 ciSettled 字段。
+    if (!ciSettled) {
+      mergeReason = `PR #${prNumber} CI 未全绿（${reviewResult?.checksNotSettled ?? 'check pending/fail or mergeStateStatus!=CLEAN'}）——bot verdict=${botVerdict} 仅供记录，不触发合并，留到下一轮 triage 重试`
+      log(`PR #${prNumber} CI 未 settled: ${mergeReason}`)
+      break
+    }
 
     // (2a) 冲突门禁：PR 与 dev 冲突（CONFLICTING/DIRTY）→ 自愈循环修不了 merge 冲突，立即停留人工。
     //      常见根因：重复处理了已被合并 PR 解决的 issue（#51/#55/#58 案例），或 base 落后需 rebase。
