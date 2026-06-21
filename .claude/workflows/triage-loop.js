@@ -86,7 +86,12 @@ const opts = {
   continueOnUnmerged: Boolean(A.continueOnUnmerged ?? A['continue-on-unmerged']),
   // plan-driven TDD 步数上限（仅 feature 走 Planner 时生效）；透传给 process-item。
   // 默认 6；用户传 --max-steps 8 → process-item 的 A.maxSteps = 8
-  maxSteps: Number(A.maxSteps ?? A['max-steps'] ?? 6) || 6,
+  // 防御性 sanitize：NaN / 0 / 负数 / Infinity 全部回退到 6；正常值 floor 防止小数
+  // 与 process-item.js:186-187 行为对齐（两边共用同一 sanitize 规则）
+  maxSteps: (() => {
+    const n = Number(A.maxSteps ?? A['max-steps'] ?? 6)
+    return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 6
+  })(),
 }
 
 log(`opts: ${JSON.stringify(opts)}`)
@@ -143,10 +148,13 @@ while (processed + skipped < opts.max) {
   // 「成功合并到 dev」或「L3 拆分成功」才算真正完成、才继续下一个 item。
   if (result && result.ok && result.merged) {
     log(`  ✓ #${item.id} 已合并到 dev: pr=#${result.prNumber ?? 'n/a'}, followup=${result.followupCount ?? 0}`)
+    if (result.summary) log(`    summary: ${result.summary}`)
     processed++
   } else if (result && result.ok && result.decomposed) {
     // L3：大 feature 已展开为子 issue + 原 issue 转 tracking epic —— 妥善处理，继续下一个
     log(`  🧩 #${item.id} 已拆分为 ${result.splitInto?.length ?? 0} 个子 issue（原 issue 转 tracking epic），继续`)
+    // L3 summary 含 planner reason / linkDeps 数 / epic 状态，便于事后审计
+    if (result.summary) log(`    summary: ${result.summary}`)
     processed++
   } else {
     // 未合并（留人工/REQUEST_CHANGES/NONE/冲突）或失败 —— 默认停止整个循环，等人工处理

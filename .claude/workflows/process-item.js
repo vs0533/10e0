@@ -138,7 +138,8 @@ const L3_CREATE_SUBS_SCHEMA = {
   required: ['createdCount', 'splitInto'],
   properties: {
     createdCount: { type: 'number' },
-    splitInto: { type: 'array', items: { type: 'number' } },
+    // items 允许 null 占位（createSubs prompt 要求失败的 sub-issue 位置填 null，供 linkDeps 步骤对齐序号）
+    splitInto: { type: 'array', items: { type: ['number', 'null'] } },
     errors: { type: 'array', items: { type: 'string' } },
   },
 }
@@ -159,6 +160,17 @@ const L3_MAKE_EPIC_SCHEMA = {
     errors: { type: 'array', items: { type: 'string' } },
   },
 }
+// L3 失败补救（H1）：catch 块调补救 agent 给原 issue + 已建 sub-issue 加 epic 标签防重复派单。
+// 提到顶部常量与 L3_*_SCHEMA 系列并列，保持命名/结构一致。
+const L3_REMEDIATE_SCHEMA = {
+  type: 'object',
+  required: ['ok', 'subIssueLabeledCount'],
+  properties: {
+    ok: { type: 'boolean' },
+    subIssueLabeledCount: { type: 'number' },
+    errors: { type: 'array', items: { type: 'string' } },
+  },
+}
 
 // args 容错：harness 有时把 args 序列化成 JSON 字符串传入（见 triage-loop.js 同款处理）。
 const A = (typeof args === 'string')
@@ -169,7 +181,12 @@ const item = A.item
 if (!item) throw new Error('process-item: args.item 必填')
 
 // plan-driven TDD 步数上限（仅 feature 走 Planner 时生效；planner steps 超出则 trim）
-const maxSteps = Number(A.maxSteps ?? 6) || 6
+// 防御性 sanitize：NaN / 0 / 负数 / Infinity 全部回退到 6；正常值 floor 防止小数
+// 透传 kebab-case 兼容（与 triage-loop.js:91 行为对齐）
+const maxSteps = (() => {
+  const n = Number(A.maxSteps ?? A['max-steps'] ?? 6)
+  return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 6
+})()
 
 // 在主仓库工作目录唯一生成 feature 分支名（BranchCheck 与 Merge & Sync 共用同一个名字，
 // 避免「创建模板」与「识别正则」两处规则不一致的历史 bug）
@@ -374,11 +391,16 @@ try {
         `把原 issue #${item.id}（${item.title}）转 tracking epic。\n\n` +
         `**子 issue 创建结果**（用于填 checklist body）：\n${JSON.stringify(createResult.splitInto)}\n\n` +
         `**操作**（按顺序，每步单独调 MCP）：\n` +
-        `1. \`mcp__github__get_issue\` 拿 issue #${item.id} 的**现有 labels 和 body**（保留用户原有内容）\n` +
+        `1. \`mcp__github__get_issue\` 拿 issue #${item.id} 的**现有 labels**（保留用户原有 label 列表；body 不在此取，用下方 template 内嵌的 \`item.body\`）\n` +
         `2. \`mcp__github__update_issue\` 加 \`epic\` 标签：labels = 现有 labels + [\`epic\`]（**去重合并**，不要覆盖）\n` +
-        `3. \`mcp__github__update_issue\` 改 body 为 checklist（**完全替换**，原内容已搬到 checklist 里）：\n\n` +
-        `\`\`\`\n# Tracking Epic for #${item.id}\n\n${item.title}\n\n（本 issue 由 triage L3 自动拆分为 ${subIssues.length} 个子任务；本身不含可直接实现的工作，子 issue 全部关闭后人工关闭本 epic）\n\n## 子任务进度\n${subIssues.map((si, i) => `- [ ] ${createResult.splitInto[i] ? '#' + createResult.splitInto[i] : '#? (创建失败)'} ${si.title}`).join('\\n')}\n\`\`\`\n\n` +
+        `3. \`mcp__github__update_issue\` 改 body 为 checklist（**完全替换**，原内容已拼到"## 原始需求"段）：\n\n` +
+        `\`\`\`\n# Tracking Epic for #${item.id}\n\n${item.title}\n\n（本 issue 由 triage L3 自动拆分为 ${subIssues.length} 个子任务；本身不含可直接实现的工作，子 issue 全部关闭后人工关闭本 epic）\n\n` +
+        `## 原始需求\n\n${item.body && item.body.trim() ? item.body.trim() : '（原 issue body 为空）'}\n\n` +
+        `## 子任务进度\n${subIssues.map((si, i) => `- [ ] ${createResult.splitInto[i] ? '#' + createResult.splitInto[i] : '#? (创建失败)'} ${si.title}`).join('\\n')}\n\`\`\`\n\n` +
         `4. **不**修改 state（保持 open 作 epic 看板）\n\n` +
+        `**关于原 body 的快照说明**：上述 template 用 \`item.body\`（process-item 入口传入的 RANK 快照），\n` +
+        `而非重新 fetch GitHub 实时 body——既避免额外 API 调用，又保证 checklist 反映"拆 L3 那一刻的需求"。\n` +
+        `事后人工修改原 issue body 不会自动同步到 epic（如需更新请人工编辑本 issue）。\n\n` +
         `**严格回报 schema**（关键不变量 epicLabeled）：\n` +
         `- epicLabeled: boolean（**必须 true**；false = L3 失败）\n` +
         `- bodyRewritten: boolean（失败 swallow）\n` +
@@ -817,15 +839,7 @@ try {
         `- subIssueLabeledCount: number（成功加 epic 的 sub-issue 数）\n` +
         `- errors: string[]（失败描述）\n\n` +
         `**关键**：即使补救失败，原 try 块仍会返回 ok:false + error（本补救 swallow 异常，避免二次失败掩盖原错误）`,
-        { phase: 'Decompose to Epic', agentType: 'general-purpose', schema: {
-          type: 'object',
-          required: ['ok', 'subIssueLabeledCount'],
-          properties: {
-            ok: { type: 'boolean' },
-            subIssueLabeledCount: { type: 'number' },
-            errors: { type: 'array', items: { type: 'string' } },
-          },
-        } }
+        { phase: 'Decompose to Epic', agentType: 'general-purpose', schema: L3_REMEDIATE_SCHEMA }
       )
     } catch (re) {
       log(`#${item.id} L3 补救失败（已忽略，不掩盖原错误）: ${re?.message ?? re}`)
