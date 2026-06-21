@@ -639,9 +639,12 @@ try {
     )
   }
   // 加固：防 agent 没真跑 dotnet test 就空报 testsOk:true / failed:0。
-  // raw 必须含真实 dotnet test 输出特征（Passed!/Passed: <n>/Failed: <n>），否则字段不可信。
+  // raw 必须含真实 dotnet test 输出特征，否则字段不可信。
+  // 兼容两种格式：
+  //   - 老/单项目：`Passed: 860` / `Failed: 0` / `Passed!`（带冒号或感叹号）
+  //   - .NET 10 多项目汇总：`Passed 860, Failed 0, Skipped 1, Total 861`（空格无冒号）
   const testsRaw = String(tr?.raw || '')
-  if (!/Passed!|Passed:\s*\d+|Failed:\s*\d+/.test(testsRaw)) {
+  if (!/Passed!\s*|Passed[:\s]+\d+|Failed[:\s]+\d+/.test(testsRaw)) {
     throw new Error(
       `#${item.id} tests 可疑：testsOk=${testResult?.testsOk} 但 raw 无真实 dotnet test 输出特征` +
       `（疑似未真跑测试，schema 字段不可信）| raw=${testsRaw.slice(0, 500)}`
