@@ -2,6 +2,7 @@ using System.Reflection;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Options;
 using TenE0.Core.Events;
 using TenE0.Core.Events.Outbox;
 
@@ -36,6 +37,15 @@ public static class DomainEventsExtensions
         services.TryAddScoped<IOutboxPublisher, InProcessOutboxPublisher>();
 
         services.AddHostedService<OutboxRelayService<TContext>>();
+
+        // 毒消息管理服务：查询 / 导出 / 手动重试。
+        // 与 Relay 共用同一 TContext 泛型约束，与 RelayService<TContext> 在同一 AddTenE0DomainEvents<TContext> 调用点上对齐 —
+        // 调用方一次 AddTenE0DomainEvents<TContext>() 即可获得完整 Outbox 基础设施（后台投递 + 运维管理）。
+        // 显式工厂：OutboxAdminService<TContext> 构造函数签名依赖 IServiceProvider + IOptions<OutboxRelayOptions>，
+        // 不能用 AddSingleton(typeof(OutboxAdminService<TContext>)) 这种 open-generic 简写（无法满足 ctor 参数名解析），
+        // 故用工厂 sp => new OutboxAdminService<TContext>(sp, sp.GetRequiredService<IOptions<OutboxRelayOptions>>())。
+        services.AddSingleton<IOutboxAdmin>(sp =>
+            new OutboxAdminService<TContext>(sp, sp.GetRequiredService<IOptions<OutboxRelayOptions>>()));
 
         return services;
     }
