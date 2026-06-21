@@ -268,19 +268,13 @@ try {
     return { ok: true, prNumber: null, merged: false, followupCount: 0 }
   }
 
-  // 1. BDD（bug + feature 走；refactor/docs/fix-ci/fix-review/stale/default 跳过）
-  if (!SKIP_BDD_KINDS.has(kind)) {
-    await agent(
-      `BDD for #${item.id} "${item.title}"\n\n` +
-      `Issue body:\n${item.body}\n\n` +
-      `任务：编写 Given/When/Then 格式的验收测试（xUnit + FluentAssertions），` +
-      `位置 tests/10E0.{Api,Core}.Tests/ 下，命名 {Feature}AcceptanceTests.cs。` +
-      `先写测试，dotnet test 确认 RED。如果不写测试或测试不 RED，本步骤视为失败。`,
-      { phase: 'BDD', agentType: 'bdd-guide' }
-    )
-  }
-
-  // 2. Planner（仅 feature）—— 产出 PLAN_SCHEMA 结构化计划，供下游 L2/L3 分支决策
+  // 1. Planner（仅 feature）—— 产出 PLAN_SCHEMA 结构化计划，供下游 L2/L3 分支决策
+  //    ⚠️ 必须在 BDD 之前（对齐本文件顶部注释 + meta.phases 声明的 Planner→BDD 顺序）：
+  //    feature 若判 decomposable=false 会在本块内提前 return 走 L3 拆子 issue，
+  //    原 feature 分支随后被废弃。若 BDD 跑在前，它写的验收测试会随废弃分支一起丢掉
+  //    （#74 实测：bdd-guide 白写 460 行 RED 测试）。且 Planner prompt 只用 item.body，
+  //    不消费 BDD 产出——BDD 在前对 Planner 毫无价值。故先 Planner 定 L2/L3，
+  //    确定要在本 PR 实现（L2 / 非 feature）才在下面跑 BDD。
   if (NEEDS_PLANNER_KINDS.has(kind)) {
     const plan = await agent(
       `为 feature #${item.id} "${item.title}" 设计结构化实现计划。\n\n` +
@@ -442,6 +436,19 @@ try {
         log(`#${item.id} planner steps=${rawSteps.length} 超过 maxSteps=${maxSteps}，trim 到 ${planSteps.length}`)
       }
     }
+  }
+
+  // 2. BDD（bug + feature-L2 走；refactor/docs/fix-ci/fix-review/stale/default 跳过）
+  //    放在 Planner 之后：feature-L3 已在上面 return，不会跑到这里——避免 L3 浪费 BDD 测试。
+  if (!SKIP_BDD_KINDS.has(kind)) {
+    await agent(
+      `BDD for #${item.id} "${item.title}"\n\n` +
+      `Issue body:\n${item.body}\n\n` +
+      `任务：编写 Given/When/Then 格式的验收测试（xUnit + FluentAssertions），` +
+      `位置 tests/10E0.{Api,Core}.Tests/ 下，命名 {Feature}AcceptanceTests.cs。` +
+      `先写测试，dotnet test 确认 RED。如果不写测试或测试不 RED，本步骤视为失败。`,
+      { phase: 'BDD', agentType: 'bdd-guide' }
+    )
   }
 
   // 3. TDD —— feature 有结构化 plan 时走 plan-driven 多步（每步 <5 文件，总量不限，解决"改动大但同质"）；
