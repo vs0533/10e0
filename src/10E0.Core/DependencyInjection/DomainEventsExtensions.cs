@@ -5,6 +5,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
 using TenE0.Core.Events;
 using TenE0.Core.Events.Outbox;
+using TenE0.Core.Hosting;
 
 namespace TenE0.Core.DependencyInjection;
 
@@ -14,6 +15,14 @@ public static class DomainEventsExtensions
     /// 注册领域事件 + Outbox 基础设施。
     ///
     /// TContext 仅需是 DbContext —— OutboxMessage 表由 TenE0SystemDbContext 自动注册。
+    ///
+    /// 一次性注册以下组件（调用方无需额外步骤）：
+    /// - <see cref="OutboxInterceptor"/>：业务 SaveChanges 拦截 → 落 OutboxMessage
+    /// - <see cref="IDomainEventDispatcher"/> + <see cref="IOutboxPublisher"/>：默认进程内
+    /// - <see cref="OutboxRelayService{TContext}"/>：后台轮询投递
+    /// - <see cref="IOutboxAdmin"/>：毒消息查询 / 导出 / 手动重试
+    /// - <see cref="IOutboxLock"/>：行级锁契约（默认 <see cref="NoOpOutboxLock"/>，多实例部署时 Replace 为 provider 实现）
+    /// - <see cref="OutboxSchemaSeeder"/>：表结构升级 seeder（#80：补齐 LockedUntil / LockedByInstance 列与索引）
     ///
     /// 调用方还需：
     /// - <see cref="AddTenE0DomainEventHandlersFromAssembly"/> 扫描注册事件订阅者
@@ -46,6 +55,14 @@ public static class DomainEventsExtensions
         // 故用工厂 sp => new OutboxAdminService<TContext>(sp, sp.GetRequiredService<IOptions<OutboxRelayOptions>>())。
         services.AddSingleton<IOutboxAdmin>(sp =>
             new OutboxAdminService<TContext>(sp, sp.GetRequiredService<IOptions<OutboxRelayOptions>>()));
+
+        // 行级锁契约（#80）：0/1 实例部署零感知；多实例部署 Replace 为 provider 实现。
+        services.AddOutboxLocking();
+
+        // Schema 升级 seeder（#80）：为既有库幂等补齐 LockedUntil / LockedByInstance 列与复合索引。
+        // Order=0：先于任何业务 Seeder（业务 Seeder 通常 Order=10+），保证后续 seeder 写出的行能落在新列上。
+        // TryAddEnumerable 允许业务方在特殊场景下 Replace 为自己的 seeder。
+        services.TryAddEnumerable(ServiceDescriptor.Scoped<IDataSeeder, OutboxSchemaSeeder>());
 
         return services;
     }

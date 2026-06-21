@@ -30,4 +30,15 @@ public sealed class OutboxMessage : BaseEntity
 
     /// <summary>最后一次失败的简要原因（用于排障）。</summary>
     public string? LastError { get; set; }
+
+    /// <summary>
+    /// 行级锁租约到期时间；NULL 表示未被任何实例拾取。
+    /// 业务约定：LockedUntil &lt;= now 即视为锁过期（任何实例可重新拾取）。
+    /// </summary>
+    public DateTimeOffset? LockedUntil { get; set; }
+
+    /// <summary>
+    /// 持有该行锁的实例 ID（最长 128 字符），便于排障与所有权判断；NULL 表示未锁。
+    /// </summary>
+    public string? LockedByInstance { get; set; }
 }
