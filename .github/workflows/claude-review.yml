@@ -1,7 +1,7 @@
 name: Code Review
 
 # 触发器：pull_request (branches: dev/main) + workflow_dispatch
-# - pull_request: 跟 qwen 时代一样，PR opened/synchronize 到 dev/main 时跑
+# - pull_request: PR opened/synchronize 到 dev/main 时跑
 # - checkout base 分支 + gh pr diff API: 满足 CodeQL untrusted-checkout
 #   安全要求（不接触 PR head 非信任代码）
 # - REVIEW_BOT_TOKEN (PAT) 调 pulls.createReview 发真 review (算 branch
@@ -200,7 +200,9 @@ jobs:
               modelBody = '⚠️ Review output file missing. See workflow logs.';
             }
             // 用 + 拼接（单引号字符串）而非 template literal → 模型 body 含反引号 / ${ 也不会破坏 JS 解析
-            const body = '## 🤖 MiniMax Code Review\n\nVerdict: **' + verdict + '**\n\n---\n\n' + modelBody;
+            // header 用厂商无关的稳定 marker：triage 侧 process-item.js 靠 marker + Verdict 行认 bot 评论，
+            // 换 review 后端模型只改本文件 env，marker/Verdict 格式不变，triage 解析零改动。
+            const body = '<!-- triage-review-bot -->\n## 🤖 Automated Code Review\n\nVerdict: **' + verdict + '**\n\n---\n\n' + modelBody;
 
             const pat = ('${{ secrets.REVIEW_BOT_TOKEN }}' || '').trim();
             const hasPat = pat.length > 0;

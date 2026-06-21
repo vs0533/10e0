@@ -1,5 +1,5 @@
 // 单 issue/PR 完整工作流（meta.phases 列表是事实源）
-//   BranchCheck → Dispatch → [Planner] → BDD → TDD-Schema → TDD-Impl → TDD-Verify
+//   BranchCheck → Dispatch → [Planner] → BDD → TDD-Schema → TDD-Impl
 //   → Tests → Local Review → Open PR → [review-fix 循环: Watch Review → (REQUEST_CHANGES 时) Handle Review]
 // 末段 Watch/Handle/Merge 是一个**循环**（最多 maxReviewRounds 轮）：
 //   等 CI + 解析 bot VERDICT → APPROVE 才合并；REQUEST_CHANGES 则修能修的+push 重等、不能修的开 followup issue；
@@ -26,7 +26,6 @@ export const meta = {
     { title: 'BDD' },
     { title: 'TDD-Schema' },
     { title: 'TDD-Impl' },
-    { title: 'TDD-Verify' },
     { title: 'Tests' },
     { title: 'Local Review' },
     { title: 'Open PR' },
@@ -119,6 +118,15 @@ const branchCheck = await agent(
 )
 log(`分支 preflight: ${JSON.stringify(branchCheck)}`)
 if (branchCheck.error) throw new Error(`BranchCheck failed: ${branchCheck.error}`)
+// 硬校验 baseSynced：dev 没同步到最新就切的 feature 分支会基于过期 dev，
+// 破坏「每个 item 基于干净最新 dev」核心不变量（小模型常 git pull 失败却不写 error）。
+// 早 fail 好过做完一堆工作才在 Merge 阶段撞 BEHIND/CONFLICTING——triage-loop 会 catch 并跳过本项继续。
+if (!branchCheck.baseSynced) {
+  throw new Error(
+    `BranchCheck: dev 未同步到最新（baseSynced=false, fromBranch=${branchCheck.fromBranch ?? '?'}）——` +
+    `拒绝基于过期 dev 切分支。多为 git pull 失败（网络/远端），重跑即可。`
+  )
+}
 const workBranch = branchCheck.featureBranch || featureBranch
 
 const kind = dispatchKind(item)
@@ -158,16 +166,17 @@ try {
     )
   }
 
-  // 3 步 TDD（避免单 agent 撑爆 context）：
+  // 2 步 TDD（避免单 agent 撑爆 context）：
   //   1. schema/接口（DB 模型、新接口签名、DI 注册）—— 改动 < 5 文件
-  //   2. 实现（handler/service/evaluator 改写）—— 改动 < 5 文件
-  //   3. 单元测试补全（覆盖边界条件）+ 跑全 suite
-  // 每步独立 agent，靠文件系统接力；如果上一步没产出，本步就少干点
+  //   2. 实现（handler/service/evaluator 改写）+ 补边界单元测试 —— 改动 < 5 文件
+  // 每步独立 agent，靠文件系统接力；如果上一步没产出，本步就少干点。
+  // 最终 build/test/format 门禁统一交给下面 Tests 阶段（schema 化），不再单设 TDD-Verify
+  // 重复跑一遍（含最慢的 coverage——其返回值/coverage 数字本就无人消费，纯浪费）。
   //
   // 关于 needsDownstream：小 issue（无新 schema/无新接口）Step 1 会返回
   // { needsDownstream: true, reason } —— 这是**正常**流，不是错误。Step 2 接力做完整实现。
   await agent(
-    `TDD Step 1/3 (schema & interfaces) for #${item.id} "${item.title}"\n\n` +
+    `TDD Step 1/2 (schema & interfaces) for #${item.id} "${item.title}"\n\n` +
     `Issue body:\n${item.body}\n\n` +
     `范围：仅改 DB 模型/实体（加字段/迁移）、新接口/抽象、DI 注册扩展。\n` +
     `**硬约束**：\n` +
@@ -180,7 +189,7 @@ try {
   )
 
   await agent(
-    `TDD Step 2/3 (implementation) for #${item.id} "${item.title}"\n\n` +
+    `TDD Step 2/2 (implementation) for #${item.id} "${item.title}"\n\n` +
     `**前置条件**：Step 1 已完成（schema/接口就位）。用 Read 工具看新接口定义和已有 RED 测试。\n` +
     `范围：让 RED 验收测试和已有所有测试全 GREEN——改 handler/service/evaluator。\n` +
     `**硬约束**：\n` +
@@ -192,21 +201,8 @@ try {
     { phase: 'TDD-Impl', agentType: 'tdd-guide' }
   )
 
-  await agent(
-    `TDD Step 3/3 (full verification) for #${item.id} "${item.title}"\n\n` +
-    `**前置条件**：Step 2 已完成。最后兜底：\n` +
-    `1. \`DOTNET_CLI_UI_LANGUAGE=en-US dotnet build 10e0.slnx 2>&1 | tail -5\` 必须 0 警告 0 错误\n` +
-    `2. \`DOTNET_CLI_UI_LANGUAGE=en-US dotnet test 10e0.slnx --nologo 2>&1 | tail -10\` 必须全绿\n` +
-    `3. \`DOTNET_CLI_UI_LANGUAGE=en-US dotnet test 10e0.slnx --collect:"XPlat Code Coverage" 2>&1 | tail -5\` 报告覆盖率数字\n` +
-    `4. **format 自动修复**：先 \`DOTNET_CLI_UI_LANGUAGE=en-US dotnet format 10e0.slnx --severity warn 2>&1 | tail -5\`（自动补换行/空白），再 \`--verify-no-changes\` 确认 exit 0（PR #27 WHITESPACE 教训：format 空白不该卡门禁，自动修即可）\n` +
-    `**除 format 自动修复外不写新代码、不改逻辑**。仅 build/test 不绿才 throw（format 自动修后不该因空白 fail）。\n` +
-    `回报：{ buildOk, testsOk, coverage, formatOk } 结构化数据。
-
-**所有 dotnet 命令必须加 \`DOTNET_CLI_UI_LANGUAGE=en-US\` 前缀**，否则在 zh_CN locale 下 CLI 输出中文"已通过!"，"Passed!" 匹配不到，下游 regex 误判失败。`,
-    { phase: 'TDD-Verify', agentType: 'general-purpose' }
-  )
-
   // 4. tests (红就 fail) — schema 验证，process-item 直接看 failed 字段，不依赖正则
+  //    （这一步已是唯一的 build/test/format 门禁，原 TDD-Verify 因与本步重复且结果无人消费已删）
   const TESTS_SCHEMA = {
     type: 'object',
     required: ['buildOk', 'testsOk', 'failed', 'passed', 'skipped', 'formatOk'],
@@ -393,7 +389,7 @@ try {
       `**第三步**：合并评论成 items（reviews→author.login/body/state；行内 comment→user.login/body/path/line,state="COMMENTED"；issue comment→user.login/body,state="COMMENTED"）。\n` +
       `把 \`gh pr view --json mergeable,mergeStateStatus\` 的两个值**原样**填进返回的 mergeable / mergeStateStatus 字段。\n` +
       `**只按时间最新的那条 bot 评论判 verdict**（本 PR 可能已 push 过多轮，别被旧评论干扰）。\n\n` +
-      `**第四步：解析最新 bot VERDICT**（bot 评论特征："🤖 MiniMax Code Review" / "VERDICT:" / "Verdict:"）：\n` +
+      `**第四步：解析最新 bot VERDICT**（bot 评论的厂商无关特征：HTML marker "<!-- triage-review-bot -->" 或 "🤖 Automated Code Review" header 定位是 bot 评论；正文 "VERDICT:" / "Verdict:" 行作最终结论。**别靠具体模型名认 bot**，后端模型可换）：\n` +
       `- 含 "VERDICT: REQUEST_CHANGES" / "Verdict: **REQUEST_CHANGES**" → "REQUEST_CHANGES"\n` +
       `- 含 "VERDICT: APPROVE" / "Verdict: **APPROVE**" → "APPROVE"\n` +
       `- 找不到 bot 评论 → "NONE"\n\n` +

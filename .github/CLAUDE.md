@@ -27,8 +27,11 @@ ANTHROPIC_BASE_URL   = https://api.minimaxi.com/anthropic
 ANTHROPIC_MODEL      = MiniMax-M3
 ```
 
-> **triage 消费方注意**：`.claude/workflows/process-item.js` 的 Merge & Sync 阶段会解析本 bot 的 `VERDICT`，
-> `REQUEST_CHANGES` 时跳过自动合并。修改 VERDICT 输出格式时需同步该解析逻辑。
+> **triage 消费方契约（厂商无关）**：`.claude/workflows/process-item.js` 靠两个**与模型无关**的稳定标识认本 bot 评论并解析结论：
+> ① HTML marker `<!-- triage-review-bot -->`（+ `## 🤖 Automated Code Review` header）定位是 bot 评论；
+> ② `Verdict: **APPROVE|REQUEST_CHANGES**` 行作最终结论。
+> **换 review 后端模型只改本文件的 `ANTHROPIC_MODEL` 等 env 即可**——marker / Verdict 格式不变，triage 侧零改动。
+> 反之，**若改了 marker 或 VERDICT 输出格式，必须同步 process-item.js 的 Watch Review 解析逻辑**。
 
 ### `release.yml` — 自动发版
 
