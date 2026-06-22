@@ -79,9 +79,12 @@ public sealed partial class MenuService<TContext>(
         var menu = await dc.Set<TenE0Menu>().FirstOrDefaultAsync(m => m.Id == menuId, ct)
             ?? throw new InvalidOperationException($"菜单不存在：{menuId}");
 
-        menu.IsSoftDelete = true;
-        menu.DeleteTime = DateTimeOffset.UtcNow;
-        menu.DeleteBy = currentUser.UserCode;
+        // 删除走 EF Core 软删除契约：Remove() 把 State 标 Deleted，
+        // AuditInterceptor 看到 ISoftDeleteEntity 实体 + State=Deleted 自动转
+        // Modified + 填 IsSoftDelete/DeleteTime/DeleteBy 三个字段（issue #95 修复）。
+        // 业务代码不再手动赋值审计字段；当前用户从 ICurrentUserContext 注入，
+        // 当前时间从 TimeProvider 注入（测试用 FakeTimeProvider 完全控制）。
+        dc.Set<TenE0Menu>().Remove(menu);
 
         await dc.SaveChangesAsync(ct);
     }
