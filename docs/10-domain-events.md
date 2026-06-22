@@ -98,11 +98,29 @@ builder.Services.AddTenE0DomainEvents<AppDbContext>(opt =>
     opt.BatchSize = 50;                      // 每轮投递最大消息数
     opt.PollInterval = TimeSpan.FromSeconds(2);  // 轮询间隔
     opt.MaxAttempts = 8;                     // 毒消息最大重试次数
+    opt.LockLeaseDuration = TimeSpan.FromSeconds(30);  // 行级锁租约时长
+    opt.LockProvider = OutboxLockProviderKind.RowLock;  // 0/1 实例可省（None）
 });
 
 // 扫描程序集，注册所有 IDomainEventHandler<T> 实现
 builder.Services.AddTenE0DomainEventHandlersFromAssembly(typeof(Program).Assembly);
+
+// 毒消息管理（可选）：暴露 IOutboxAdmin 给运维 endpoint / 脚本
+builder.Services.AddTenE0OutboxAdmin<AppDbContext>();
 ```
+
+### 10.5.1 多实例部署选择 Lock Provider
+
+`OutboxLockProviderKind` 决定多实例 Relay 怎么避免竞争同一行：
+
+| 部署形态 | 推荐配置 | 说明 |
+|----------|----------|------|
+| 单实例 | `None`（默认） | 0 竞争，无需锁 |
+| 同库多实例（SqlServer / PG） | `RowLock` | 按 `Database.ProviderName` 自动选 `SqlServerOutboxLock` / `PostgresOutboxLock` |
+| 跨库 / 不想改表结构 | `Distributed` | 需先注册 `IMultiLevelCache`（L2 用 Redis） |
+| 想"全局唯一 Relay" | `Leader` | `LeaderElector` 抢主，仅 leader 实例跑投递 |
+
+详见 `src/10E0.Core/Events/Outbox/CLAUDE.md` 的"多实例安全"小节。
 
 ## 10.6 完整三步流程
 
@@ -131,12 +149,17 @@ builder.Services.AddTenE0DomainEventHandlersFromAssembly(typeof(Program).Assembl
 - 每条消息：`AttemptCount++` → `IOutboxPublisher.PublishAsync()` → 成功则 `SentTime = now`，失败则 `LastError = 异常信息(截断2000字符)`
 - 空闲时等待 `PollInterval` 避免空转
 
-## 10.7 毒消息处理
+## 10.7 毒消息处理（Poison Message）
 
 查询条件 `AttemptCount < MaxAttempts`（默认 8 次）是毒消息滤网。超过 `MaxAttempts` 的消息：
 - **不再被 Relay 拾取**
 - **永远保留在 Outbox 表中**（`SentTime` 仍为 NULL）
-- 需人工排查 `LastError` 字段修复后手动重试
+- 框架内置 `IOutboxAdmin` 三操作供运维消费：
+  - `GetPoisonMessagesAsync()` — 列出所有毒消息
+  - `RetryPoisonMessageAsync(id)` — 重置（`AttemptCount=0`, `LastError=null`），下轮 Relay 重新拾取
+  - `ExportPoisonMessagesAsync()` — 导出为 `OutboxPoisonMessageDto`（Id / EventType / Payload / OccurredOn / AttemptCount / LastError）供离线分析
+
+注册：`builder.Services.AddTenE0OutboxAdmin<AppDbContext>()`，然后在 endpoint / 定时任务 / 管理后台消费。
 
 ## 10.8 可插拔发布器
 
@@ -159,4 +182,4 @@ services.Replace(ServiceDescriptor.Scoped<IOutboxPublisher, KafkaOutboxPublisher
 | **JSON 可序列化** | 事件字段类型必须被 `System.Text.Json` 支持 |
 | **Raise 是 protected** | 仅聚合根内部可触发，外部需通过聚合的业务方法间接调用 |
 
-> ⚠️ **多实例部署**：两个 Relay 实例可能竞争同一条消息导致重复投递。建议使用 `FOR UPDATE SKIP LOCKED`（PostgreSQL/MySQL 8.0+）或 `WITH (UPDLOCK, ROWLOCK, READPAST)`（SQL Server）在查询时加行锁，使各实例独立处理不同消息。当前默认实现未包含锁机制，多实例需自行添加。
+> ✅ **多实例部署**：框架已内置 4 种 lock provider（`None` / `RowLock` / `Distributed` / `Leader`），按部署形态选型即可。详见 10.5.1 节与 `src/10E0.Core/Events/Outbox/CLAUDE.md` 的"多实例安全"小节。

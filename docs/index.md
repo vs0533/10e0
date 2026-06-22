@@ -40,6 +40,7 @@
 | [17-deployment](17-deployment.md) | 部署与 CI/CD 配置 |
 | [18-sync-pr-strategy](18-sync-pr-strategy.md) | dev → main 同步 PR 合并策略（为何禁 Squash） |
 | [19-sync-retrospective](19-sync-retrospective.md) | 2026-06 同步事故复盘：教训、安全底线、行业做法 |
+| [20-multi-tenancy](20-multi-tenancy.md) | 多租户隔离（`IMultiTenantEntity` + Named Query Filter + JWT tenant claim） |
 
 ---
 

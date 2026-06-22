@@ -60,6 +60,9 @@ app.Run();
 | [流水号](docs/15-sequences.md) | 自动编号生成 |
 | [动态查询](docs/16-dynamic-queries.md) | 参数化查询与分页 |
 | [部署](docs/17-deployment.md) | CI/CD 与发版 |
+| [同步 PR 策略](docs/18-sync-pr-strategy.md) | dev → main 合并为何禁 Squash |
+| [同步事故复盘](docs/19-sync-retrospective.md) | 2026-06 同步事故复盘 |
+| [多租户](docs/20-multi-tenancy.md) | `IMultiTenantEntity` + Named Query Filter |
 
 ## 构建与运行
 

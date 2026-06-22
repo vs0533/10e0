@@ -24,9 +24,9 @@ dotnet test --collect:"XPlat Code Coverage"    # 带覆盖率
 
 ## 当前状态
 
-- **10E0.Core.Tests**: 592 个单元测试，覆盖 Auth/Jwt、Cqrs、Permissions、Events/Outbox、DynamicFilters、EntityService、Files、Hosting、Json、Menus、Organizations、Queries、Sequences 等 17 个模块
-- **10E0.Api.Tests**: 1 个占位测试（程序集加载验证），集成测试待添加
-- **CI 覆盖率阈值**: 行 80%（已达标：83.48% 行 / 87.99% 分支 / 83.80% 方法）
+- **10E0.Core.Tests**: ~700 个测试，覆盖 Auth/Jwt、Cqrs、Permissions、Events/Outbox、DynamicFilters、EntityService、Files、Hosting、Json、Menus、Organizations、Queries、Sequences 等 17 个模块（含 Outbox 18 个测试文件 + TestFakes 真并发验收集）
+- **10E0.Api.Tests**: ~50+ 集成测试，基于 `WebApplicationFactory` 覆盖 Minimal API 全部 endpoint（PR #70 扩量）
+- **CI 覆盖率阈值**: 行 80%（pr-build 用 `/p:ThresholdLine=80` 门禁）
 
 ### 各模块测试文件
 
@@ -50,7 +50,7 @@ dotnet test --collect:"XPlat Code Coverage"    # 带覆盖率
 | EntityService/Validators | FieldUnique, GroupUnique, UniqueFactory | 3 |
 | Errors | Errs | 1 |
 | Events | AggregateRoot, InProcessDomainEventDispatcher | 2 |
-| Events/Outbox | OutboxInterceptor, InProcessOutboxPublisher, OutboxRelayService | 3 |
+| Events/Outbox | OutboxInterceptor, InProcessOutboxPublisher, OutboxRelayService, **OutboxLockProviderSelection** (×3), **OutboxLockOptions**, **LeaderElector**, **DistributedOutboxLock**, **SqlServerOutboxLock**, **PostgresOutboxLock**, **OutboxAdmin**, **OutboxSchemaSeeder**, **+ 4 Acceptance (LockProvider / LeaderElection / DistributedLock / Admin)** | 18 |
 | Files | FileService, ImageProcessor, FilesModels, FilesExtensions | 4 |
 | Files/Storage | LocalFileStorage | 1 |
 | Hosting | DatabaseInitializerService | 1 |
@@ -73,16 +73,27 @@ dotnet test --collect:"XPlat Code Coverage"    # 带覆盖率
 
 ### Requires=Docker 测试（Outbox 真实并发验证）
 
-`OutboxRelayConcurrencyTests`（feature #82）需 **Docker daemon** —— 用 `Testcontainers.MsSql` 启真实 SQL Server 容器跑"两 Host + 50 条消息 + 30 轮" exactly-once 并发验证。
+`OutboxRelayConcurrencyTests` 与 Outbox 真实并发 Acceptance 套件需 **Docker daemon** —— 用 `Testcontainers.MsSql` 启真实 SQL Server 容器跑"两 Host + 50 条消息 + 30 轮" exactly-once 并发验证。
+
+涉及文件：
+- `OutboxRelayConcurrencyTests` —— 共享 L2 缓存的双 Host 跑 50 条 × 30 轮 exactly-once
+- `OutboxRelayLeaderElectionAcceptanceTests` —— LeaderElector 抢主 / 续约 / 退位
+- `OutboxLockAcceptanceTests` —— 行级锁 provider 全套路径
+- `OutboxLockProviderAcceptanceTests` —— provider 选型（None / RowLock / Distributed / Leader）
+- `OutboxAdminAcceptanceTests` —— 毒消息 Get / Retry / Export
+- `DistributedOutboxLockAcceptanceTests` —— Distributed 锁 SETNX + GetAsync 纯读
+- `SqlServerOutboxLockTests` / `PostgresOutboxLockTests` —— provider 单元测试
+
+Fixture：`SqlServerContainerFixture`（共享 `xUnit IClassFixture`）—— 探测 4 路径 Docker socket（`DOCKER_HOST` env / `/private/var/run/docker.sock` OrbStack / `~/.orbstack/run/docker.sock` 旧 OrbStack / `/var/run/docker.sock` Docker Desktop），命中后注入 `DOCKER_HOST` env 让 Testcontainers 内部客户端走相同路径。macOS `/var/run/docker.sock` 是 dangling symlink，必须用 `/private/var/run/docker.sock`（PR #89 教训）。
 
 | 情况 | 行为 |
 |---|---|
-| 本地有 Docker（如 macOS Docker Desktop 开着） | `dotnet test` 跑全部测试，包括这两个 → 真验证跨进程 SETNX/续约 |
-| 本地无 Docker | 测试**显式 fail**（`Assert.Fail`，不静默 return — PR #88 教训）—— 提醒开发者"这两个测试没真跑" |
+| 本地有 Docker（Docker Desktop / OrbStack / colima 任一 daemon 在线） | `dotnet test` 跑全部测试，包括这些 → 真验证跨进程 SETNX / 续约 / Leader 抢主 |
+| 本地无 Docker | 测试**显式 fail**（`Assert.Fail`，不静默 return — PR #88 教训）—— 提醒开发者"这些测试没真跑" |
 | CI PR 普通 build | `pr-build.yml` 走 `--filter "Requires!=Docker"` 跳过 |
-| CI Requires=Docker 专项 | `docker-integration-tests.yml` workflow 单独跑（ubuntu-latest 自带 Docker） |
+| CI Requires=Docker 专项 | `docker-integration-tests.yml` workflow 单独跑（ubuntu-latest 自带 Docker；预拉镜像 + 3 次重试应对 Docker Hub 偶发 5xx） |
 
-需要本地跑：装 [Docker Desktop](https://www.docker.com/products/docker-desktop/)，让 daemon 起来，然后 `dotnet test`。
+需要本地跑：装 [Docker Desktop](https://www.docker.com/products/docker-desktop/) 或 [OrbStack](https://orbstack.dev/) 让 daemon 起来，然后 `dotnet test`。
 无 Docker 又想跑其它测试：`dotnet test --filter "Requires!=Docker"`。
 
 ## 测试依赖
