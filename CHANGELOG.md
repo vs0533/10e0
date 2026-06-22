@@ -71,7 +71,11 @@
 - **`10E0.Api.Tests` 扩量** (#70)：从 1 个占位测试 → ~50+ WebApplicationFactory 集成测试，覆盖 Minimal API 全部 endpoint（健康检查 / 认证 / CRUD / 权限）
 - **CQRS 并发硬验收** (#31)：`CommandDispatcherTests.SendAsync_100Iterations_StableWrapperCache`（100 轮 wrapper cache 实例稳定）+ `TransactionBehaviorTests.ConcurrentNestedCommands_100Batches_AllSavepointNamesUnique`（100 批 × 16 并发，1600 个 savepoint GUID 全唯一）
 - **Role version BDD acceptance 套件** (#27)：4 个 acceptance suite（874 行）覆盖 #7 role version 全链路 — `RoleVersionJwtClaimAcceptanceTests`（JWT sign/verify round-trip）/ `RoleVersionBumpAcceptanceTests`（EF InMemory 验证 grant/revoke bump）/ `RoleVersionCheckAcceptanceTests`（evaluator stale 检测 + legacy token + super-admin bypass）/ `RoleRevocationEndToEndAcceptanceTests`（WAF 端到端：admin revoke 后原 token 立即 403）
-- **多租户 acceptance 套件** (#11)：`MultiTenantEntityAcceptanceTests`（契约）/ `HttpTenantContextAcceptanceTests`（HTTP 实现）/ `TenantIdJwtClaimAcceptanceTests`（JWT 签发与回读）/ `TenantQueryFilterAcceptanceTests`（Query Filter 注册 + 跨租户隔离 + 超管 bypass + 软删除共存）
+- **多租户 acceptance 套件** (#11)：4 个 suite 全链路覆盖
+  - `MultiTenantEntityAcceptanceTests`（契约：`IMultiTenantEntity` 接口签名、`TenantId` 必填、`BaseEntity` 兼容）
+  - `HttpTenantContextAcceptanceTests`（HTTP 实现：有 claim / 无 claim / 空字符串 / 未认证 / 同请求幂等回读）
+  - `TenantIdJwtClaimAcceptanceTests`（JWT 签发：`LoginCommandHandler` 透传 `user.TenantId` → `tenant_id` claim / refresh 保留 / 无值时省略）
+  - `TenantQueryFilterAcceptanceTests`（EF Core Query Filter：Named Query Filter 注册 / 跨租户自动隔离 / `IgnoreQueryFilters("Tenant")` 旁路 / 超管 `BypassFilters` 短路 / 与软删除/行级权限共存）
 
 ### Changed (Refactor)
 
@@ -90,7 +94,8 @@
 - **`pr-build.yml` 加 workflow_dispatch + 跳过 Requires=Docker** (#88)：让 pr-build 跳过 Testcontainers 测试（`--filter "Requires!=Docker"`），由 `docker-integration-tests.yml` 单独跑；`workflow_dispatch` 允许手动 trigger
 - **新增 `docker-integration-tests.yml`** (#88 + #89)：独立 workflow 跑 `[Trait("Requires", "Docker")]` 测试集（`Testcontainers.MsSql` 起 SQL Server 2022）；PR #89 增 `Pre-pull Docker images with retry` step（`testcontainers/ryuk:0.9.0` + `mcr.microsoft.com/mssql/server:2022-latest`，3 次重试 + 退避 10s/20s/30s，应对 Docker Hub 偶发 5xx/限流）；上传 `.trx`/`.html` + `/tmp/outbox-diag.txt` artifact 保留 14 天
 - **`tests/10E0.Core.Tests/Events/Outbox/SqlServerContainerFixture.cs` 兼容 OrbStack macOS** (#89)：`TryResolveDockerEndpoint` 探测 4 路径（`DOCKER_HOST` env → `/private/var/run/docker.sock` 真 OrbStack socket → `~/.orbstack/run/docker.sock` → `/var/run/docker.sock` Docker Desktop），命中后注入 `DOCKER_HOST` env 让 Testcontainers 内部 Docker.DotNet 客户端走相同路径。macOS `/var/run/docker.sock` 是 dangling symlink，必须用 `/private/var/run/docker.sock`（`lsof -p OrbStack` 验证）
-- **triage-loop / process-item 全自动合并到 dev** (#56+ #57+ #59+ #62+ #69+ #72+ #75+ #76+ #78+ #79+ #83+ #84)：自 2026-06-17 起，Merge & Sync 阶段在 CI 绿 + mergeable + bot VERDICT=APPROVE 时自动 `squash` 合并 PR 到 dev 并同步本地 dev。L2 plan-driven 多步 TDD（feature ≤5 文件/步、总步数 ≤6）/ L3 大 issue 自动拆分为 tracking epic（建 N 个 sub-issue + `epic` 标签 + checklist body）/ 自愈循环冲突门禁（CONFLICTING/DIRTY 立即停留人工，不空转）/ 防重复处理（PR 必须写 `Closes #<issue.id>` 否则 issue 遗留 open 被下轮重做，#51→#55→#58 真实教训）/ `dotnet format` 自动修复 + `--verify-no-changes` 确认（#49 案例：751 测试全过只卡 formatOk=false）/ baseSynced 硬校验（`git pull` 失败直接 throw，feature 分支基于过期 dev 撞 BEHIND/CONFLICTING 已修）/ 失败 item 改动 WIP 保护（catch 块先 `git add -A && commit && push` 保住改动）/ schema 化门禁字段（`buildOk` / `testsOk` / `formatOk` / `failed` / `passed` / `skipped`）
+- **triage-loop / process-item 全自动合并到 dev** (#56, #57, #59, #62, #69, #72, #84)：自 2026-06-17 起，Merge & Sync 阶段在 CI 绿 + mergeable + bot VERDICT=APPROVE 时自动 `squash` 合并 PR 到 dev 并同步本地 dev。L2 plan-driven 多步 TDD（feature ≤5 文件/步、总步数 ≤6）/ L3 大 issue 自动拆分为 tracking epic（建 N 个 sub-issue + `epic` 标签 + checklist body）/ 自愈循环冲突门禁（CONFLICTING/DIRTY 立即停留人工，不空转）/ 防重复处理（PR 必须写 `Closes #<issue.id>` 否则 issue 遗留 open 被下轮重做，#51→#55→#58 真实教训）/ `dotnet format` 自动修复 + `--verify-no-changes` 确认（#49 案例：751 测试全过只卡 formatOk=false）/ baseSynced 硬校验（`git pull` 失败直接 throw，feature 分支基于过期 dev 撞 BEHIND/CONFLICTING 已修）/ 失败 item 改动 WIP 保护（catch 块先 `git add -A && commit && push` 保住改动）/ schema 化门禁字段（`buildOk` / `testsOk` / `formatOk` / `failed` / `passed` / `skipped`）
+- **triage 自愈 / polish** (#75, #76, #78, #79, #83)：L2 plan-driven 实施 + L3 拆分健壮性 (#75) / 6 条 polish：makeEpic 拼原 body + splitInto null 兼容 + L3_REMEDIATE_SCHEMA 抽常量 + summary log + maxSteps 防御 + kebab-case 透传 (#76) / Watch Review 加 CI 硬门禁（CI 未全绿不允许返回 APPROVE）(#78) / L3 拆分崩溃修复 + 复杂 issue 处理能力增强（依赖顺序/深度限制/PR 路径/BDD 顺序）(#79) / Tests 门禁加自愈环节 + planner 判 L2 前核实项目前提 (#83) / Tests 加固正则兼容 .NET 10 多项目 `Passed N` 无冒号格式 (#84)
 
 ### Tests
 
