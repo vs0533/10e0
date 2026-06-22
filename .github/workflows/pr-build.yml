@@ -5,6 +5,9 @@ on:
     branches: [dev, main]
   push:
     branches: [test/**]
+  # workflow_dispatch 允许手动 trigger（PR #88 教训：synchronize 事件有时不触发新 run，
+  # 手动 trigger 可作为 fallback）。workflow 跑时用调用时的 ref 内容（默认 main，可指定 feature 分支）。
+  workflow_dispatch:
 
 permissions:
   contents: read
