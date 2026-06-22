@@ -22,12 +22,16 @@ builder.Services.AddTenE0PermissionsFromAssembly(typeof(Program).Assembly);
 builder.Services.AddTenE0Menus<DemoDbContext>();
 
 // Identity 模式：一行注册 JWT + 权限 + 组织树（含扩展用户字段：AppUser）
+// Jwt:SigningKey 必须从配置/环境变量/密钥管理服务读取，未配置时启动期
+// JwtOptionsValidator + ValidateOnStart 会抛 OptionsValidationException 拒绝启动。
 builder.Services.AddTenE0Identity<AppUser, DemoDbContext>(opt =>
 {
     opt.Jwt.Issuer = "10E0.Api";
     opt.Jwt.Audience = "10E0.Api";
     opt.Jwt.SigningKey = builder.Configuration["Jwt:SigningKey"]
-        ?? "dev-secret-CHANGE-ME-in-production-must-be-at-least-32-bytes-long";
+        ?? throw new InvalidOperationException(
+            "Jwt:SigningKey 未配置。请通过 appsettings.json / 环境变量 JWT__SigningKey / " +
+            "dotnet user-secrets / 密钥管理服务注入。dev 模式可在 appsettings.Development.json 设置。");
     opt.Jwt.AccessTokenLifetime = TimeSpan.FromMinutes(30);
     opt.Jwt.RefreshTokenLifetime = TimeSpan.FromDays(14);
     opt.Permissions.SuperUserRoles.Add("super_admin");

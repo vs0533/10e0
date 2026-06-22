@@ -30,7 +30,10 @@ public static class JwtAuthExtensions
         where TUser : TenE0User
         where TContext : DbContext
     {
-        services.Configure(configure);
+        services.AddOptions<JwtOptions>()
+            .Configure(configure)
+            .Validate(options => new JwtOptionsValidator().Validate(null, options).Succeeded)
+            .ValidateOnStart();
 
         services.TryAddSingleton<IPasswordHasher, Pbkdf2PasswordHasher>();
         services.TryAddScoped<IJwtTokenService, JwtTokenService>();
