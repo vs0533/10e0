@@ -68,7 +68,21 @@ builder.Services.AddScoped<IDataSeeder, MenuSeeder>();
 // 而非 Core 版本（issue #93 修复后 Api 自带副本已删）。
 builder.Services.AddOpenApi();
 
-builder.Services.AddAuthorization();
+// #119: 注册 perm.admin Authorization Policy。底层走 IPermissionEvaluator，
+// 与 PermissionBehavior 共用 super_admin bypass + role-version 检查 — 保证
+// Minimal API 端点（如 /admin/outbox）和 CQRS 命令走同一套权限评估。
+builder.Services.AddAuthorization(options =>
+{
+    options.AddPolicy(
+        TenE0.Core.Permissions.PermissionPolicies.Admin,
+        policy => policy
+            .RequireAuthenticatedUser()
+            .AddRequirements(new TenE0.Core.Permissions.PermissionRequirement(
+                TenE0.Api.Domain.DemoPermissions.Admin)));
+});
+builder.Services.AddScoped<
+    Microsoft.AspNetCore.Authorization.IAuthorizationHandler,
+    TenE0.Core.Permissions.PermissionAuthorizationHandler>();
 builder.Services.AddControllers();
 
 var app = builder.Build();

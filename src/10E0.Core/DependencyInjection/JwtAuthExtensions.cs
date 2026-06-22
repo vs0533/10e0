@@ -79,6 +79,16 @@ public static class JwtAuthExtensions
                     ValidateLifetime = true,
                     ClockSkew = TimeSpan.FromSeconds(30),
                 };
+
+                // #119: Authorization 失败的 403 默认 body 为空，与 issue #39 推动的
+                // ApiResult<T> 统一响应壳不一致。OnForbidden 抢先写 ApiResult JSON，
+                // 客户端能用同一个 DTO 反序列化成功/失败响应。OnChallenge 不动 —— 401
+                // 由 JwtBearerHandler 默认 WwwAuthenticate 头配合客户端决策更标准。
+                jwt.Events = new JwtBearerEvents
+                {
+                    OnForbidden = ctx =>
+                        TenE0.Core.Permissions.ForbiddenResponseWriter.WriteAsync(ctx.Response),
+                };
             });
 
         return services;
