@@ -44,10 +44,10 @@ jobs:
       - name: Run tests (coverage gate ≥ 80%)
         run: |
           # --filter "Requires!=Docker"：跳过所有标了 [Trait("Requires", "Docker")] 的测试（#82 PR #88 引入）。
-          # 这些测试用 Testcontainers 起 SQL Server 容器做真并发验证，本地开发机有 docker 时手动跑
-          # （`dotnet test --filter "Requires=Docker"`）即可；CI runner (ubuntu-latest) 默认无 docker daemon，
-          # 且 Plan 设计的 IsDockerAvailable() 探测在某些 runner 上会误判 → 早返逻辑失效 + DI 容器未注册 → test fail。
-          # Testcontainers 集成测试在 CI 真跑由后续 issue 接入（pr-build.yml 加 docker service）。
+          # 这些测试用 Testcontainers 起 SQL Server 容器做真并发验证：
+          #   - 本地开发机有 Docker：直接 `dotnet test` 即可（测试 loud-fail 提醒你 Docker 没起）
+          #   - CI：见 .github/workflows/docker-integration-tests.yml（ubuntu-latest 自带 Docker，
+          #          单独跑 Requires=Docker 测试）；本 pr-build.yml 不重复跑以省 CI 资源
           dotnet test 10e0.slnx \
             -c Release \
             --filter "Requires!=Docker" \

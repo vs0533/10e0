@@ -181,10 +181,15 @@ public sealed class OutboxRelayConcurrencyTests : IClassFixture<SqlServerContain
     [Fact]
     public async Task TwoRelayHosts_Concurrent_50Messages_EachPublishedExactlyOnce()
     {
-        // Docker 不可用（fixture 留空 ConnectionString）→ 静默跳过，符合 tests/CLAUDE.md 约定。
+        // Docker 不可用（fixture 留空 ConnectionString）→ loud-fail（#82 PR #88 教训）：
+        // 静默 return 会让"无 Docker 时测试也 Pass"，给后续 review 假象。
+        // 现在直接 Assert.Fail 让任何跑 dotnet test 的人知道这些测试没真跑。
         if (string.IsNullOrEmpty(_fixture.ConnectionString))
         {
-            return;
+            Assert.Fail(
+                "Requires Docker daemon. Test uses Testcontainers.MsSql to spin up real SQL Server. "
+                + "Run on a machine with Docker (e.g. macOS Docker Desktop), "
+                + "or skip intentionally with `--filter \"FullyQualifiedName!~OutboxRelayConcurrencyTests\"`.");
         }
 
         // Arrange — 用 fixture 共享容器 + EnsureCreated 建表
@@ -288,10 +293,15 @@ public sealed class OutboxRelayConcurrencyTests : IClassFixture<SqlServerContain
     [Fact]
     public async Task TwoRelayHosts_Leader_OnlyOneRelayProcessesMessages()
     {
-        // Docker 不可用（fixture 留空 ConnectionString）→ 静默跳过，符合 tests/CLAUDE.md 约定。
+        // Docker 不可用（fixture 留空 ConnectionString）→ loud-fail（#82 PR #88 教训）：
+        // 静默 return 会让"无 Docker 时测试也 Pass"，给后续 review 假象。
+        // 现在直接 Assert.Fail 让任何跑 dotnet test 的人知道这些测试没真跑。
         if (string.IsNullOrEmpty(_fixture.ConnectionString))
         {
-            return;
+            Assert.Fail(
+                "Requires Docker daemon. Test uses Testcontainers.MsSql to spin up real SQL Server. "
+                + "Run on a machine with Docker (e.g. macOS Docker Desktop), "
+                + "or skip intentionally with `--filter \"FullyQualifiedName!~OutboxRelayConcurrencyTests\"`.");
         }
 
         // Arrange — 与 Scenario 1 共用 fixture + schema

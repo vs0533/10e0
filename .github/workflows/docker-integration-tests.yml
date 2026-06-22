@@ -1,0 +1,60 @@
+name: Docker Integration Tests (Requires=Docker)
+
+# 跑 [Trait("Requires", "Docker")] 的集成测试 — 用 Testcontainers 起真实 SQL Server 容器
+# 验证 Outbox 应用层锁 (feature #82) 的真实并发"每消息恰好一次"语义。
+#
+# 与 pr-build.yml 的关系：pr-build.yml 默认 --filter "Requires!=Docker" 跳过这些测试
+# （Testcontainers 启 docker 镜像慢、CI 资源消耗大），由本 workflow 单独跑 Requires=Docker
+# 测试。两条都绿 = 真实跨进程 SETNX/续约行为已被 CI 验证。
+
+on:
+  pull_request:
+    branches: [dev, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  docker-tests:
+    name: Outbox Real Concurrency (Testcontainers.MsSql)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore dependencies
+        run: dotnet restore 10e0.slnx
+
+      - name: Build (Release)
+        run: dotnet build 10e0.slnx --no-restore -c Release
+
+      # 只跑 Requires=Docker 的测试（即 OutboxRelayConcurrencyTests 那 2 个）：
+      # - 走 Testcontainers.MsSql 启真实 SQL Server 2022 容器
+      # - 两个独立 IServiceProvider + 独立 DbContext + 共享 L2 缓存 = 真分布式锁验证
+      # - 30 轮 × 50 条消息并发跑，断言：Publisher 每条消息恰好被调 1 次
+      - name: Run Requires=Docker tests
+        run: |
+          dotnet test 10e0.slnx \
+            -c Release \
+            --no-build \
+            --filter "Requires=Docker" \
+            --logger "trx;LogFileName=test-results.trx" \
+            --logger "html;LogFileName=test-results.html"
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-test-results-${{ github.run_number }}
+          path: |
+            **/TestResults/*.trx
+            **/TestResults/*.html
+          retention-days: 14

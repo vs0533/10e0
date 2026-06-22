@@ -71,6 +71,20 @@ dotnet test --collect:"XPlat Code Coverage"    # 带覆盖率
 - `DependencyInjection/` 其他扩展 — `CqrsServiceCollectionExtensions` / `JwtAuthExtensions` 等仍有缺口
 - `TenE0*` 实体模型类 — 无业务逻辑的 POCO 属性定义
 
+### Requires=Docker 测试（Outbox 真实并发验证）
+
+`OutboxRelayConcurrencyTests`（feature #82）需 **Docker daemon** —— 用 `Testcontainers.MsSql` 启真实 SQL Server 容器跑"两 Host + 50 条消息 + 30 轮" exactly-once 并发验证。
+
+| 情况 | 行为 |
+|---|---|
+| 本地有 Docker（如 macOS Docker Desktop 开着） | `dotnet test` 跑全部测试，包括这两个 → 真验证跨进程 SETNX/续约 |
+| 本地无 Docker | 测试**显式 fail**（`Assert.Fail`，不静默 return — PR #88 教训）—— 提醒开发者"这两个测试没真跑" |
+| CI PR 普通 build | `pr-build.yml` 走 `--filter "Requires!=Docker"` 跳过 |
+| CI Requires=Docker 专项 | `docker-integration-tests.yml` workflow 单独跑（ubuntu-latest 自带 Docker） |
+
+需要本地跑：装 [Docker Desktop](https://www.docker.com/products/docker-desktop/)，让 daemon 起来，然后 `dotnet test`。
+无 Docker 又想跑其它测试：`dotnet test --filter "Requires!=Docker"`。
+
 ## 测试依赖
 
 | 包 | 版本 | 用途 |
