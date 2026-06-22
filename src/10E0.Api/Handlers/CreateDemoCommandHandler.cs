@@ -22,22 +22,12 @@ internal sealed class CreateDemoCommandHandler(IDbContextFactory<DemoDbContext> 
             FieldPermissions = command.Salary.HasValue ? DemoFieldPermissions.Map : null,
             BeforeSaveAsync = _ =>
             {
-                // issue #93：改调 AggregateRoot.RaiseInternal (internal + InternalsVisibleTo)，
-                // 替换之前的反射调 protected Raise。业务方法应继续走 protected Raise；框架级
-                // 入口仅用于 EntityService.BeforeSaveAsync 等聚合外部触发场景。
-                DemoEventTrigger.RaiseCreated(demo);
+                // 业务方法应继续走 protected Raise；BeforeSaveAsync 钩子在聚合外部触发，
+                // 走 internal RaiseInternal（issue #93 替代之前的 BindingFlags.NonPublic 反射）。
+                demo.RaiseInternal(new DemoCreatedEvent(demo.Id, demo.Code, demo.Name, demo.OrgId));
                 return Task.CompletedTask;
             }
         }, ct);
         return demo.Id;
     }
-}
-
-// issue #93 修复：之前用 BindingFlags.NonPublic 反射调 protected Raise，签名变更
-// 会让反射静默运行时崩。改为调 AggregateRoot.RaiseInternal（internal +
-// InternalsVisibleTo 暴露给 10E0.Api），零反射、IDE 可识别、签名变更编译期报错。
-internal static class DemoEventTrigger
-{
-    public static void RaiseCreated(DemoEntity demo) =>
-        demo.RaiseInternal(new DemoCreatedEvent(demo.Id, demo.Code, demo.Name, demo.OrgId));
 }
