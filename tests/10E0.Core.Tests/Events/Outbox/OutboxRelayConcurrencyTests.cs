@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -231,8 +232,10 @@ public sealed class OutboxRelayConcurrencyTests : IClassFixture<SqlServerContain
             ?? throw new InvalidOperationException(
                 "OutboxRelayService<TestDbContext>.ProcessBatchAsync 不可见 — 私有方法签名变更？");
 
-        var relayA = hostA.GetRequiredService<OutboxRelayService<TestDbContext>>();
-        var relayB = hostB.GetRequiredService<OutboxRelayService<TestDbContext>>();
+        // OutboxRelayService<TContext> 只以 IHostedService 身份注册（生产代码仅 BackgroundService 消费），
+        // 拿实例要走 GetServices<IHostedService>().OfType<...>().First()（PR #88 CI 教训：直接 GetRequiredService<T> 找不到）。
+        var relayA = hostA.GetServices<IHostedService>().OfType<OutboxRelayService<TestDbContext>>().First();
+        var relayB = hostB.GetServices<IHostedService>().OfType<OutboxRelayService<TestDbContext>>().First();
 
         // 30 轮并发跑（约 30s × 1 轮/秒）
         const int rounds = 30;
@@ -343,8 +346,10 @@ public sealed class OutboxRelayConcurrencyTests : IClassFixture<SqlServerContain
             ?? throw new InvalidOperationException(
                 "OutboxRelayService<TestDbContext>.ProcessBatchAsync 不可见");
 
-        var relayA = hostA.GetRequiredService<OutboxRelayService<TestDbContext>>();
-        var relayB = hostB.GetRequiredService<OutboxRelayService<TestDbContext>>();
+        // OutboxRelayService<TContext> 只以 IHostedService 身份注册（生产代码仅 BackgroundService 消费），
+        // 拿实例要走 GetServices<IHostedService>().OfType<...>().First()（PR #88 CI 教训：直接 GetRequiredService<T> 找不到）。
+        var relayA = hostA.GetServices<IHostedService>().OfType<OutboxRelayService<TestDbContext>>().First();
+        var relayB = hostB.GetServices<IHostedService>().OfType<OutboxRelayService<TestDbContext>>().First();
 
         const int rounds = 30;
         var taskA = Task.Run(async () =>
