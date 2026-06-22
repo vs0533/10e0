@@ -289,13 +289,18 @@ public sealed class OutboxRelayConcurrencyTests : IClassFixture<SqlServerContain
             // DIAG: 失败时把所有行的 Id+SentTime+AttemptCount 写到 trx 让 CI 看到
             if (sentCount != 50 || attemptSum != 50)
             {
-                var dump = string.Join("\n", allRows
-                    .OrderBy(m => m.OccurredOn)
-                    .Select(m => $"  Id={m.Id} SentTime={(m.SentTime?.ToString("o") ?? "null")} Attempt={m.AttemptCount}"));
+                var sorted = allRows.OrderBy(m => m.OccurredOn).ToList();
+                var first5 = string.Join("\n", sorted.Take(5).Select(m => $"  Id={m.Id} OccurredOn={m.OccurredOn:o} SentTime={(m.SentTime?.ToString("o") ?? "null")} Attempt={m.AttemptCount}"));
+                var last5 = string.Join("\n", sorted.TakeLast(5).Select(m => $"  Id={m.Id} OccurredOn={m.OccurredOn:o} SentTime={(m.SentTime?.ToString("o") ?? "null")} Attempt={m.AttemptCount}"));
+                var idPrefixes = sorted.GroupBy(m => m.Id.Length > 6 ? m.Id.Substring(0, 6) : m.Id)
+                    .Select(g => $"  prefix={g.Key}: count={g.Count()}")
+                    .Take(20);
                 Assert.Fail(
                     $"[DIAG] sentCount={sentCount}, attemptSum={attemptSum}, totalRows={allRows.Count}\n"
                     + $"distinctIds={allRows.Select(m => m.Id).Distinct().Count()}\n"
-                    + $"rows:\n{dump}");
+                    + $"first 5 (by OccurredOn):\n{first5}\n"
+                    + $"last 5 (by OccurredOn):\n{last5}\n"
+                    + $"id prefixes:\n{string.Join("\n", idPrefixes)}");
             }
         }
 
