@@ -49,6 +49,27 @@ public sealed class InMemoryDistributedCache : IDistributedCache
         await Task.CompletedTask;
     }
 
+    /// <summary>
+    /// 测试用原子 SETNX —— key 不存在时写入并返回 true；存在时返回 false。
+    /// 用于让 <see cref="L1L2CacheForTest"/> / <see cref="L2AtomicCounterForTest"/> 的 check-then-set
+    /// 序列在同一进程内多线程并发下也能模拟生产 Redis SETNX 的原子语义。
+    /// （PR #88 docker-integration-tests CI 教训：早期 fake 用 read-then-write → TOCTOU race →
+    /// 两个 host 都 TrySetAsync 成功 → 都 publish 同一消息 2 次 → exactly-once 断言失败。）
+    /// </summary>
+    public bool TryAdd(string key, byte[] value, DistributedCacheEntryOptions options)
+    {
+        var ttl = options?.AbsoluteExpirationRelativeToNow ?? options?.SlidingExpiration ?? TimeSpan.FromMinutes(5);
+        lock (_gate)
+        {
+            if (_store.TryGetValue(key, out var existing) && existing.ExpiresAt > DateTimeOffset.UtcNow)
+            {
+                return false; // key 存在且未过期 → 不可 add
+            }
+            _store[key] = (value, DateTimeOffset.UtcNow + ttl);
+            return true;
+        }
+    }
+
     public void Refresh(string key)
     {
         lock (_gate)

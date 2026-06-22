@@ -66,11 +66,45 @@ public sealed class L1L2CacheForTest : IMultiLevelCache
         CancellationToken cancellationToken = default)
         where T : class
     {
+        // 用真原子的 TryAdd 代替"先 Get 再 Set"序列 —— 避免 TOCTOU race。
+        // 早期实现 (PR #88 早期) 用 GetAsync + SetAsync 序列，hostA 跑到 Set 之前 hostB 也 Get 完成 → 两个都 success → 都 publish。
+        // 生产 Redis SETNX 天然原子，fake 必须用锁/CompareExchange 才能测出 SETNX 行为正确性。
+        //（同进程内多线程有效；跨进程需要真 Redis SETNX 才能验证 —— fake 的根本限制。）
+        if (options.L2Duration <= TimeSpan.Zero) return false;
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(value);
+        var distributedOptions = new DistributedCacheEntryOptions
+        {
+            AbsoluteExpirationRelativeToNow = options.L2Duration,
+        };
+
+        // L1 命中直接 false（沿用原语义：L1 看作 L2 的子集，有就一定存在）
         if (_l1.TryGetValue(key, out _)) return false;
-        var existing = await _l2.GetAsync(key, cancellationToken);
-        if (existing is { Length: > 0 }) return false;
-        await SetL2Async(key, value, options, cancellationToken);
-        SetL1(key, value, options);
+
+        // 关键：调用 L2 的原子 TryAdd —— 不存在时才写，存在时直接 false，避免 hostA 写完 hostB 又覆盖
+        bool added;
+        if (_l2 is InMemoryDistributedCache inMem)
+        {
+            added = inMem.TryAdd(key, bytes, distributedOptions);
+        }
+        else
+        {
+            // 兜底：非 InMemory 实现走 read-then-write（仍可能有 TOCTOU，但 IDistributedCache 标准接口没 TryAdd）
+            var existing = await _l2.GetAsync(key, cancellationToken);
+            if (existing is { Length: > 0 }) return false;
+            await _l2.SetAsync(key, bytes, distributedOptions, cancellationToken);
+            added = true;
+        }
+
+        if (!added) return false;
+
+        // L1 同步 set（沿用原语义：L2 成功写后才 set L1，让 L1 与 L2 状态一致）
+        if (options.L1Duration > TimeSpan.Zero)
+        {
+            _l1.Set(key, value, new MemoryCacheEntryOptions
+            {
+                AbsoluteExpirationRelativeToNow = options.L1Duration,
+            });
+        }
         return true;
     }
 
