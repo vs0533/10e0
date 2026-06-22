@@ -8,6 +8,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using TenE0.Core.Auth.Jwt.Storage;
+using TenE0.Core.Events.Outbox;
 
 namespace TenE0.Api.Tests;
 
@@ -187,6 +188,40 @@ public sealed class CentralizedExceptionHandlingAcceptanceTests
         data.ValueKind.Should().Be(JsonValueKind.Object);
         data.TryGetProperty("id", out _).Should().BeTrue(
             "the migrated success payload must still expose the new entity id");
+    }
+
+    // ── Issue #93: end-to-end coverage for the RaiseInternal path ─────
+
+    [Fact]
+    public async Task GivenSuccessfulCreateDemo_WhenPostingDemo_ThenDemoCreatedEventLandsInOutbox()
+    {
+        // Arrange — alice has demo.create, so the handler runs end-to-end and
+        // BeforeSaveAsync's RaiseInternal call must produce an OutboxMessage row
+        // (issue #93 替代反射：现在走 AggregateRoot.RaiseInternal，断言事件真的进了 Outbox)。
+        using var factory = new IsolatedFactory(aliceRoles: new[] { "viewer", "editor" });
+        await factory.ResetAliceRolesAsync();
+        var client = factory.CreateClient();
+        var aliceAuth = await LoginAsAsync(client, "alice", "111111");
+        client.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Bearer", aliceAuth.AccessToken);
+
+        // Act
+        var response = await client.PostAsJsonAsync(
+            "/demo", new { name = "outbox-probe", orgId = (string?)null, salary = (decimal?)null });
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        // Assert — OutboxMessage 行必须存在且 EventType 指向 DemoCreatedEvent。
+        // 与 OutboxInterceptor.SavingChangesAsync 共事务：业务实体写入 + Outbox 行原子提交。
+        using var probe = await factory.Services
+            .GetRequiredService<IDbContextFactory<DemoDbContext>>()
+            .CreateDbContextAsync();
+        var outboxMessages = await probe.Set<OutboxMessage>().AsNoTracking().ToListAsync();
+        outboxMessages.Should().NotBeEmpty(
+            "CreateDemoCommandHandler.BeforeSaveAsync 调 RaiseInternal → OutboxInterceptor 必须把 DemoCreatedEvent 序列化入 OutboxMessage 表");
+        outboxMessages.Should().Contain(m => m.EventType.Contains(nameof(TenE0.Api.Events.DemoCreatedEvent)),
+            "EventType 必须指向 DemoCreatedEvent，不能是 placeholder 或错误类型");
+        outboxMessages.Should().Contain(m => m.Payload.Contains("outbox-probe"),
+            "Payload JSON 必须包含新建 demo 的 name，验证 OutboxInterceptor 真的拿到了 RaiseInternal 注册的事件");
     }
 
     // ── Helpers ────────────────────────────────────────────────

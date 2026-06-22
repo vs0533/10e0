@@ -4,7 +4,6 @@ using TenE0.Api.Domain;
 using TenE0.Api.Endpoints;
 using TenE0.Api.Hosting;
 using TenE0.Api.Seeders;
-using TenE0.Core.Auth;
 using TenE0.Core.DependencyInjection;
 using TenE0.Core.Errors;
 using TenE0.Core.Hosting;
@@ -64,7 +63,9 @@ builder.Services.AddScoped<IDataSeeder, PermissionSeeder>();
 builder.Services.AddScoped<IDataSeeder, AuthSeeder>();
 builder.Services.AddScoped<IDataSeeder, MenuSeeder>();
 
-builder.Services.AddScoped<IUserInfoLoader, NullUserInfoLoader>();
+// IUserInfoLoader 默认实现由 AddTenE0Core() 通过 TryAddScoped 注册（#43 下沉），
+// 这里不再重复 AddScoped —— 否则会在 Api 端解析成 Api.Hosting.NullUserInfoLoader
+// 而非 Core 版本（issue #93 修复后 Api 自带副本已删）。
 builder.Services.AddOpenApi();
 
 builder.Services.AddAuthorization();

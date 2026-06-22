@@ -33,6 +33,21 @@ public abstract class AggregateRoot : AuditedEntity
         _pendingEvents.Add(domainEvent);
     }
 
+    /// <summary>
+    /// 框架级入口 — 给 EntityService、BeforeSave 钩子等场景在聚合外部触发事件用。
+    /// <para>
+    /// 业务方法应继续走 <c>protected Raise</c>（封装边界）。只有框架代码（演示项目、
+    /// 通用 BeforeSave 钩子）需要触发的场景才用 <c>RaiseInternal</c>。
+    /// </para>
+    /// <para>
+    /// 设计原因：issue #93 修复 — 之前 DemoEventTrigger 用
+    /// <c>BindingFlags.NonPublic</c> 反射调 protected Raise，签名变更（如加 cancellation
+    /// token）会让反射静默运行时崩。internal + <c>InternalsVisibleTo</c> 给 demo 项目
+    /// 暴露稳定入口，IDE / 分析器可识别，重构不再有"反射盲区"。
+    /// </para>
+    /// </summary>
+    internal void RaiseInternal(IDomainEvent domainEvent) => Raise(domainEvent);
+
     /// <summary>OutboxInterceptor 把事件取走后调用，避免重复发布。</summary>
     public void ClearEvents() => _pendingEvents.Clear();
 }
