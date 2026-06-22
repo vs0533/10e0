@@ -27,8 +27,10 @@ public sealed class LoginCommandHandler<TUser, TContext>(
 
         var user = await dc.Set<TUser>().FirstOrDefaultAsync(u => u.UserCode == cmd.UserCode, ct);
 
-        // 防 timing attack：找不到用户也跑一次 Verify（耗时一致）
-        var verified = user is not null && passwordHasher.Verify(cmd.Password, user.PasswordHash);
+        // #97 防 timing attack：用户不存在时也必须跑一次 Verify（走完整 PBKDF2 路径），
+        // 否则攻击者通过响应时间差异可枚举有效用户名。短路 `&&` 已被移除。
+        var hashToCheck = user?.PasswordHash ?? passwordHasher.DummyHash;
+        var verified = passwordHasher.Verify(cmd.Password, hashToCheck);
 
         if (user is null || !verified)
         {

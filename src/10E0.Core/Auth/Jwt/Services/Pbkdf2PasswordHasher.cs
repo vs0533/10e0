@@ -20,6 +20,38 @@ public sealed class Pbkdf2PasswordHasher : IPasswordHasher
     private const int Iterations = 100_000;
     private static readonly HashAlgorithmName Algorithm = HashAlgorithmName.SHA256;
 
+    /// <summary>
+    /// 防 timing attack 的兜底 dummy hash —— 启动期生成一次，全程不变。
+    ///
+    /// 计算方式：用全零盐 + 固定 placeholder 明文 "tene0-timing-attack-dummy"
+    /// 跑一遍 PBKDF2，得到的哈希没有任何真实密码能匹配。攻击者探测该 dummy 时
+    /// 走完整 PBKDF2 路径，耗时与真实用户场景一致 —— 这正是关闭 timing oracle 的关键。
+    ///
+    /// 静态 + readonly：进程内只算一次，多实例共享。Mock 框架可通过 IPasswordHasher.DummyHash
+    /// 属性单独覆盖。
+    /// </summary>
+    public string DummyHash => DummyHashValue;
+
+    private static readonly string DummyHashValue = ComputeDummyHash();
+
+    private static string ComputeDummyHash()
+    {
+        var salt = new byte[SaltSize];   // 全零盐 —— 与任何真实盐都不同，保证不匹配
+        var key = Rfc2898DeriveBytes.Pbkdf2(
+            "tene0-timing-attack-dummy",
+            salt,
+            Iterations,
+            Algorithm,
+            KeySize);
+
+        var buffer = new byte[1 + SaltSize + KeySize];
+        buffer[0] = 1;   // version —— 与 Hash() 输出格式一致，可被 Verify() 解析
+        salt.CopyTo(buffer, 1);
+        key.CopyTo(buffer, 1 + SaltSize);
+
+        return Convert.ToBase64String(buffer);
+    }
+
     public string Hash(string password)
     {
         ArgumentException.ThrowIfNullOrEmpty(password);
