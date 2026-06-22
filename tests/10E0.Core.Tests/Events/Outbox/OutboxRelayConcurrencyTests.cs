@@ -147,6 +147,10 @@ public sealed class OutboxRelayConcurrencyTests : IClassFixture<SqlServerContain
         services.AddSingleton(sharedDistributedCache);
         services.AddSingleton(sharedCounter);
 
+        // OutboxRelayService<TContext> ctor 依赖 TimeProvider（生产由 AddTenE0Core 注册），
+        // 测试 BuildHost 不调 AddTenE0Core 所以单独注册（PR #88 docker-integration-tests CI 教训）。
+        services.AddSingleton(TimeProvider.System);
+
         var ctxOptions = new DbContextOptionsBuilder<TestDbContext>()
             .UseSqlServer(connectionString)
             .ConfigureWarnings(w => w.Ignore(InMemoryEventId.TransactionIgnoredWarning))
