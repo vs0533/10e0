@@ -178,7 +178,7 @@ public sealed class DistributedOutboxLockTests
     // ================================================================
 
     [Fact]
-    public async Task Release_SameInstance_RemovesFromL1AndL2()
+    public async Task Release_SameInstance_IsNoOp_LockHolds()
     {
         // Arrange — instance-A 持锁
         var (cache, l1, l2) = CreateCache();
@@ -190,13 +190,20 @@ public sealed class DistributedOutboxLockTests
         l1.TryGetValue(key, out _).Should().BeTrue("持锁后 L1 必有值");
         l2.Get(key).Should().NotBeNull("持锁后 L2 必有值");
 
-        // Act — 本实例 Release
+        // Act — 本实例 Release（per-message 调用，ProcessBatchAsync 每条 message 后调一次）
         await sut.ReleaseAsync("msg-1", "instance-A", CancellationToken.None);
 
-        // Then — L1 + L2 都被清空
-        l1.TryGetValue(key, out _).Should().BeFalse(
-            "Release 必须同时清空 L1（否则下次 TryAcquire 会命中 stale L1 假阳性续约）");
-        l2.Get(key).Should().BeNull(
-            "Release 必须同时清空 L2，让其他实例下轮 TryAcquire 能重新拿到锁");
+        // Then — ReleaseAsync 是 no-op，lock key 必须仍存在（PR #88 修）
+        // 原因：lease 才是锁存续期的权威来源；显式删 lock key 会让 race window 内另一 host
+        // 抢到锁 publish 同一消息第二次 → exactly-once 失败。lock key 留 lease 期间（默认 30s），
+        // 由 lease 过期自然让出。
+        l1.TryGetValue(key, out _).Should().BeTrue(
+            "ReleaseAsync 是 no-op：L1 必须仍存在（避免 race window 内其他 host 假阳性续约）");
+        l2.Get(key).Should().NotBeNull(
+            "ReleaseAsync 是 no-op：L2 必须仍存在（由 lease 过期自然让出）");
+
+        // 二次 TryAcquire（同实例）必须续约成功（owner 仍是 self）
+        var reAcquired = await sut.TryAcquireAsync("msg-1", "instance-A", TimeSpan.FromSeconds(30), CancellationToken.None);
+        reAcquired.Should().BeTrue("同实例续约必须成功 — owner 仍是 self");
     }
 }

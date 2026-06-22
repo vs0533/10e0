@@ -104,34 +104,26 @@ public sealed class DistributedOutboxLock : IOutboxLock
         string instanceId,
         CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(messageId) || string.IsNullOrWhiteSpace(instanceId))
-        {
-            return;
-        }
+        _ = messageId;
+        _ = instanceId;
+        _ = cancellationToken;
 
-        var key = BuildKey(messageId);
-
-        // 所有权校验：用 GetOrSet + 返回 null 的 factory 旁路读 L2
-        // （factory 返回 null 时 cache 不会回写 → 见 DefaultCachingImplementations.MultiLevelCache.GetOrSetAsync）
-        var owner = await _cache.GetOrSetAsync<string>(
-            key,
-            factory: _ => new ValueTask<string?>((string?)null),
-            new CacheOptions
-            {
-                // 极短 TTL；实际上 factory 返回 null 时 cache 不回写，所以 TTL 大小不影响正确性
-                L1Duration = TimeSpan.FromSeconds(1),
-                L2Duration = TimeSpan.FromSeconds(1),
-            },
-            cancellationToken);
-
-        if (!string.Equals(owner, instanceId, StringComparison.Ordinal))
-        {
-            // 不持有 或 已被他人续约 → 幂等返回，不抛异常
-            return;
-        }
-
-        // 真删：双层都清掉
-        await _cache.RemoveAsync(key, cancellationToken);
+        // Distributed 模式 Release 语义：no-op —— lock key 应由 lease 过期自然让出。
+        //
+        // 早期实现（PR #88 早期）调 RemoveAsync 删 lock key，docker-integration-tests CI 暴露的真 bug：
+        //   - hostA 处理 msg-000：TryAcquireAsync ✓ → publish（mock 收到）→ SaveChangesAsync 还没 commit →
+        //     ReleaseAsync 删 lock key
+        //   - hostB 同时 pick 同一 msg-000（SentTime 还是 null）：TryAcquireAsync ✓（lock 不在了）→
+        //     publish 第二次 → exactly-once 失败
+        //
+        // 正确语义：lease = owner 的"持续声明"窗口，lock key 在 lease 内（默认 30s）由 owner 独占。
+        // lease 过期自动让出（无需显式删），期间其他 host 抢锁必失败。消息本身由 SQL 的 SentTime
+        // 标记为已发布，pick-up SQL (`SentTime == null`) 自然过滤。lock key 是临时"占位"，30s 后
+        // 自然消失，无需立即删除。
+        //
+        // 副作用：lock key 会留存到 lease 过期。生产部署 messageId 是 outbox:lock:{messageId}，
+        // 单实例每条消息一个 key × lease 30s × 投递速率 = 内存可控；分布式 Redis 由 LRU/TTL 自动回收。
+        await Task.CompletedTask;
     }
 
     private static string BuildKey(string messageId) => $"outbox:lock:{messageId}";

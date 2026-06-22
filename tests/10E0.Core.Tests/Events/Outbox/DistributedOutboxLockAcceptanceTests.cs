@@ -158,21 +158,25 @@ public sealed class DistributedOutboxLockAcceptanceTests
     // ================================================================
 
     [Fact]
-    public async Task GivenLockHeldBySelf_WhenRelease_ThenLockIsGone()
+    public async Task GivenLockHeldBySelf_WhenRelease_ThenLockHolds_NoOp()
     {
         // Arrange — instance-A 持锁
         var (cache, l2) = CreateCache();
         IOutboxLock sut = CreateLock(cache, instanceId: "instance-A");
         await sut.TryAcquireAsync("msg-1", "instance-A", TimeSpan.FromSeconds(30), CancellationToken.None);
 
-        // Act — 本实例 Release
+        // Act — 本实例 Release（per-message 路径）
         await sut.ReleaseAsync("msg-1", "instance-A", CancellationToken.None);
 
-        // Then — 锁键必须被清空，下轮其他实例可拾取
+        // Then — ReleaseAsync 是 no-op（PR #88 修）：lock key 仍在，由 lease 过期自然让出
         var key = "outbox:lock:msg-1";
         var remaining = l2.Get(key);
-        remaining.Should().BeNull(
-            "Release 必须清空缓存键，让其他实例下轮 TryAcquire 能重新拿到锁");
+        remaining.Should().NotBeNull(
+            "ReleaseAsync 是 no-op：lock key 必须仍存在（避免 race window 内其他 host 抢到同一锁 → exactly-once 失败）");
+
+        // 二次 TryAcquire（同实例）必须仍为 owner
+        var reAcquired = await sut.TryAcquireAsync("msg-1", "instance-A", TimeSpan.FromSeconds(30), CancellationToken.None);
+        reAcquired.Should().BeTrue("同实例续约必须成功 — Release 不应影响 owner 身份");
     }
 
     // ================================================================
@@ -306,9 +310,10 @@ public sealed class DistributedOutboxLockAcceptanceTests
         aWins.Should().BeTrue("A 先到，无人持锁 → A 必赢");
         bWins.Should().BeFalse("B 后到，A 已持锁 → B 必须跳过（应用层锁的互斥语义）");
 
-        // A Release 后，B 必须能再拿到
+        // A Release（no-op，PR #88 修）后，B 仍抢不到（lock key 还在，lease 30s）
         await sutA.ReleaseAsync("msg-1", "instance-A", CancellationToken.None);
         var bRetry = await sutB.TryAcquireAsync("msg-1", "instance-B", TimeSpan.FromSeconds(30), CancellationToken.None);
-        bRetry.Should().BeTrue("A 释放后 B 必须能拿到 — 验证 Release 真的把锁清掉了");
+        bRetry.Should().BeFalse(
+            "A ReleaseAsync 是 no-op：lock key 仍在 lease 内 → B 必须仍抢不到（避免 PR #88 早期 race window 内 B 抢到锁 publish 第二次）");
     }
 }
