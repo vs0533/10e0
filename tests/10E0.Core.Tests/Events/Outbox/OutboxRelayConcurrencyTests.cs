@@ -174,6 +174,11 @@ public sealed class OutboxRelayConcurrencyTests : IClassFixture<SqlServerContain
         // 让 IOutboxLock 的 switch 表达式按 LockProvider 选项分派真实实现。
         // AddTenE0Caching 内 IMemoryCache/IMultiLevelCache/IAtomicCounter 都用 TryAdd，
         // 上面已注册的共享实例不会被覆盖。
+        // ⚠️ 必须显式调 AddTenE0Caching() —— AddTenE0DomainEvents 不调它，IMultiLevelCache
+        //   未注册时 AddOutboxLocking 内部 try/catch 兜底返回 NoOpOutboxLock（无锁），
+        //   两个 host 都 publish 同一消息 → exactly-once 失败（PR #88 docker CI 教训：早期
+        //   BuildHost 缺这一步，所有 lock fix 全部白做）。
+        services.AddTenE0Caching();
         services.AddTenE0DomainEvents<TestDbContext>();
 
         return services.BuildServiceProvider();
