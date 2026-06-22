@@ -21,6 +21,15 @@ internal sealed class MultiLevelCache : IMultiLevelCache
     private readonly IMemoryCache _l1;
     private readonly IDistributedCache _l2;
 
+    // SETNX 锁 — 进程内全局共享。
+    // 必须用 static readonly：测试场景用同进程两个 ServiceProvider 模拟"两个 Relay 实例
+    // 共享同 cache 后端"，每个 ServiceProvider 各自 new 一个 MultiLevelCache → 实例级
+    // 锁不跨 host 共享 → SETNX race 仍存在。static 锁让所有 MultiLevelCache 实例共享
+    // 同一进程内锁。生产部署：不同进程各自 static 锁不共享，但生产 Redis SETNX 天然
+    // 原子（SET key NX EX 命令在 Redis 端单步），跨进程不需要本锁。lock 是微秒级
+    // 内存互斥，对 lock-acquire 关键路径性能影响可忽略。
+    private static readonly object _setnxGate = new();
+
     public MultiLevelCache(IMemoryCache l1, IDistributedCache l2)
     {
         _l1 = l1;
@@ -92,7 +101,7 @@ internal sealed class MultiLevelCache : IMultiLevelCache
 
         // 序列化 SETNX 调用（同进程内多线程并发同一 key 必有 1 winner）
         // 锁内全 sync 调用（IDistributedCache.Get/Set 都有 sync 版本），不 await yield。
-        lock (_setnxGate)
+        lock (_setnxGate)  // static 锁：跨 MultiLevelCache 实例共享，跨线程串行化 SETNX
         {
             if (_l1.TryGetValue(key, out _)) return Task.FromResult(false);
 
@@ -121,7 +130,7 @@ internal sealed class MultiLevelCache : IMultiLevelCache
         }
     }
 
-    private readonly object _setnxGate = new();
+    // SETNX 锁已移到 class 字段区（见上方 _setnxGate 声明）
 
     /// <summary>
     /// 覆盖写入：用于锁续约或主动改值。L1+L2 都覆盖。
