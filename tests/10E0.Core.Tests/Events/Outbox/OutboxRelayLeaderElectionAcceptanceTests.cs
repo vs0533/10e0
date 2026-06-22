@@ -184,16 +184,19 @@ public sealed class OutboxRelayLeaderElectionAcceptanceTests
     // ================================================================
 
     [Fact]
-    public async Task GivenLeaderReleases_WhenOtherInstanceAcquires_ThenTakesOverLeadership()
+    public async Task GivenLeaderLeaseExpires_WhenOtherInstanceAcquires_ThenTakesOverLeadership()
     {
-        // Arrange — A 当选
+        // Lease 过期 failover（#82 issue body 明确说的"租约式 leader"主路径）：
+        //   早期测试 "GivenLeaderReleases_..." 测的是"主动 Release"语义，
+        //   那是错的（ReleaseAsync 删 leader key 会让两个 host 轮流当 leader → exactly-once 失败 — PR #88 教训）。
+        // Arrange — A 用短 lease 当选
         var (cache, _) = CreateCache();
         var sutA = CreateElector(cache, "instance-A");
         var sutB = CreateElector(cache, "instance-B");
-        await sutA.TryAcquireAsync("*", "instance-A", TimeSpan.FromSeconds(30), CancellationToken.None);
+        await sutA.TryAcquireAsync("*", "instance-A", TimeSpan.FromMilliseconds(50), CancellationToken.None);
 
-        // Act — A 主动 Release
-        await sutA.ReleaseAsync("*", "instance-A", CancellationToken.None);
+        // Act — 等 lease 过期
+        await Task.Delay(150);
 
         // Then — B 必须能接管
         var bAcquired = await sutB.TryAcquireAsync(
@@ -202,7 +205,7 @@ public sealed class OutboxRelayLeaderElectionAcceptanceTests
             lease: TimeSpan.FromSeconds(30),
             cancellationToken: CancellationToken.None);
         bAcquired.Should().BeTrue(
-            "原 leader 主动 Release 后其他实例必须能接管 — 这是 leader failover 的预期主路径");
+            "A 的 lease 过期后 B 必须能抢主接管 — #82 issue 明确说的'租约式 leader failover'主路径");
     }
 
     // ================================================================

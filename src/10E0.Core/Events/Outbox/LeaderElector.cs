@@ -105,21 +105,17 @@ public sealed class LeaderElector : IOutboxLock
     {
         _ = messageId;
 
-        var leaderKey = BuildLeaderKey(_options.LeaderInstanceKeyPrefix);
-
-        var current = await _cache.GetOrSetAsync<string>(
-            leaderKey,
-            _ => ValueTask.FromResult<string?>(null),
-            BuildCacheOptions(_options.LeaderLeaseDuration),
-            cancellationToken).ConfigureAwait(false);
-
-        // 仅当 owner == self 才退位；非 owner 调 Release 是幂等 no-op。
-        if (current is null || !string.Equals(current, instanceId, StringComparison.Ordinal))
-        {
-            return;
-        }
-
-        await _cache.RemoveAsync(leaderKey, cancellationToken).ConfigureAwait(false);
+        // Leader 模式 Release 语义：no-op —— Leader 是全局身份，不应因"处理完一条消息"就退位。
+        // 早期实现调 RemoveAsync 删 leader key，触发 PR #88 docker-integration-tests CI 暴露的真 bug：
+        //   - hostA 处理完 msg-000 后 Release 删 leader key
+        //   - hostB 立即抢主成功 → publish msg-000 → Release 又删 leader key
+        //   - 两条 host 轮流 publish 同一 message 2 次 → exactly-once 失败
+        // 正确语义：Leader 身份由 lease 过期自然让出（<see cref="TryAcquireAsync"/> 续约刷新 TTL，
+        // 不续约则 lease 过期后其他实例能抢主）。实例 shutdown 时由调用方显式调专门的退位 API
+        // （尚未提供——见后续 issue）。
+        await Task.CompletedTask;
+        _ = cancellationToken;
+        _ = instanceId;
     }
 
     private static string BuildLeaderKey(string prefix) => $"{prefix}:election";

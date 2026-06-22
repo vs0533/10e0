@@ -106,17 +106,22 @@ public sealed class LeaderElectorTests
     // ================================================================
 
     [Fact]
-    public async Task OriginalLeader_ReleasesAndSecondTakesOver()
+    public async Task OriginalLeader_LeaseExpiresAndSecondTakesOver()
     {
+        // Lease 过期 failover — 这是 #82 issue body 明确说的"租约式 leader 锁"主路径：
+        //   leader 崩了/不续约 → lease 过期 → 另一实例能抢主
+        // （不是"主动 Release 退位"——Leader 模式 ReleaseAsync 是 no-op，由 lease 过期自然让出，
+        //   早期 PR #88 测试用"主动 Release"语义是错的。）
         // Arrange
         var l2 = new InMemoryDistributedCache();
         var cache = new L1L2CacheForTest(new MemoryCache(new MemoryCacheOptions()), l2);
         var sutA = CreateElector(cache, "instance-A");
         IOutboxLock sutB = CreateElector(cache, "instance-B");
-        await sutA.TryAcquireAsync("*", "instance-A", TimeSpan.FromSeconds(30), CancellationToken.None);
+        // A 用 50ms 短 lease 当选
+        await sutA.TryAcquireAsync("*", "instance-A", TimeSpan.FromMilliseconds(50), CancellationToken.None);
 
-        // Act — A 退位
-        await sutA.ReleaseAsync("*", "instance-A", CancellationToken.None);
+        // Act — 等 lease 过期
+        await Task.Delay(150);
         var bAcquired = await sutB.TryAcquireAsync(
             messageId: "*",
             instanceId: "instance-B",
@@ -125,7 +130,41 @@ public sealed class LeaderElectorTests
 
         // Then
         bAcquired.Should().BeTrue(
-            "原 leader 主动 Release 后其他实例必须能接管 — leader failover 主路径");
+            "A 的 lease 过期后 B 必须能抢主接管 — #82 issue 明确说的'租约式 leader failover'主路径");
+    }
+
+    [Fact]
+    public async Task OriginalLeader_ReleaseIsNoOp_LeaseStillHolds()
+    {
+        // 锁定 Leader 模式 ReleaseAsync 的 no-op 语义（PR #88 修）：
+        //   ReleaseAsync 不删 leader key → 同一实例调 Release 不应让自己失去 leader 身份。
+        // Arrange
+        var l2 = new InMemoryDistributedCache();
+        var cache = new L1L2CacheForTest(new MemoryCache(new MemoryCacheOptions()), l2);
+        var sutA = CreateElector(cache, "instance-A");
+        IOutboxLock sutB = CreateElector(cache, "instance-B");
+        await sutA.TryAcquireAsync("*", "instance-A", TimeSpan.FromSeconds(30), CancellationToken.None);
+
+        // Act — A 调 Release（per-message 路径）
+        await sutA.ReleaseAsync("*", "instance-A", CancellationToken.None);
+
+        // Then — A 仍是 leader（lease 还在）
+        var aReacquired = await sutA.TryAcquireAsync(
+            messageId: "*",
+            instanceId: "instance-A",
+            lease: TimeSpan.FromSeconds(30),
+            cancellationToken: CancellationToken.None);
+        aReacquired.Should().BeTrue(
+            "ReleaseAsync 是 no-op：A 调 Release 不应失去 leader 身份（lease 还在）");
+
+        // B 仍抢不到
+        var bAcquired = await sutB.TryAcquireAsync(
+            messageId: "*",
+            instanceId: "instance-B",
+            lease: TimeSpan.FromSeconds(30),
+            cancellationToken: CancellationToken.None);
+        bAcquired.Should().BeFalse(
+            "A 还在 leader 期间 B 必须抢不到（避免 PR #88 早期 ReleaseAsync 删 leader key 导致两个 host 轮流当 leader）");
     }
 
     // ================================================================
