@@ -161,14 +161,12 @@ public static class OutboxLockingServiceCollectionExtensions
 
                 case OutboxLockProviderKind.Leader:
                     {
-                        // feature #82 Leader Election：复用 IMultiLevelCache + IAtomicCounter（AddTenE0Caching 注册）。
+                        // feature #82 Leader Election：复用 IMultiLevelCache（AddTenE0Caching 注册）。
                         try
                         {
                             var cache = sp.GetRequiredService<IMultiLevelCache>();
-                            var counter = sp.GetRequiredService<IAtomicCounter>();
                             return new LeaderElector(
                                 cache,
-                                counter,
                                 sp.GetRequiredService<IOptions<OutboxRelayOptions>>());
                         }
                         catch

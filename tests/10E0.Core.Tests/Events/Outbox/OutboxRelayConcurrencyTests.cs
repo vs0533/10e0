@@ -1,11 +1,15 @@
 using System.Collections.Concurrent;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.Extensions.Caching.Distributed;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using TenE0.Core.Caching;
 using TenE0.Core.DependencyInjection;
 using TenE0.Core.Events.Outbox;
+using TenE0.Core.Tests.Events.Outbox.TestFakes;
 
 namespace TenE0.Core.Tests.Events.Outbox;
 
@@ -119,16 +123,28 @@ public sealed class OutboxRelayConcurrencyTests : IClassFixture<SqlServerContain
     /// <summary>
     /// 用 <see cref="AddTenE0DomainEvents{TContext}"/> 完整注册 Relay + OutboxLocking 基础设施，
     /// 再注入 <paramref name="publisher"/> 作为 <see cref="IOutboxPublisher"/> 的实际实现。
+    /// 关键：<paramref name="sharedMemoryCache"/> / <paramref name="sharedDistributedCache"/> / <paramref name="sharedCounter"/>
+    /// 由调用方在 BuildHost 外部构造一次，让两个 host 通过 DI 拿到**同一个**实例 —— 这样 Distributed/Leader 模式
+    /// 才能真验证多实例下的 SETNX / 续约语义（#82 PR #88 bot review 揭示：每个 host 各 new 一个 cache 会让
+    /// Distributed/Leader 模式静默回退 NoOp，"exactly-once" 断言形同虚设）。
     /// </summary>
     private static IServiceProvider BuildHost(
         string connectionString,
         string instanceId,
         OutboxLockProviderKind lockProvider,
         TrackingOutboxPublisher publisher,
+        IMemoryCache sharedMemoryCache,
+        IDistributedCache sharedDistributedCache,
+        IAtomicCounter sharedCounter,
         out IDbContextFactory<TestDbContext> outFactory)
     {
         var services = new ServiceCollection();
         services.AddLogging(b => b.AddProvider(NullLoggerProvider.Instance));
+
+        // 共享 cache + counter：两个 host 拿到的是同一份实例，Distributed/Leader 模式才能跨 host 真验证
+        services.AddSingleton(sharedMemoryCache);
+        services.AddSingleton(sharedDistributedCache);
+        services.AddSingleton(sharedCounter);
 
         var ctxOptions = new DbContextOptionsBuilder<TestDbContext>()
             .UseSqlServer(connectionString)
@@ -151,6 +167,8 @@ public sealed class OutboxRelayConcurrencyTests : IClassFixture<SqlServerContain
 
         // 走 AddTenE0DomainEvents 真实集成路径（自动 AddOutboxLocking<TContext>），
         // 让 IOutboxLock 的 switch 表达式按 LockProvider 选项分派真实实现。
+        // AddTenE0Caching 内 IMemoryCache/IMultiLevelCache/IAtomicCounter 都用 TryAdd，
+        // 上面已注册的共享实例不会被覆盖。
         services.AddTenE0DomainEvents<TestDbContext>();
 
         return services.BuildServiceProvider();
@@ -188,12 +206,17 @@ public sealed class OutboxRelayConcurrencyTests : IClassFixture<SqlServerContain
             await seedCtx.SaveChangesAsync();
         }
 
-        // 两个独立 Host
+        // 两个独立 Host + 共享 L1/L2 + counter（让 Distributed 模式 SETNX 真验证跨 host 互斥）
         var sharedPublisher = new TrackingOutboxPublisher();
+        var sharedMemoryCache = new MemoryCache(new MemoryCacheOptions());
+        var sharedDistributedCache = new InMemoryDistributedCache();
+        var sharedCounter = new L2AtomicCounterForTest(sharedDistributedCache);
         var hostA = BuildHost(
-            connectionString, "host-A", OutboxLockProviderKind.Distributed, sharedPublisher, out _);
+            connectionString, "host-A", OutboxLockProviderKind.Distributed, sharedPublisher,
+            sharedMemoryCache, sharedDistributedCache, sharedCounter, out _);
         var hostB = BuildHost(
-            connectionString, "host-B", OutboxLockProviderKind.Distributed, sharedPublisher, out _);
+            connectionString, "host-B", OutboxLockProviderKind.Distributed, sharedPublisher,
+            sharedMemoryCache, sharedDistributedCache, sharedCounter, out _);
 
         // 反射驱动 OutboxRelayService<TestDbContext>.ProcessBatchAsync
         // （private 走反射避免 BackgroundService.StartAsync 时序复杂度）
@@ -290,13 +313,19 @@ public sealed class OutboxRelayConcurrencyTests : IClassFixture<SqlServerContain
             await seedCtx.SaveChangesAsync();
         }
 
-        // 两个独立 publisher（每个 Host 一个），用以区分谁实际在发
+        // 两个独立 publisher（每个 Host 一个），用以区分谁实际在发 + 共享 L1/L2 + counter
+        // （让 Leader 模式 SETNX 真验证"同一时刻仅一个 leader"，且 follower 真能观察到自己不是 leader）
         var publisherA = new TrackingOutboxPublisher();
         var publisherB = new TrackingOutboxPublisher();
+        var sharedMemoryCache = new MemoryCache(new MemoryCacheOptions());
+        var sharedDistributedCache = new InMemoryDistributedCache();
+        var sharedCounter = new L2AtomicCounterForTest(sharedDistributedCache);
         var hostA = BuildHost(
-            connectionString, "host-A", OutboxLockProviderKind.Leader, publisherA, out _);
+            connectionString, "host-A", OutboxLockProviderKind.Leader, publisherA,
+            sharedMemoryCache, sharedDistributedCache, sharedCounter, out _);
         var hostB = BuildHost(
-            connectionString, "host-B", OutboxLockProviderKind.Leader, publisherB, out _);
+            connectionString, "host-B", OutboxLockProviderKind.Leader, publisherB,
+            sharedMemoryCache, sharedDistributedCache, sharedCounter, out _);
 
         var batchProcessor = typeof(OutboxRelayService<TestDbContext>).GetMethod(
             "ProcessBatchAsync",

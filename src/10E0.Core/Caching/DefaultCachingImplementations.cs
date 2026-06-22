@@ -64,6 +64,40 @@ internal sealed class MultiLevelCache : IMultiLevelCache
         await _l2.RemoveAsync(key, cancellationToken);
     }
 
+    /// <summary>
+    /// SETNX 语义实现：L1+L2 都未命中时写入，否则返回 false。
+    /// 注：单进程 + MemoryDistributedCache 场景下 L1 lock 串行化保证原子；多进程部署
+    /// 应替换底层 IDistributedCache 为 Redis 实现并暴露 SETNX（包装接口），本方法只作为契约。
+    /// </summary>
+    public async Task<bool> TrySetAsync<T>(
+        string key,
+        T value,
+        CacheOptions options,
+        CancellationToken cancellationToken = default) where T : class
+    {
+        if (_l1.TryGetValue(key, out _)) return false;
+
+        var existing = await _l2.GetAsync(key, cancellationToken);
+        if (existing is { Length: > 0 }) return false;
+
+        await SetL2Async(key, value, options, cancellationToken);
+        SetL1(key, value, options);
+        return true;
+    }
+
+    /// <summary>
+    /// 覆盖写入：用于锁续约或主动改值。L1+L2 都覆盖。
+    /// </summary>
+    public async Task SetAsync<T>(
+        string key,
+        T value,
+        CacheOptions options,
+        CancellationToken cancellationToken = default) where T : class
+    {
+        await SetL2Async(key, value, options, cancellationToken);
+        SetL1(key, value, options);
+    }
+
     private void SetL1<T>(string key, T value, CacheOptions options) where T : class
     {
         if (options.L1Duration <= TimeSpan.Zero) return;

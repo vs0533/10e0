@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using TenE0.Core.Caching;
 using TenE0.Core.Events.Outbox;
+using TenE0.Core.Tests.Events.Outbox.TestFakes;
 
 namespace TenE0.Core.Tests.Events.Outbox;
 
@@ -36,137 +37,20 @@ namespace TenE0.Core.Tests.Events.Outbox;
 public sealed class OutboxRelayLeaderElectionAcceptanceTests
 {
     // ================================================================
-    // Test Infrastructure
+    // Test infrastructure — 用共享 TestFakes helper（#82 PR #88 bot review
+    // 揭示本地 fake 类在 4 个文件重复且缺 TrySetAsync/SetAsync 实现）
     // ================================================================
-
-    private sealed class InMemoryDistributedCache : IDistributedCache
-    {
-        private readonly object _gate = new();
-        private readonly Dictionary<string, (byte[] Value, DateTimeOffset ExpiresAt)> _store = new(StringComparer.Ordinal);
-
-        public byte[]? Get(string key)
-        {
-            lock (_gate)
-            {
-                if (!_store.TryGetValue(key, out var entry)) return null;
-                if (entry.ExpiresAt <= DateTimeOffset.UtcNow)
-                {
-                    _store.Remove(key);
-                    return null;
-                }
-                return entry.Value;
-            }
-        }
-
-        public Task<byte[]?> GetAsync(string key, CancellationToken token = default)
-            => Task.FromResult(Get(key));
-
-        public void Set(string key, byte[] value, DistributedCacheEntryOptions options)
-        {
-            lock (_gate)
-            {
-                var ttl = options.AbsoluteExpiration?.RelativeToNow
-                    ?? options.AbsoluteExpirationRelativeToNow
-                    ?? TimeSpan.FromMinutes(5);
-                _store[key] = (value, DateTimeOffset.UtcNow.Add(ttl));
-            }
-        }
-
-        public Task SetAsync(string key, byte[] value, DistributedCacheEntryOptions options, CancellationToken token = default)
-        {
-            Set(key, value, options);
-            return Task.CompletedTask;
-        }
-
-        public void Refresh(string key) { }
-        public Task RefreshAsync(string key, CancellationToken token = default) => Task.CompletedTask;
-        public void Remove(string key) { lock (_gate) _store.Remove(key); }
-        public Task RemoveAsync(string key, CancellationToken token = default) { Remove(key); return Task.CompletedTask; }
-    }
 
     private static (IMultiLevelCache cache, InMemoryDistributedCache l2) CreateCache()
     {
         var l1 = new MemoryCache(new MemoryCacheOptions());
         var l2 = new InMemoryDistributedCache();
-        var cache = new SimpleL1L2Cache(l1, l2);
+        var cache = new L1L2CacheForTest(l1, l2);
         return (cache, l2);
-    }
-
-    private sealed class SimpleL1L2Cache : IMultiLevelCache
-    {
-        private readonly IMemoryCache _l1;
-        private readonly IDistributedCache _l2;
-
-        public SimpleL1L2Cache(IMemoryCache l1, IDistributedCache l2)
-        {
-            _l1 = l1;
-            _l2 = l2;
-        }
-
-        public async Task<T?> GetOrSetAsync<T>(
-            string key,
-            Func<CancellationToken, ValueTask<T?>> factory,
-            CacheOptions options,
-            CancellationToken cancellationToken = default)
-            where T : class
-        {
-            if (_l1.TryGetValue(key, out var l1Hit) && l1Hit is T l1Typed) return l1Typed;
-            var l2Bytes = await _l2.GetAsync(key, cancellationToken);
-            if (l2Bytes is { Length: > 0 })
-            {
-                var fromL2 = System.Text.Json.JsonSerializer.Deserialize<T>(l2Bytes);
-                if (fromL2 is not null)
-                {
-                    _l1.Set(key, fromL2, new MemoryCacheEntryOptions { AbsoluteExpirationRelativeToNow = options.L1Duration });
-                    return fromL2;
-                }
-            }
-            var fresh = await factory(cancellationToken);
-            if (fresh is null) return null;
-            var bytes = System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(fresh);
-            await _l2.SetAsync(key, bytes,
-                new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = options.L2Duration },
-                cancellationToken);
-            _l1.Set(key, fresh, new MemoryCacheEntryOptions { AbsoluteExpirationRelativeToNow = options.L1Duration });
-            return fresh;
-        }
-
-        public async Task RemoveAsync(string key, CancellationToken cancellationToken = default)
-        {
-            _l1.Remove(key);
-            await _l2.RemoveAsync(key, cancellationToken);
-        }
-    }
-
-    /// <summary>
-    /// 基于 L2 的简易原子计数器 — 复用 IAtomicCounter 接口语义做 lease 续约。
-    /// </summary>
-    private sealed class L2AtomicCounter : IAtomicCounter
-    {
-        private readonly IDistributedCache _l2;
-        public L2AtomicCounter(IDistributedCache l2) => _l2 = l2;
-
-        public async Task<long> IncrementAsync(string key, CancellationToken cancellationToken = default)
-        {
-            var raw = await _l2.GetAsync(key, cancellationToken);
-            var current = raw is { Length: > 0 } && long.TryParse(System.Text.Encoding.UTF8.GetString(raw), out var n)
-                ? n : 0L;
-            var next = current + 1L;
-            await _l2.SetAsync(key, System.Text.Encoding.UTF8.GetBytes(next.ToString()),
-                new DistributedCacheEntryOptions(), cancellationToken);
-            return next;
-        }
-
-        public async Task<long> GetAsync(string key, CancellationToken cancellationToken = default)
-        {
-            var raw = await _l2.GetAsync(key, cancellationToken);
-            return raw is { Length: > 0 } && long.TryParse(System.Text.Encoding.UTF8.GetString(raw), out var n) ? n : 0L;
-        }
     }
 
     private static LeaderElector CreateElector(
         IMultiLevelCache cache,
-        IAtomicCounter counter,
         string instanceId,
         TimeSpan? lease = null)
     {
@@ -175,7 +59,7 @@ public sealed class OutboxRelayLeaderElectionAcceptanceTests
             LockInstanceId = instanceId,
             LockLeaseDuration = lease ?? TimeSpan.FromSeconds(30),
         });
-        return new LeaderElector(cache, counter, options);
+        return new LeaderElector(cache, options);
     }
 
     // ================================================================
@@ -215,8 +99,7 @@ public sealed class OutboxRelayLeaderElectionAcceptanceTests
     {
         // Arrange
         var (cache, _) = CreateCache();
-        var counter = new L2AtomicCounter(new InMemoryDistributedCache());
-        var sut = CreateElector(cache, counter, "instance-A");
+        var sut = CreateElector(cache, "instance-A");
 
         // Then
         sut.Should().BeAssignableTo<IOutboxLock>(
@@ -233,8 +116,7 @@ public sealed class OutboxRelayLeaderElectionAcceptanceTests
     {
         // Arrange — 全新缓存 + 计数器
         var (cache, _) = CreateCache();
-        var counter = new L2AtomicCounter(new InMemoryDistributedCache());
-        IOutboxLock sut = CreateElector(cache, counter, "instance-A");
+        IOutboxLock sut = CreateElector(cache, "instance-A");
 
         // Act
         var acquired = await sut.TryAcquireAsync(
@@ -257,8 +139,7 @@ public sealed class OutboxRelayLeaderElectionAcceptanceTests
     {
         // Arrange — 先让 A 当选
         var (cache, _) = CreateCache();
-        var counter = new L2AtomicCounter(new InMemoryDistributedCache());
-        IOutboxLock sut = CreateElector(cache, counter, "instance-A");
+        IOutboxLock sut = CreateElector(cache, "instance-A");
         await sut.TryAcquireAsync("*", "instance-A", TimeSpan.FromSeconds(30), CancellationToken.None);
 
         // Act — 同实例续约
@@ -282,9 +163,8 @@ public sealed class OutboxRelayLeaderElectionAcceptanceTests
     {
         // Arrange — A 已当选
         var (cache, _) = CreateCache();
-        var counter = new L2AtomicCounter(new InMemoryDistributedCache());
-        var sutA = CreateElector(cache, counter, "instance-A");
-        IOutboxLock sutB = CreateElector(cache, counter, "instance-B");
+        var sutA = CreateElector(cache, "instance-A");
+        IOutboxLock sutB = CreateElector(cache, "instance-B");
         await sutA.TryAcquireAsync("*", "instance-A", TimeSpan.FromSeconds(30), CancellationToken.None);
 
         // Act — B 来抢
@@ -308,9 +188,8 @@ public sealed class OutboxRelayLeaderElectionAcceptanceTests
     {
         // Arrange — A 当选
         var (cache, _) = CreateCache();
-        var counter = new L2AtomicCounter(new InMemoryDistributedCache());
-        var sutA = CreateElector(cache, counter, "instance-A");
-        var sutB = CreateElector(cache, counter, "instance-B");
+        var sutA = CreateElector(cache, "instance-A");
+        var sutB = CreateElector(cache, "instance-B");
         await sutA.TryAcquireAsync("*", "instance-A", TimeSpan.FromSeconds(30), CancellationToken.None);
 
         // Act — A 主动 Release
@@ -335,9 +214,8 @@ public sealed class OutboxRelayLeaderElectionAcceptanceTests
     {
         // Arrange — A 是 leader
         var (cache, _) = CreateCache();
-        var counter = new L2AtomicCounter(new InMemoryDistributedCache());
-        var sutA = CreateElector(cache, counter, "instance-A");
-        var sutB = CreateElector(cache, counter, "instance-B");
+        var sutA = CreateElector(cache, "instance-A");
+        var sutB = CreateElector(cache, "instance-B");
         await sutA.TryAcquireAsync("*", "instance-A", TimeSpan.FromSeconds(30), CancellationToken.None);
 
         // Act — B 误调 Release
@@ -369,8 +247,7 @@ public sealed class OutboxRelayLeaderElectionAcceptanceTests
         var l2 = new InMemoryDistributedCache();
         services.AddSingleton<IMemoryCache>(l1);
         services.AddSingleton<IDistributedCache>(l2);
-        services.AddSingleton<IMultiLevelCache, SimpleL1L2Cache>();
-        services.AddSingleton<IAtomicCounter, L2AtomicCounter>();
+        services.AddSingleton<IMultiLevelCache, L1L2CacheForTest>();
         services.AddSingleton(Microsoft.Extensions.Options.Options.Create(
             new OutboxRelayOptions
             {
@@ -383,7 +260,6 @@ public sealed class OutboxRelayLeaderElectionAcceptanceTests
             return opts.LockProvider == OutboxLockProviderKind.Leader
                 ? new LeaderElector(
                     sp.GetRequiredService<IMultiLevelCache>(),
-                    sp.GetRequiredService<IAtomicCounter>(),
                     sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<OutboxRelayOptions>>())
                 : new NoOpOutboxLock();
         });

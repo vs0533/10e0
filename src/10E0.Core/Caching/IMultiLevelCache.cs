@@ -31,6 +31,30 @@ public interface IMultiLevelCache
         CancellationToken cancellationToken = default)
         where T : class;
 
+    /// <summary>
+    /// 仅当 key 不存在时设置值；多并发调用只有一个成功。
+    /// 实现应使用底层 SETNX / <c>SET key NX EX</c> 等原子原语（生产 Redis）。
+    /// 用于分布式锁获取等"先到先得"场景。
+    /// </summary>
+    /// <returns>true = 本调用成功写入；false = key 已存在（被其他调用方抢先）。</returns>
+    Task<bool> TrySetAsync<T>(
+        string key,
+        T value,
+        CacheOptions options,
+        CancellationToken cancellationToken = default)
+        where T : class;
+
+    /// <summary>
+    /// 覆盖设置值（无论 key 是否存在）；用于分布式锁续约或主动改值。
+    /// 实现应使用底层 <c>SET key value EX</c> 等覆盖语义原语（生产 Redis）。
+    /// </summary>
+    Task SetAsync<T>(
+        string key,
+        T value,
+        CacheOptions options,
+        CancellationToken cancellationToken = default)
+        where T : class;
+
     /// <summary>从 L1 和 L2 同时移除指定 key。</summary>
     /// <param name="key">要失效的 key。</param>
     /// <param name="cancellationToken">取消令牌。</param>
