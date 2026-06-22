@@ -12,6 +12,12 @@
   <ItemGroup>
     <InternalsVisibleTo Include="10E0.Core.Tests" />
     <!--
+      RaiseInternal 入口（issue #93 修复）：暴露给 demo 项目用于 EntityService.CreateAsync
+      的 BeforeSaveAsync 钩子，避免之前用反射调 protected Raise 的脆弱模式。
+      业务项目如需类似能力，发 PR 在此追加。
+    -->
+    <InternalsVisibleTo Include="10E0.Api" />
+    <!--
       FrameworkReference 已包含 Microsoft.Extensions.* 全套（Caching/Hosting/Logging/Options 等）。
       显式引用同名 PackageReference 会触发 NU1510，所以只列 EF Core 这种不在 AspNetCore.App 共享框架里的包。
     -->
