@@ -43,11 +43,16 @@ public sealed class SqlServerContainerFixture : IAsyncLifetime
         // 但更简单：xunit v2 的 Skip 模式是抛任意异常后用 [Fact(Skip=...)] 或在测试方法里
         // 早返（基于 IsDockerAvailable() == false）。我们选"让 ConnectionString 留空"路径，
         // 测试方法自己 Assert.Skip-like 早返（见 OutboxRelayConcurrencyTests）。
-        if (!IsDockerAvailable())
+        if (!TryResolveDockerEndpoint(out var endpoint))
         {
             // ConnectionString 保持空串；测试方法应在第一行检查并 Assert.Skip 风格早返。
             return;
         }
+
+        // 关键：把探测到的 endpoint 注入 DOCKER_HOST，Testcontainers 内部 DockerClient 会读这个 env
+        // （Testcontainers.MsSqlBuilder.Build() 用的 Docker.DotNet 客户端默认只看
+        //  /var/run/docker.sock，OrbStack 走 /private/var/run/docker.sock → 内部客户端连不上）
+        Environment.SetEnvironmentVariable("DOCKER_HOST", endpoint.ToString());
 
         _container = new MsSqlBuilder()
             .WithImage("mcr.microsoft.com/mssql/server:2022-latest")
@@ -59,22 +64,66 @@ public sealed class SqlServerContainerFixture : IAsyncLifetime
     }
 
     /// <summary>
-    /// 用 Docker.DotNet SDK 探测本机 Docker daemon —— 不抛异常返回 bool。
+    /// 用 Docker.DotNet SDK 探测本机 Docker daemon —— 不抛异常返回 (bool, endpoint)。
     /// 测试机器无 docker / docker 未启动 / 权限不足都安全返回 false。
+    ///
+    /// <para>
+    /// <b>Socket 探测顺序</b>（2026-06-22 本地 OrbStack 教训）：
+    /// <list type="number">
+    /// <item><c>DOCKER_HOST</c> 环境变量（CI 标准做法）</item>
+    /// <item>OrbStack macOS 真 socket：<c>/private/var/run/docker.sock</c>（注意是
+    ///   <c>/private/var/run</c> 不是 <c>/var/run</c> —— 后者是个 dangling symlink
+    ///   指 <c>~/.orbstack/run/docker.sock</c>，文件并不存在）</item>
+    /// <item><c>~/.orbstack/run/docker.sock</c>（旧版 OrbStack，部分 colima）</item>
+    /// <item><c>/var/run/docker.sock</c>（Docker Desktop / linux 标准）</item>
+    /// </list>
+    /// </para>
     /// </summary>
-    private static bool IsDockerAvailable()
+    private static bool TryResolveDockerEndpoint(out Uri endpoint)
     {
-        try
+        endpoint = null!;
+        // 候选 socket 路径（按优先级）
+        var dockerHost = Environment.GetEnvironmentVariable("DOCKER_HOST");
+        var candidates = new List<Uri>();
+        if (!string.IsNullOrWhiteSpace(dockerHost))
         {
-            using var client = new DockerClientConfiguration().CreateClient();
-            // 同步 ping：PingAsync 在某些 SDK 版本会挂，这里用 1s 超时的 GetSystemInfoAsync 同步轮询。
-            var info = client.System.GetSystemInfoAsync().GetAwaiter().GetResult();
-            return info is not null;
+            if (Uri.TryCreate(dockerHost, UriKind.Absolute, out var envUri))
+                candidates.Add(envUri);
         }
-        catch
+        // OrbStack macOS 真 socket —— 必须用 /private/var/run 路径，/var/run 是 dangling symlink
+        if (File.Exists("/private/var/run/docker.sock"))
+            candidates.Add(new Uri("unix:///private/var/run/docker.sock"));
+        // 旧版 OrbStack / 部分 colima：socket 直接在 ~/.orbstack/run/docker.sock
+        var orbStackSocket = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            ".orbstack", "run", "docker.sock");
+        if (File.Exists(orbStackSocket))
+            candidates.Add(new Uri($"unix://{orbStackSocket}"));
+        // Docker Desktop / Linux 标准路径
+        if (File.Exists("/var/run/docker.sock"))
+            candidates.Add(new Uri("unix:///var/run/docker.sock"));
+
+        foreach (var ep in candidates)
         {
-            return false;
+            try
+            {
+                var config = new DockerClientConfiguration(ep);
+                using var client = config.CreateClient();
+                // 同步 ping：PingAsync 在某些 SDK 版本会挂，这里用 GetSystemInfoAsync 同步轮询。
+                var info = client.System.GetSystemInfoAsync().GetAwaiter().GetResult();
+                if (info is not null)
+                {
+                    endpoint = ep;
+                    return true;
+                }
+            }
+            catch
+            {
+                // 试下一个候选
+                continue;
+            }
         }
+        return false;
     }
 
     public async Task DisposeAsync()

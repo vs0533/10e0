@@ -36,6 +36,28 @@ jobs:
       - name: Build (Release)
         run: dotnet build 10e0.slnx --no-restore -c Release
 
+      # 预拉 Testcontainers 依赖的镜像：ryuk (Testcontainers sidecar, 负责测试结束清理孤儿容器)
+      # + mssql 2022 (测试目标)。Docker Hub 偶发 5xx/限流会导致 PullImageAsync 失败 → 整个测试
+      # 套件挂。加 3 次重试 + 退避, 把偶发网络故障从 false negative 变成 self-healing。
+      # 镜像若真不存在(返回 404)仍会 fail, 行为保持明确。
+      - name: Pre-pull Docker images with retry
+        run: |
+          set -e
+          for img in testcontainers/ryuk:0.9.0 mcr.microsoft.com/mssql/server:2022-latest; do
+            attempt=0
+            max_attempts=3
+            until docker pull "$img"; do
+              attempt=$((attempt + 1))
+              if [ $attempt -ge $max_attempts ]; then
+                echo "::error::Failed to pull $img after $max_attempts attempts"
+                exit 1
+              fi
+              echo "::warning::docker pull $img failed (attempt $attempt/$max_attempts), retrying in $((attempt * 10))s..."
+              sleep $((attempt * 10))
+            done
+            echo "Pulled $img OK"
+          done
+
       # 只跑 Requires=Docker 的测试（即 OutboxRelayConcurrencyTests 那 2 个）：
       # - 走 Testcontainers.MsSql 启真实 SQL Server 2022 容器
       # - 两个独立 IServiceProvider + 独立 DbContext + 共享 L2 缓存 = 真分布式锁验证
