@@ -151,6 +151,15 @@ public sealed class OutboxRelayConcurrencyTests : IClassFixture<SqlServerContain
         // 测试 BuildHost 不调 AddTenE0Core 所以单独注册（PR #88 docker-integration-tests CI 教训）。
         services.AddSingleton(TimeProvider.System);
 
+        // ⚠️ 关键：IMultiLevelCache 必须显式注册为共享实例（PR #88 docker CI 第三次教训）
+        //   早期 BuildHost 只共享 L1/L2 cache + counter，没共享 MultiLevelCache。
+        //   MultiLevelCache 是 internal sealed class，每个 DI 容器 new 一个 → 各自一个 _setnxGate
+        //   锁不跨 host 共享 → SETNX race 仍存在 → 两个 host 都 publish 同一消息。
+        //   显式 AddSingleton 在 AddTenE0Caching 之前 → TryAddSingleton 不会覆盖 → 两个 host
+        //   拿到同一 MultiLevelCache 实例 → _setnxGate 锁真跨 host 共享 → SETNX 原子性真生效。
+        services.AddSingleton<IMultiLevelCache>(_ =>
+            new MultiLevelCache(sharedMemoryCache, sharedDistributedCache));
+
         var ctxOptions = new DbContextOptionsBuilder<TestDbContext>()
             .UseSqlServer(connectionString)
             .ConfigureWarnings(w => w.Ignore(InMemoryEventId.TransactionIgnoredWarning))
