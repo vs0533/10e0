@@ -69,19 +69,20 @@ dotnet pack src/10E0.Core/10E0.Core.csproj \
 
 ## CI/CD 工作流
 
-仓库包含三个 GitHub Actions 工作流，均在 `.github/workflows/` 下定义。
+仓库包含 **四个** GitHub Actions 工作流（`.github/workflows/`）+ **一个** Dependabot 配置（`.github/dependabot.yml`）。
 
 ### 1. `pr-build.yml` — PR 构建测试
 
-- **触发条件**：向 `dev` 或 `main` 提 PR、push 到 `test/**` 分支
-- **并发控制**：同 PR 的旧运行自动取消
-- **执行步骤**：
+- **触发条件**：向 `dev` 或 `main` 提 PR、push 到 `test/**` 分支、`workflow_dispatch` 手动 trigger（PR #88）
+- **并发控制**：同 PR 的旧运行自动取消（`concurrency: cancel-in-progress: true`）
+- **执行步骤**（顺序敏感，format 必须在 build 前）：
   1. `actions/checkout@v4`
   2. 安装 .NET 10 SDK
   3. `dotnet restore 10e0.slnx` — 还原依赖
-  4. `dotnet build 10e0.slnx --no-restore -c Release` — 发布构建
-  5. `dotnet test` — 运行测试，**强制行覆盖率 ≥ 80%**（`/p:ThresholdLine=80`），低于门槛则构建失败
-  6. 上传测试结果（.trx / .html）和覆盖率报告（Cobertura XML），保留 14 天
+  4. `dotnet format --no-restore --verify-no-changes` — 格式化门禁（必须 build 前跑，避免隐式 restore 报错）
+  5. `dotnet build 10e0.slnx --no-restore -c Release` — 发布构建
+  6. `dotnet test --filter "Requires!=Docker" /p:ThresholdLine=80` — 跳过 Testcontainers（见 docker-integration-tests.yml），**强制行覆盖率 ≥ 80%**，低于门槛则构建失败
+  7. 上传测试结果（.trx / .html）和覆盖率报告（Cobertura XML），保留 14 天
 - **所需权限**：`contents: read`（最小权限原则）
 
 ### 2. `claude-review.yml` — AI 代码审查
@@ -99,30 +100,78 @@ dotnet pack src/10E0.Core/10E0.Core.csproj \
      - 🔴 **Critical** — 必须修复（Bug、安全、模式违规）
      - 🟡 **Suggestion** — 建议改进
      - 🟢 **Nit** — 可选微调
-- **AI 后端**：阿里云百炼 API（**MiniMax-M3** headless mode），非 Anthropic 官方
-- **超时**：15 分钟 review wait（`process-item.js` 的 `reviewTimeoutMs`）
+- **AI 后端**：MiniMax API（**MiniMax-M3** headless mode），非 Anthropic 官方（`ANTHROPIC_BASE_URL=https://api.minimaxi.com/anthropic`）
+- **超时**：30 分钟 workflow-level（`timeout-minutes: 30`），与 `process-item.js` 的 `reviewTimeoutMs=900000`（15 分钟）独立 — workflow 是单次 job 上限，process-item 是 triage 内部轮询上限
+- **关键 env 列表**（PR #89 补全）：
+  ```
+  ANTHROPIC_AUTH_TOKEN              → secrets.MINIMAX_API_KEY
+  ANTHROPIC_BASE_URL                → https://api.minimaxi.com/anthropic
+  ANTHROPIC_MODEL                   → MiniMax-M3
+  ANTHROPIC_DEFAULT_SONNET_MODEL    → MiniMax-M3
+  ANTHROPIC_DEFAULT_OPUS_MODEL      → MiniMax-M3
+  ANTHROPIC_DEFAULT_HAIKU_MODEL     → MiniMax-M3
+  API_TIMEOUT_MS                    → 900000
+  CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC → 1
+  ```
 - **review 提交路径**（PR #33 重构）：
   1. 优先用 **PAT**（`secrets.REVIEW_BOT_TOKEN`）调 `pulls.createReview`（`fetch` + PAT header 直连 API，不走 `github` client）—— 算 branch protection approval
   2. **Self-approve 检测**：若 PAT 账号 == PR 作者，GitHub 会拒绝 "can not approve your own pull request"，自动降级为 comment
   3. **降级 fallback**：用 `GITHUB_TOKEN` client (`github.rest.issues.createComment`) 发 comment —— **不计入** branch protection 批准
-- **CodeQL 权限要求**（PR #33 新增）：workflow-level `permissions:` 必须 grant `security-events: write`，否则 GitHub auto-inject 的 "Perform CodeQL Analysis" step 会因缺权限无法 upload SARIF 到 Security tab（症状：Code Review job 偶发失败，rerun 偶尔能过，根因是 token 临时刷新掩盖了权限缺失）
+- **CodeQL 权限要求**（PR #33 新增）：所有仓库拥有的 workflow 都会被 GitHub auto-inject "Perform CodeQL Analysis" step（即便 workflow 本身没声明 CodeQL），该 step 需要 `security-events: write` 才能 upload SARIF 到 Security tab。**任何新增 workflow 必须在 `permissions:` 段同步加上 `security-events: write`**，否则 Code Review job 偶发失败、rerun 偶尔能过（根因是 GITHUB_TOKEN 临时刷新掩盖权限缺失）
 - **容错**：`continue-on-error: true`，API 故障不阻塞 PR 合并
 
-### 3. `release.yml` — 自动发版
+### 3. `docker-integration-tests.yml` — Docker 集成测试
+
+- **触发条件**：PR 到 `dev` / `main`（与 pr-build 同步），可手动 `workflow_dispatch` 重跑
+- **目的**：跑 `[Trait("Requires", "Docker")]` 的 Outbox 真实并发验收测试（Testcontainers.MsSql 起真实 SQL Server 2022 容器）
+- **测试范围**：
+  - `OutboxRelayConcurrencyTests` — 两 Host + 50 条消息 + 30 轮 exactly-once
+  - `OutboxRelayLeaderElectionAcceptanceTests` — LeaderElector 抢主 / 续约
+  - `OutboxLockAcceptanceTests` / `OutboxLockProviderAcceptanceTests` — 行级锁 provider 全套
+- **执行步骤**：
+  1. `actions/checkout@v4` + Setup .NET 10
+  2. `dotnet restore` + `dotnet build -c Release`
+  3. **`Pre-pull Docker images with retry`**（PR #89）：Docker Hub 偶发 5xx/限流 → 3 次重试 + 退避 10s/20s/30s 自愈；拉取的镜像：`testcontainers/ryuk:0.9.0`（sidecar 负责清理）+ `mcr.microsoft.com/mssql/server:2022-latest`
+  4. `dotnet test --filter "Requires=Docker" --no-build` — 仅跑 Requires=Docker
+  5. 上传 `.trx`/`.html` + `/tmp/outbox-diag.txt` artifact 保留 14 天
+- **Runner**：`ubuntu-latest`（自带 Docker daemon），`timeout-minutes: 30`
+- **本地等价**：需 Docker daemon 跑（Docker Desktop / OrbStack / colima 任一）；fixture `SqlServerContainerFixture.TryResolveDockerEndpoint` 探测 4 路径 socket 兼容 OrbStack macOS（详见 PR #89）
+- **与 pr-build 关系**：pr-build 用 `--filter "Requires!=Docker"` 跳过这些（Testcontainers 慢、CI 资源消耗大）；本 workflow 单独跑并要求绿
+
+### 4. `release.yml` — 自动发版
 
 - **触发条件**：push 到 `main` 分支（即 PR 合并到 `main` 时）
 - **并发控制**：`cancel-in-progress: false`，防止发版被中途取消
 - **执行步骤**：
   1. 检出完整历史（含所有 tag）
   2. 安装 .NET 10 SDK，执行 `restore` + `build`
-  3. 运行测试（`--no-build`）
+  3. 运行测试（`--no-build`，**不带覆盖率门禁**——与 pr-build 不同，release 仅 sanity check）
   4. **计算版本号**：从最新 `v*` tag 中读取，自动 **patch+1**（如 `v0.0.1` → `v0.0.2`）
   5. **NuGet 打包**：`dotnet pack src/10E0.Core/`，注入计算出的版本号
   6. **生成 Changelog**：按 `feat` / `fix` / other 分类提取 commit 信息
   7. **创建 annotated Git tag** 并推送到 origin
   8. **创建 GitHub Release**，附加 .nupkg 和 .snupkg 文件
   9. **发布到 NuGet.org**（仅当 `NUGET_API_KEY` secret 已配置时执行）
+- **artifact 名**：`release-artifacts-${{ github.run_number }}`（`.nupkg` + `.snupkg` + `checksums.txt`），保留 14 天
 - **所需权限**：`contents: write`
+- **并发**：`cancel-in-progress: false`（防止发版被中途取消）
+
+### 5. `.github/dependabot.yml` — 依赖自动更新
+
+- **触发**：每周（`schedule.weekly`）
+- **包管理器**：NuGet + GitHub Actions 两个 ecosystem
+- **commit message 前缀**：`chore(deps)`（如 `chore(deps): bump Microsoft.Extensions.Caching.Memory from 8.0.0 to 8.0.1`）
+- **同时打开 PR 上限**：5（`open-pull-requests-limit: 5`）
+- **分组策略**：
+  - `Microsoft.*` — Microsoft 系包自成一组（减少 PR 噪音）
+  - `AWSSDK.*` — AWS SDK 包自成一组
+  - 其他依赖按默认策略（各自独立）
+- **标签**：`dependencies`
+- **目标分支**：`dev`
+- **行为**：自动创建 PR，到期未合并则自动关闭
+- **与 release.yml 关系**：依赖 PR 合到 dev 后会随下次 PR → main → release 一起发版
+
+---
 
 ---
 
@@ -158,8 +207,11 @@ git push origin v1.0.0
 
 | Secret | 用途 | 必需 |
 |--------|------|------|
-| `ALIBABA_API_KEY` | Claude Code Review 的阿里云百炼 API 密钥 | 是（代码审查） |
+| `MINIMAX_API_KEY` | Claude Code Review 的 MiniMax API 密钥（MiniMax-M3 后端） | 是（代码审查） |
+| `REVIEW_BOT_TOKEN` | PAT，让 bot 发正式 review 计入 branch protection approval | 否（缺则降级 comment） |
 | `NUGET_API_KEY` | 发布 NuGet 包到 nuget.org | 否（跳过即不发版到 NuGet） |
+
+> 历史：`ALIBABA_API_KEY` 是 v0 时期的阿里云百炼名（PR #83+#89 之间切换到 MiniMax），如有遗留 secret 需清理。
 
 ---
 

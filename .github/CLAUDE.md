@@ -14,15 +14,18 @@
 
 ### `docker-integration-tests.yml` — Docker 集成测试
 
-- **触发**: PR 到 `dev` / `main`（与 pr-build 同步）
-- **流程**: restore → build (Release) → `dotnet test --filter "Requires=Docker"`
-- **范围**: 仅跑 `[Trait("Requires", "Docker")]` 的测试 —— 目前是 `OutboxRelayConcurrencyTests`（feature #82）：
-  - 用 `Testcontainers.MsSql` 启真实 SQL Server 2022 容器
-  - 两个独立 `IServiceProvider` + 共享 L2 缓存 = 真分布式锁 SETNX / 续约验证
-  - 30 轮 × 50 条消息并发跑，断言 Publisher 每条消息恰好被调 1 次
+- **触发**: PR 到 `dev` / `main`（与 pr-build 同步），可手动 `workflow_dispatch` 重跑
+- **流程**: restore → build (Release) → **预拉镜像 (3 次重试 + 退避)** → `dotnet test --filter "Requires=Docker"` → 上传 .trx/.html + `/tmp/outbox-diag.txt` artifact
+- **预拉镜像 retry**（PR #89）：Docker Hub 偶发 5xx/限流会导致 `PullImageAsync` 失败 → 整个测试套件挂。加 3 次重试 + 退避 10s/20s/30s 改为 self-healing。镜像若真不存在（404）仍 fail，行为保持明确。拉取的镜像：`testcontainers/ryuk:0.9.0`（Testcontainers sidecar）+ `mcr.microsoft.com/mssql/server:2022-latest`
+- **范围**: 仅跑 `[Trait("Requires", "Docker")]` 的测试 —— 当前是 Outbox 真实并发系列（PR #88）：
+  - `OutboxRelayConcurrencyTests` —— Testcontainers.MsSql 启真实 SQL Server 2022 容器
+  - `OutboxRelayLeaderElectionAcceptanceTests` —— LeaderElector 全局抢主 + exactly-once
+  - `OutboxLockAcceptanceTests` / `OutboxLockProviderAcceptanceTests` —— 行级锁 provider 全套路径
+  - 30 轮 × 50 条消息并发跑，断言 Publisher 每条消息恰好被调 1 次（exactly-once 语义）
 - **Runner**: `ubuntu-latest`（自带 Docker daemon），`timeout-minutes: 30`
-- **与 pr-build 关系**: pr-build 跳过这些测试（Testcontainers 慢、CI 资源消耗大），本 workflow 单独跑并要求绿
-- **本地等价**: `dotnet test`（需 Docker Desktop 开着）
+- **与 pr-build 关系**: pr-build 跳过这些测试（`--filter "Requires!=Docker"`，Testcontainers 慢、CI 资源消耗大），本 workflow 单独跑并要求绿
+- **本地等价**: `dotnet test`（需 Docker daemon 开着）
+  - **OrbStack macOS 兼容**（PR #89）：`SqlServerContainerFixture.TryResolveDockerEndpoint` 探测 4 路径（`DOCKER_HOST` env → `/private/var/run/docker.sock` 真 OrbStack socket → `~/.orbstack/run/docker.sock` → `/var/run/docker.sock`），找到可用 socket 后注入 `DOCKER_HOST` env，让 Testcontainers 内部 Docker.DotNet 客户端走相同路径。Mac `/var/run/docker.sock` 是 dangling symlink，必须用 `/private/var/run/docker.sock`
 
 ### `claude-review.yml` — 自动代码审查
 

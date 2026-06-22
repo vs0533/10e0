@@ -33,7 +33,11 @@ public class Order : AggregateRoot
     → OutboxInterceptor.SavingChangesAsync 拦截
     → 序列化为 OutboxMessage 行（同事务）
     → SaveChanges 提交
-    → OutboxRelayService 轮询发布
+    → OutboxRelayService<TContext>（BackgroundService）每轮轮询
+        → IOutboxLock.TryAcquireAsync（多实例安全，4 种 provider 三选一：None / RowLock / Distributed / Leader）
+        → IOutboxPublisher.PublishAsync
+        → SentTime 标记成功 / LastError 记录失败 / AttemptCount++ 失败
+    → 超 MaxAttempts → 毒消息（IOutboxAdmin 管理 Get/Retry/Export）
 ```
 
 ## 与继承链的关系
@@ -44,4 +48,4 @@ public class Order : AggregateRoot
 
 | 目录 | 职责 |
 |------|------|
-| `Outbox/` | Outbox Pattern 实现（同事务落库 + 后台 Relay） |
+| `Outbox/` | Outbox Pattern 实现（同事务落库 + 后台 Relay + 多实例锁 + 死信管理 + 真并发验收测试） |
