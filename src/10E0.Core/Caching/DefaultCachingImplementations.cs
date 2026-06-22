@@ -21,6 +21,15 @@ internal sealed class MultiLevelCache : IMultiLevelCache
     private readonly IMemoryCache _l1;
     private readonly IDistributedCache _l2;
 
+    // SETNX 锁 — 进程内全局共享。
+    // 必须用 static readonly：测试场景用同进程两个 ServiceProvider 模拟"两个 Relay 实例
+    // 共享同 cache 后端"，每个 ServiceProvider 各自 new 一个 MultiLevelCache → 实例级
+    // 锁不跨 host 共享 → SETNX race 仍存在。static 锁让所有 MultiLevelCache 实例共享
+    // 同一进程内锁。生产部署：不同进程各自 static 锁不共享，但生产 Redis SETNX 天然
+    // 原子（SET key NX EX 命令在 Redis 端单步），跨进程不需要本锁。lock 是微秒级
+    // 内存互斥，对 lock-acquire 关键路径性能影响可忽略。
+    private static readonly object _setnxGate = new();
+
     public MultiLevelCache(IMemoryCache l1, IDistributedCache l2)
     {
         _l1 = l1;
@@ -62,6 +71,97 @@ internal sealed class MultiLevelCache : IMultiLevelCache
     {
         _l1.Remove(key);
         await _l2.RemoveAsync(key, cancellationToken);
+    }
+
+    /// <summary>
+    /// 仅读 L1 + L2，不调 factory、不回写。供分布式锁 ownership 检查等"读不能写"场景用。
+    /// （PR #88 bot review Critical #1：之前 DistributedOutboxLock 用 GetOrSetAsync + factory=>instanceId
+    /// 做读，key 恰好消失时 factory 会被调并写入自己的 instanceId，调用方误以为抢到锁 → 双 publish。）
+    /// </summary>
+    public async Task<T?> GetAsync<T>(
+        string key,
+        CancellationToken cancellationToken = default) where T : class
+    {
+        if (_l1.TryGetValue(key, out T? hit) && hit is not null)
+            return hit;
+        var l2Bytes = await _l2.GetAsync(key, cancellationToken);
+        if (l2Bytes is not null && l2Bytes.Length > 0)
+        {
+            return JsonSerializer.Deserialize<T>(l2Bytes);
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// SETNX 语义实现：L1+L2 都未命中时写入，否则返回 false。
+    ///
+    /// <para>
+    /// <b>原子性</b>：用 <see cref="_setnxGate"/> 锁住整个 "L1 check + L2 check + L2 set + L1 set"
+    /// 序列，让同进程内多线程并发 SETNX 同一 key 严格只一个 success。生产 Redis 后端天然
+    /// 提供原子 SETNX (<c>SET key NX EX</c>)；InMemory / MemoryDistributedCache / Redis
+    /// (StackExchange.Redis multiplexer sync API) 都在 <see cref="IDistributedCache"/> 同步
+    /// Get/Set 路径上工作，锁内不 await，原子性由 lock + sync I/O 双重保证。
+    /// </para>
+    ///
+    /// <para>
+    /// 这是 PR #88 docker-integration-tests CI 暴露的真 bug 修复：早期实现用 "GetAsync + SetAsync"
+    /// 序列无锁，hostA 跑到 Set 之前 hostB 也 Get 完成 → 两个都 success → 两个 host 都 publish
+    /// 同一消息 → exactly-once 失败。
+    /// </para>
+    /// </summary>
+    public Task<bool> TrySetAsync<T>(
+        string key,
+        T value,
+        CacheOptions options,
+        CancellationToken cancellationToken = default) where T : class
+    {
+        // 在 L2 short-circuit 路径（生产 L2Duration=0）下直接跳过
+        if (options.L2Duration <= TimeSpan.Zero) return Task.FromResult(false);
+
+        // 序列化 SETNX 调用（同进程内多线程并发同一 key 必有 1 winner）
+        // 锁内全 sync 调用（IDistributedCache.Get/Set 都有 sync 版本），不 await yield。
+        lock (_setnxGate)  // static 锁：跨 MultiLevelCache 实例共享，跨线程串行化 SETNX
+        {
+            if (_l1.TryGetValue(key, out _)) return Task.FromResult(false);
+
+            // L2 sync Get（IDistributedCache.Get 同步接口；不 yield，锁内安全）
+            var existing = _l2.Get(key);
+            if (existing is { Length: > 0 }) return Task.FromResult(false);
+
+            // L2 sync Set（IDistributedCache.Set 同步接口）
+            _l2.Set(
+                key,
+                JsonSerializer.SerializeToUtf8Bytes(value),
+                new DistributedCacheEntryOptions
+                {
+                    AbsoluteExpirationRelativeToNow = options.L2Duration,
+                });
+
+            // L1 同步写
+            if (options.L1Duration > TimeSpan.Zero)
+            {
+                _l1.Set(key, value, new MemoryCacheEntryOptions
+                {
+                    AbsoluteExpirationRelativeToNow = options.L1Duration,
+                });
+            }
+            return Task.FromResult(true);
+        }
+    }
+
+    // SETNX 锁已移到 class 字段区（见上方 _setnxGate 声明）
+
+    /// <summary>
+    /// 覆盖写入：用于锁续约或主动改值。L1+L2 都覆盖。
+    /// </summary>
+    public async Task SetAsync<T>(
+        string key,
+        T value,
+        CacheOptions options,
+        CancellationToken cancellationToken = default) where T : class
+    {
+        await SetL2Async(key, value, options, cancellationToken);
+        SetL1(key, value, options);
     }
 
     private void SetL1<T>(string key, T value, CacheOptions options) where T : class
