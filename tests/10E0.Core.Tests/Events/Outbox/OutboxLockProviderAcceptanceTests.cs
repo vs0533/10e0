@@ -1,6 +1,8 @@
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
+using TenE0.Core.DependencyInjection;
 using TenE0.Core.Events.Outbox;
 
 namespace TenE0.Core.Tests.Events.Outbox;
@@ -589,5 +591,62 @@ public sealed class OutboxLockProviderAcceptanceTests
         // Then — ProviderName 优先级高于 LockProvider：未知/InMemory 必须 NoOp
         lockObj.Should().BeOfType<NoOpOutboxLock>(
             "LockProvider=RowLock 但底层是 InMemory 时必须回退 NoOp — InMemory 无法支持 SQL 提示");
+    }
+
+    // ================================================================
+    // Scenario 7: Step 4/6 — AddOutboxLocking<TContext> switch 表达式分派 Distributed / Leader
+    //   原 switch 把"非 RowLock 一律 NoOp" — 本步扩展为：
+    //   - LockProvider=Distributed → DistributedOutboxLock (IMultiLevelCache + IOptions<OutboxRelayOptions>)
+    //   - LockProvider=Leader      → LeaderElector (IMultiLevelCache + IAtomicCounter + IOptions<OutboxRelayOptions>)
+    //   复用 AddTenE0Caching() 注册的 IMultiLevelCache + IAtomicCounter，生产代码无需新增 service 注册。
+    //   测试需要给 IDistributedCache 注册一个 in-memory 默认实现让 DI 能解析 cache + counter。
+    // ================================================================
+
+    private static IServiceCollection CreateDomainEventsServiceCollection(OutboxLockProviderKind kind)
+    {
+        var services = new ServiceCollection()
+            .AddLogging()
+            .AddEntityFrameworkInMemoryDatabase();
+        services.AddDbContextFactory<TestDbContext>((_, o) => o.UseInMemoryDatabase(Guid.NewGuid().ToString("N")));
+        services.AddSingleton<IDistributedCache, MemoryDistributedCache>();
+        services.AddTenE0Caching();
+        services.Configure<OutboxRelayOptions>(o => o.LockProvider = kind);
+        return services;
+    }
+
+    [Fact]
+    public void GivenLockProviderDistributed_WhenResolvingIOutboxLockFromAddOutboxLocking_ThenDistributedOutboxLockIsReturned()
+    {
+        // Arrange — 走 AddTenE0DomainEvents 真实集成路径（内部调 AddOutboxLocking<TContext>）
+        //   而非 AddOutboxRowLock：plan 强调"Provider 探测仍走 switch 表达式"，
+        //   新分支必须由 AddOutboxLocking 的内联 switch 解析。
+        var services = CreateDomainEventsServiceCollection(OutboxLockProviderKind.Distributed);
+
+        // Act
+        services.AddTenE0DomainEvents<TestDbContext>();
+        using var sp = services.BuildServiceProvider();
+        var lockObj = sp.GetRequiredService<IOutboxLock>();
+
+        // Then — Step 4/6：Distributed 分支必须解析到 DistributedOutboxLock 实例（不再回退 NoOp）
+        lockObj.Should().BeOfType<DistributedOutboxLock>(
+            "LockProvider=Distributed 时 AddOutboxLocking<TContext> 的 switch 必须解析为 DistributedOutboxLock — "
+            + "feature #82 扩展 plan 4/6 要求把 NoOp 回退替换为真实注册，复用现有 IMultiLevelCache DI 注册");
+    }
+
+    [Fact]
+    public void GivenLockProviderLeader_WhenResolvingIOutboxLockFromAddOutboxLocking_ThenLeaderElectorIsReturned()
+    {
+        // Arrange — 走 AddTenE0DomainEvents 真实集成路径；Leader 模式需要 IMultiLevelCache + IAtomicCounter
+        var services = CreateDomainEventsServiceCollection(OutboxLockProviderKind.Leader);
+
+        // Act
+        services.AddTenE0DomainEvents<TestDbContext>();
+        using var sp = services.BuildServiceProvider();
+        var lockObj = sp.GetRequiredService<IOutboxLock>();
+
+        // Then — Step 4/6：Leader 分支必须解析到 LeaderElector 实例
+        lockObj.Should().BeOfType<LeaderElector>(
+            "LockProvider=Leader 时 AddOutboxLocking<TContext> 的 switch 必须解析为 LeaderElector — "
+            + "feature #82 扩展 plan 4/6 要求把 NoOp 回退替换为真实注册，复用现有 IMultiLevelCache + IAtomicCounter DI 注册");
     }
 }

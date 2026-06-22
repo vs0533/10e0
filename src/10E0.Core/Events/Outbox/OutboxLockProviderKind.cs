@@ -12,11 +12,19 @@ namespace TenE0.Core.Events.Outbox;
 /// 适用于同库多实例 Relay 并发场景。</item>
 /// <item><see cref="Distributed"/>：基于外部分布式锁（Redis / SqlServer sp_getapplock 等）。本任务未实现，
 /// 配置时回退 <see cref="None"/>，避免运行时 NRE。</item>
+/// <item><see cref="Leader"/>：Leader Election 模式 — 全局只一个 Relay 实例承担投递，其余实例空闲待命，
+/// Lease 过期后通过 LeaderElector 抢主，从根上消除竞争（而非事后用行级锁缓解）。
+/// 详见 feature #82 LeaderElection 设计与 OutboxRelayLeaderElectionAcceptanceTests。</item>
 /// </list>
 /// </para>
 ///
 /// <para>
 /// 命名规范：枚举后缀 <c>Kind</c> 以避免与同名静态选择器类（<c>OutboxLockProvider</c>）冲突。
+/// </para>
+///
+/// <para>
+/// 取值约定：枚举 int 值仅追加，禁止重排已有值（向后兼容老配置）。
+/// 当前布局：None=0 / RowLock=1 / Distributed=2 / Leader=3。
 /// </para>
 /// </summary>
 public enum OutboxLockProviderKind
@@ -29,4 +37,9 @@ public enum OutboxLockProviderKind
 
     /// <summary>分布式锁 provider（Redis 等）。本任务未实现，回退 <see cref="None"/>。</summary>
     Distributed = 2,
+
+    /// <summary>
+    /// Leader Election 模式 — 全局只一个 Relay 实例承担投递（详见类型注释）。
+    /// </summary>
+    Leader = 3,
 }

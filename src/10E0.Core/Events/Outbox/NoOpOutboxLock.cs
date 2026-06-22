@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
+using TenE0.Core.Caching;
 
 namespace TenE0.Core.Events.Outbox;
 
@@ -93,7 +94,8 @@ public static class OutboxLockingServiceCollectionExtensions
     /// 选型规则：
     /// <list type="number">
     /// <item><see cref="OutboxLockProviderKind.None"/>（默认）→ <see cref="NoOpOutboxLock"/>（0/1 实例部署零感知）</item>
-    /// <item><see cref="OutboxLockProviderKind.Distributed"/>（本任务未实现）→ <see cref="NoOpOutboxLock"/>（不抛异常）</item>
+    /// <item><see cref="OutboxLockProviderKind.Distributed"/> → <see cref="DistributedOutboxLock"/>（基于 <see cref="IMultiLevelCache"/> L2 的应用层分布式锁）</item>
+    /// <item><see cref="OutboxLockProviderKind.Leader"/> → <see cref="LeaderElector"/>（Leader Election 模式：全局只一个 Relay 实例承担投递）</item>
     /// <item><see cref="OutboxLockProviderKind.RowLock"/> + <c>ProviderName</c> 含 <c>SqlServer</c> → <see cref="SqlServerOutboxLock{T}"/></item>
     /// <item><see cref="OutboxLockProviderKind.RowLock"/> + <c>ProviderName</c> 含 <c>Npgsql</c> → <see cref="PostgresOutboxLock{T}"/></item>
     /// <item><see cref="OutboxLockProviderKind.RowLock"/> + 其他 <c>ProviderName</c>（InMemory / 未知）→ <see cref="NoOpOutboxLock"/>（保守回退，绝不抛异常）</item>
@@ -136,38 +138,91 @@ public static class OutboxLockingServiceCollectionExtensions
         {
             var options = sp.GetRequiredService<IOptions<OutboxRelayOptions>>().Value;
 
-            // Non-RowLock 路径（None / Distributed / 默认）：无条件回退 NoOp。
-            if (options.LockProvider != OutboxLockProviderKind.RowLock)
+            // 非 RowLock 路径：按枚举分派到对应 provider 实现（feature #82 扩展 4/6）。
+            // RowLock 路径走下方基于 EF Core ProviderName 的命名匹配。
+            // 解析期抛异常必须被 try/catch 兜底回退 NoOp，绝不破坏 Relay 启动。
+            switch (options.LockProvider)
             {
-                return new NoOpOutboxLock();
-            }
+                case OutboxLockProviderKind.Distributed:
+                    {
+                        // feature #82 应用层分布式锁：复用现有 IMultiLevelCache（L1+L2）+ IOptions<OutboxRelayOptions>
+                        // service 注册（AddTenE0Caching 已注册，无需在本扩展新增 service）。
+                        try
+                        {
+                            var cache = sp.GetRequiredService<IMultiLevelCache>();
+                            return new DistributedOutboxLock(cache, sp.GetRequiredService<IOptions<OutboxRelayOptions>>());
+                        }
+                        catch
+                        {
+                            // IMultiLevelCache 未注册 / 解析失败 → 保守回退 NoOp，绝不抛异常
+                            return new NoOpOutboxLock();
+                        }
+                    }
 
-            // RowLock 路径：创建临时 DbContext 探测 ProviderName（不持有状态，用完即释放）。
-            // 探测失败 / 未知 provider → 保守回退 NoOp，绝不抛异常破坏 Relay 启动。
-            var factory = sp.GetRequiredService<IDbContextFactory<TContext>>();
-            string providerName;
-            try
-            {
-                using var probe = factory.CreateDbContext();
-                providerName = probe.Database.ProviderName ?? string.Empty;
-            }
-            catch
-            {
-                return new NoOpOutboxLock();
-            }
+                case OutboxLockProviderKind.Leader:
+                    {
+                        // feature #82 Leader Election：复用 IMultiLevelCache + IAtomicCounter（AddTenE0Caching 注册）。
+                        try
+                        {
+                            var cache = sp.GetRequiredService<IMultiLevelCache>();
+                            var counter = sp.GetRequiredService<IAtomicCounter>();
+                            return new LeaderElector(
+                                cache,
+                                counter,
+                                sp.GetRequiredService<IOptions<OutboxRelayOptions>>());
+                        }
+                        catch
+                        {
+                            return new NoOpOutboxLock();
+                        }
+                    }
 
-            // switch 表达式（与 OutboxSchemaSeeder.BuildCreateIndexSql 同款命名匹配风格）。
-            // 注意：Npgsql.EntityFrameworkCore.PostgreSQL 是 PostgreSQL provider 的唯一命名空间，
-            // 删掉旧版 "Postgres" 兜底匹配 — 避免误中其他含 "Postgres" 子串的未知 provider。
-            return providerName switch
-            {
-                var p when p.Contains("SqlServer", StringComparison.OrdinalIgnoreCase) =>
-                    new SqlServerOutboxLock<TContext>(factory),
-                var p when p.Contains("Npgsql", StringComparison.OrdinalIgnoreCase) =>
-                    new PostgresOutboxLock<TContext>(factory),
-                // InMemory / 未知 provider：保守回退 NoOp，绝不抛异常。
-                _ => new NoOpOutboxLock(),
-            };
+                case OutboxLockProviderKind.RowLock:
+                    {
+                        // RowLock 路径：创建临时 DbContext 探测 ProviderName（不持有状态，用完即释放）。
+                        // 探测失败 / 未知 provider → 保守回退 NoOp，绝不抛异常破坏 Relay 启动。
+                        IDbContextFactory<TContext> factory;
+                        try
+                        {
+                            factory = sp.GetRequiredService<IDbContextFactory<TContext>>();
+                        }
+                        catch
+                        {
+                            return new NoOpOutboxLock();
+                        }
+
+                        string providerName;
+                        try
+                        {
+                            using var probe = factory.CreateDbContext();
+                            providerName = probe.Database.ProviderName ?? string.Empty;
+                        }
+                        catch
+                        {
+                            return new NoOpOutboxLock();
+                        }
+
+                        // switch 表达式（与 OutboxSchemaSeeder.BuildCreateIndexSql 同款命名匹配风格）。
+                        // 注意：Npgsql.EntityFrameworkCore.PostgreSQL 是 PostgreSQL provider 的唯一命名空间，
+                        // 删掉旧版 "Postgres" 兜底匹配 — 避免误中其他含 "Postgres" 子串的未知 provider。
+                        return providerName switch
+                        {
+                            var p when p.Contains("SqlServer", StringComparison.OrdinalIgnoreCase) =>
+                                new SqlServerOutboxLock<TContext>(factory),
+                            var p when p.Contains("Npgsql", StringComparison.OrdinalIgnoreCase) =>
+                                new PostgresOutboxLock<TContext>(factory),
+                            // InMemory / 未知 provider：保守回退 NoOp，绝不抛异常。
+                            _ => new NoOpOutboxLock(),
+                        };
+                    }
+
+                case OutboxLockProviderKind.None:
+                default:
+                    {
+                        // None / 默认 / 未知枚举值 → NoOpOutboxLock（0/1 实例部署零感知）
+                        return new NoOpOutboxLock();
+                    }
+            }
         });
 
         return services;

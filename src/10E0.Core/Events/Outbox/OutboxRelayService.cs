@@ -40,8 +40,25 @@ public sealed class OutboxRelayOptions
     /// 让 0/1 实例部署零感知。配置为 <see cref="OutboxLockProviderKind.RowLock"/> 后，
     /// DI 层会按底层 EF Core ProviderName（SqlServer / PostgreSQL）命名匹配选择具体实现。
     /// <see cref="OutboxLockProviderKind.Distributed"/> 留给后续 Redis 等分布式锁场景。
+    /// <see cref="OutboxLockProviderKind.Leader"/> 启用 Leader Election 模式 — 全局只一个 Relay 实例承担投递，
+    /// 从根上消除竞争（详见 feature #82 LeaderElection）。
     /// </summary>
     public OutboxLockProviderKind LockProvider { get; set; } = OutboxLockProviderKind.None;
+
+    /// <summary>
+    /// Leader Election 租约时长（<see cref="LockProvider"/> = <see cref="OutboxLockProviderKind.Leader"/> 时生效）：
+    /// LeaderElector 抢主成功后写入分布式存储的 lease 过期时间。Lease 过期后另一实例可抢主。
+    /// 默认 30s：远长于单次 publish 调用的预期耗时（通常毫秒级），但短到一旦 Leader 实例崩溃，
+    /// 另一实例能在可接受时间内接管（&lt; 1 分钟）。
+    /// </summary>
+    public TimeSpan LeaderLeaseDuration { get; set; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// Leader Election 写入分布式存储（如 Redis）时使用的 key 前缀。
+    /// 默认 <c>"outbox:leader"</c>：让多套环境（dev/staging/prod）共用同一 Redis 时不冲突。
+    /// 若需更强隔离（例如蓝绿部署需保证不同批次不互踩），可通过配置显式覆盖。
+    /// </summary>
+    public string LeaderInstanceKeyPrefix { get; set; } = "outbox:leader";
 }
 
 /// <summary>
@@ -94,6 +111,7 @@ public sealed class OutboxRelayService<TContext>(
         var sp = scope.ServiceProvider;
         var dcFactory = sp.GetRequiredService<IDbContextFactory<TContext>>();
         var publisher = sp.GetRequiredService<IOutboxPublisher>();
+        var outboxLock = sp.GetRequiredService<IOutboxLock>();
 
         await using var dc = await dcFactory.CreateDbContextAsync(cancellationToken);
         var batch = await dc.Set<OutboxMessage>()
@@ -106,6 +124,23 @@ public sealed class OutboxRelayService<TContext>(
 
         foreach (var msg in batch)
         {
+            // 先尝试获取行级锁（feature #82 集成）。
+            // 契约（见 IOutboxLock）：返回 false 时本轮跳过本条消息，
+            // 不应 ++AttemptCount — 由真正持有锁的实例处理，租约过期后另一实例接管。
+            // Leader 模式下，非 leader 整轮全返回 false（全局一把锁）— 与"只让 leader 跑 Relay 全流程"语义一致。
+            var acquired = await outboxLock.TryAcquireAsync(
+                msg.Id,
+                _options.LockInstanceId,
+                _options.LockLeaseDuration,
+                cancellationToken).ConfigureAwait(false);
+            if (!acquired)
+            {
+                logger.LogDebug(
+                    "Outbox 消息行级锁未获取，跳过 Id={Id} Instance={Instance}",
+                    msg.Id, _options.LockInstanceId);
+                continue;
+            }
+
             msg.AttemptCount++;
             try
             {
@@ -119,6 +154,15 @@ public sealed class OutboxRelayService<TContext>(
                 logger.LogWarning(ex,
                     "Outbox 消息投递失败 Id={Id} Attempt={Attempt}/{Max}",
                     msg.Id, msg.AttemptCount, _options.MaxAttempts);
+            }
+            finally
+            {
+                // 异常路径也必须释放 — 实现层校验 (msg.Id, instanceId) 后清空，
+                // 不属于本实例的锁由实现层拒绝，绝不误删他实例锁。
+                await outboxLock.ReleaseAsync(
+                    msg.Id,
+                    _options.LockInstanceId,
+                    cancellationToken).ConfigureAwait(false);
             }
         }
 

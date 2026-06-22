@@ -30,6 +30,11 @@
          (the InMemory provider does NOT apply HasQueryFilter, so we need a real
          relational provider for the runtime tests). -->
     <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.0" />
+    <!-- Testcontainers + SqlServer EF provider — used by OutboxRelayConcurrencyTests (#82)
+         to spin up a real SQL Server instance for exactly-once concurrency verification.
+         CI 需 Docker 服务；本地无 Docker 时测试静默跳过（Acceptance 类别 + [Trait] 过滤）。 -->
+    <PackageReference Include="Testcontainers.MsSql" Version="4.1.0" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="10.0.0" />
     <!-- Mocking + Assertions -->
     <PackageReference Include="Moq" Version="4.20.72" />
     <PackageReference Include="FluentAssertions" Version="8.0.1" />

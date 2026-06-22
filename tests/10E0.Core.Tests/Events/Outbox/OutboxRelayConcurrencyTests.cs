@@ -1,0 +1,354 @@
+using System.Collections.Concurrent;
+using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
+using TenE0.Core.DependencyInjection;
+using TenE0.Core.Events.Outbox;
+
+namespace TenE0.Core.Tests.Events.Outbox;
+
+/// <summary>
+/// BDD 验收测试 — Outbox Relay 真实并发"每条消息恰好一次"(feature #82 终验)
+///
+/// <para>
+/// <b>业务动机</b>：
+/// <list type="bullet">
+/// <item>前序步骤 (#85 / #86) 已落地 <see cref="IOutboxLock"/> 抽象 + SQL Server / PostgreSQL 行级锁 provider，
+/// 但都仅用 InMemory 单测验证契约语义；本测试用 Testcontainers 启真实 SQL Server 容器，
+/// 跑两个独立 Host（独立 <c>IServiceProvider</c> + 独立 DbContext 连接）+ 预置 50 条消息 +
+/// 30 轮并发轮询，断言：</item>
+/// <item>(1) Publisher mock 被每条消息恰好调用 1 次（exactly-once 投递语义）；</item>
+/// <item>(2) 全部 50 条消息的 <c>SentTime</c> 都非空（都被成功投递）；</item>
+/// <item>(3) 50 条消息的 <c>AttemptCount</c> 总和 == 50（无重复拾取 = 无重复 ++）。</item>
+/// </list>
+/// </para>
+///
+/// <para>
+/// <b>设计差异（vs <c>OutboxRelayConcurrencyAcceptanceTests</c>）</b>：<br/>
+/// 本文件采用 <see cref="IClassFixture{TFixture}"/> 共享 <see cref="SqlServerContainerFixture"/>
+/// （避免每测试启容器），并直接引用 <c>Testcontainers.MicrosoftSqlServer</c> 强类型 API
+/// （而非反射加载 NuGet 程序集），编译期即暴露包引用错误。
+/// </para>
+///
+/// <para>
+/// <b>CI 注意</b>：本测试需要 Docker。本地无 Docker 时静默跳过；
+/// CI 需在能跑 Docker 的 runner 上执行（maintainer 划归后续 issue 解决）。
+/// </para>
+/// </summary>
+[Trait("Category", "Acceptance")]
+[Trait("Requires", "Docker")]
+public sealed class OutboxRelayConcurrencyTests : IClassFixture<SqlServerContainerFixture>
+{
+    private readonly SqlServerContainerFixture _fixture;
+
+    public OutboxRelayConcurrencyTests(SqlServerContainerFixture fixture)
+    {
+        _fixture = fixture;
+    }
+
+    // ================================================================
+    // Test Infrastructure
+    // ================================================================
+
+    public sealed class TestDbContext(DbContextOptions<TestDbContext> options) : DbContext(options)
+    {
+        public DbSet<OutboxMessage> OutboxMessages => Set<OutboxMessage>();
+
+        protected override void OnModelCreating(ModelBuilder modelBuilder)
+        {
+            modelBuilder.ConfigureTenE0OutboxTables();
+        }
+
+        protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
+        {
+            base.OnConfiguring(optionsBuilder);
+            optionsBuilder.ConfigureWarnings(w => w.Ignore(InMemoryEventId.TransactionIgnoredWarning));
+        }
+    }
+
+    private sealed class TestDbContextFactory(DbContextOptions<TestDbContext> options)
+        : IDbContextFactory<TestDbContext>
+    {
+        public TestDbContext CreateDbContext() => new(options);
+    }
+
+    /// <summary>
+    /// Publisher mock —— 记录每条 messageId 被 publish 的次数。
+    /// Exactly-once 验证的关键探针（与 OutboxRelayConcurrencyAcceptanceTests 一致）。
+    /// </summary>
+    private sealed class TrackingOutboxPublisher
+    {
+        private readonly ConcurrentDictionary<string, int> _callCounts = new();
+        private readonly ConcurrentDictionary<string, DateTimeOffset> _sentTimes = new();
+
+        public IOutboxPublisher AsIOutboxPublisher() => new Impl(this);
+
+        public int CallCount(string messageId)
+            => _callCounts.TryGetValue(messageId, out var c) ? c : 0;
+
+        public DateTimeOffset? SentTime(string messageId)
+            => _sentTimes.TryGetValue(messageId, out var t) ? t : null;
+
+        public IReadOnlyDictionary<string, int> AllCalls() => _callCounts;
+
+        private sealed class Impl : IOutboxPublisher
+        {
+            private readonly TrackingOutboxPublisher _owner;
+            public Impl(TrackingOutboxPublisher owner) => _owner = owner;
+
+            public Task PublishAsync(OutboxMessage message, CancellationToken cancellationToken)
+            {
+                _owner._callCounts.AddOrUpdate(message.Id, 1, (_, n) => n + 1);
+                _owner._sentTimes[message.Id] = DateTimeOffset.UtcNow;
+                return Task.CompletedTask;
+            }
+        }
+    }
+
+    private static OutboxMessage NewMessage(string id, DateTimeOffset occurredOn)
+        => new()
+        {
+            Id = id,
+            EventType = "TestEvent",
+            Payload = "{}",
+            OccurredOn = occurredOn,
+        };
+
+    /// <summary>
+    /// 用 <see cref="AddTenE0DomainEvents{TContext}"/> 完整注册 Relay + OutboxLocking 基础设施，
+    /// 再注入 <paramref name="publisher"/> 作为 <see cref="IOutboxPublisher"/> 的实际实现。
+    /// </summary>
+    private static IServiceProvider BuildHost(
+        string connectionString,
+        string instanceId,
+        OutboxLockProviderKind lockProvider,
+        TrackingOutboxPublisher publisher,
+        out IDbContextFactory<TestDbContext> outFactory)
+    {
+        var services = new ServiceCollection();
+        services.AddLogging(b => b.AddProvider(NullLoggerProvider.Instance));
+
+        var ctxOptions = new DbContextOptionsBuilder<TestDbContext>()
+            .UseSqlServer(connectionString)
+            .ConfigureWarnings(w => w.Ignore(InMemoryEventId.TransactionIgnoredWarning))
+            .Options;
+        var factory = new TestDbContextFactory(ctxOptions);
+        services.AddSingleton<IDbContextFactory<TestDbContext>>(factory);
+        outFactory = factory;
+
+        services.AddSingleton<IOutboxPublisher>(publisher.AsIOutboxPublisher());
+
+        services.AddSingleton(Options.Create(new OutboxRelayOptions
+        {
+            LockInstanceId = instanceId,
+            LockProvider = lockProvider,
+            LockLeaseDuration = TimeSpan.FromSeconds(30),
+            BatchSize = 50,
+            PollInterval = TimeSpan.FromMilliseconds(100),
+        }));
+
+        // 走 AddTenE0DomainEvents 真实集成路径（自动 AddOutboxLocking<TContext>），
+        // 让 IOutboxLock 的 switch 表达式按 LockProvider 选项分派真实实现。
+        services.AddTenE0DomainEvents<TestDbContext>();
+
+        return services.BuildServiceProvider();
+    }
+
+    // ================================================================
+    // Scenario 1: Distributed 模式 — 两个独立 Host 并发跑 50 条消息，每条恰好投递 1 次
+    // ================================================================
+
+    [Fact]
+    public async Task TwoRelayHosts_Concurrent_50Messages_EachPublishedExactlyOnce()
+    {
+        // Docker 不可用（fixture 留空 ConnectionString）→ 静默跳过，符合 tests/CLAUDE.md 约定。
+        if (string.IsNullOrEmpty(_fixture.ConnectionString))
+        {
+            return;
+        }
+
+        // Arrange — 用 fixture 共享容器 + EnsureCreated 建表
+        var connectionString = _fixture.ConnectionString;
+        await _fixture.EnsureSchemaAsync();
+
+        // Seed 50 条 OutboxMessage
+        var baseTime = DateTimeOffset.UtcNow.AddMinutes(-1);
+        var seededIds = Enumerable.Range(0, 50)
+            .Select(i => $"msg-{i:D3}")
+            .ToArray();
+        await using (var seedCtx = new TestDbContext(
+            new DbContextOptionsBuilder<TestDbContext>().UseSqlServer(connectionString).Options))
+        {
+            for (int i = 0; i < 50; i++)
+            {
+                seedCtx.OutboxMessages.Add(NewMessage(seededIds[i], baseTime.AddMilliseconds(i)));
+            }
+            await seedCtx.SaveChangesAsync();
+        }
+
+        // 两个独立 Host
+        var sharedPublisher = new TrackingOutboxPublisher();
+        var hostA = BuildHost(
+            connectionString, "host-A", OutboxLockProviderKind.Distributed, sharedPublisher, out _);
+        var hostB = BuildHost(
+            connectionString, "host-B", OutboxLockProviderKind.Distributed, sharedPublisher, out _);
+
+        // 反射驱动 OutboxRelayService<TestDbContext>.ProcessBatchAsync
+        // （private 走反射避免 BackgroundService.StartAsync 时序复杂度）
+        var batchProcessor = typeof(OutboxRelayService<TestDbContext>).GetMethod(
+            "ProcessBatchAsync",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)
+            ?? throw new InvalidOperationException(
+                "OutboxRelayService<TestDbContext>.ProcessBatchAsync 不可见 — 私有方法签名变更？");
+
+        var relayA = hostA.GetRequiredService<OutboxRelayService<TestDbContext>>();
+        var relayB = hostB.GetRequiredService<OutboxRelayService<TestDbContext>>();
+
+        // 30 轮并发跑（约 30s × 1 轮/秒）
+        const int rounds = 30;
+        var taskA = Task.Run(async () =>
+        {
+            for (int i = 0; i < rounds; i++)
+            {
+                await (Task<int>)batchProcessor.Invoke(relayA, new object[] { CancellationToken.None })!;
+                await Task.Delay(1000);
+            }
+        });
+        var taskB = Task.Run(async () =>
+        {
+            for (int i = 0; i < rounds; i++)
+            {
+                await (Task<int>)batchProcessor.Invoke(relayB, new object[] { CancellationToken.None })!;
+                await Task.Delay(1000);
+            }
+        });
+        await Task.WhenAll(taskA, taskB);
+
+        // 读回真实状态
+        int attemptSum;
+        int sentCount;
+        await using (var verifyCtx = new TestDbContext(
+            new DbContextOptionsBuilder<TestDbContext>().UseSqlServer(connectionString).Options))
+        {
+            var all = await verifyCtx.OutboxMessages.ToListAsync();
+            attemptSum = all.Sum(m => m.AttemptCount);
+            sentCount = all.Count(m => m.SentTime != null);
+        }
+
+        // Assert — 每条消息恰好投递 1 次
+        foreach (var id in seededIds)
+        {
+            sharedPublisher.CallCount(id).Should().Be(
+                1,
+                $"消息 {id} 在两个 Host 并发跑 Relay 期间必须被 PublisherMock 恰好调用 1 次 — "
+                + "这是 #82 核心验收：分布式锁防止了 #74 已知风险 #1 的重复投递");
+        }
+
+        sentCount.Should().Be(
+            50,
+            "全部 50 条消息必须被成功投递（SentTime 非空）");
+
+        attemptSum.Should().Be(
+            50,
+            "AttemptCount 总和必须 == 50 — 分布式锁让每个 Host 只拾取自己拿到的部分，"
+            + "不会出现 'A 拾取 +1, B 又拾取 +1' 的双 ++");
+    }
+
+    // ================================================================
+    // Scenario 2: Leader 模式 — 两个 Host 并发跑 50 条消息，leader 单实例承担全部投递
+    //   Leader 模式从根上消除竞争（全局一把锁）；非 leader 实例的 publisher 不应被调用。
+    //   本测试用两个 TrackingOutboxPublisher 区分 hostA / hostB 谁是 leader。
+    // ================================================================
+
+    [Fact]
+    public async Task TwoRelayHosts_Leader_OnlyOneRelayProcessesMessages()
+    {
+        // Docker 不可用（fixture 留空 ConnectionString）→ 静默跳过，符合 tests/CLAUDE.md 约定。
+        if (string.IsNullOrEmpty(_fixture.ConnectionString))
+        {
+            return;
+        }
+
+        // Arrange — 与 Scenario 1 共用 fixture + schema
+        var connectionString = _fixture.ConnectionString;
+        await _fixture.EnsureSchemaAsync();
+
+        // Seed 50 条
+        var baseTime = DateTimeOffset.UtcNow.AddMinutes(-1);
+        var seededIds = Enumerable.Range(0, 50)
+            .Select(i => $"leader-msg-{i:D3}")
+            .ToArray();
+        await using (var seedCtx = new TestDbContext(
+            new DbContextOptionsBuilder<TestDbContext>().UseSqlServer(connectionString).Options))
+        {
+            for (int i = 0; i < 50; i++)
+            {
+                seedCtx.OutboxMessages.Add(NewMessage(seededIds[i], baseTime.AddMilliseconds(i)));
+            }
+            await seedCtx.SaveChangesAsync();
+        }
+
+        // 两个独立 publisher（每个 Host 一个），用以区分谁实际在发
+        var publisherA = new TrackingOutboxPublisher();
+        var publisherB = new TrackingOutboxPublisher();
+        var hostA = BuildHost(
+            connectionString, "host-A", OutboxLockProviderKind.Leader, publisherA, out _);
+        var hostB = BuildHost(
+            connectionString, "host-B", OutboxLockProviderKind.Leader, publisherB, out _);
+
+        var batchProcessor = typeof(OutboxRelayService<TestDbContext>).GetMethod(
+            "ProcessBatchAsync",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)
+            ?? throw new InvalidOperationException(
+                "OutboxRelayService<TestDbContext>.ProcessBatchAsync 不可见");
+
+        var relayA = hostA.GetRequiredService<OutboxRelayService<TestDbContext>>();
+        var relayB = hostB.GetRequiredService<OutboxRelayService<TestDbContext>>();
+
+        const int rounds = 30;
+        var taskA = Task.Run(async () =>
+        {
+            for (int i = 0; i < rounds; i++)
+            {
+                await (Task<int>)batchProcessor.Invoke(relayA, new object[] { CancellationToken.None })!;
+                await Task.Delay(1000);
+            }
+        });
+        var taskB = Task.Run(async () =>
+        {
+            for (int i = 0; i < rounds; i++)
+            {
+                await (Task<int>)batchProcessor.Invoke(relayB, new object[] { CancellationToken.None })!;
+                await Task.Delay(1000);
+            }
+        });
+        await Task.WhenAll(taskA, taskB);
+
+        // Assert 1: 50 条全被发（任一 publisher 累计）
+        var totalCalls = publisherA.AllCalls().Sum(kv => kv.Value)
+                       + publisherB.AllCalls().Sum(kv => kv.Value);
+        totalCalls.Should().Be(
+            50,
+            "Leader 模式：50 条消息必须全部被发布（leader 实例的 publisher 承担全部）");
+
+        // Assert 2: 只一个 publisher 被调用（leader 单实例）
+        var aCalls = publisherA.AllCalls().Count;
+        var bCalls = publisherB.AllCalls().Count;
+
+        // 一个 publisher 必为 0（follower），另一个 ≥ 50（leader）
+        (aCalls == 0 ^ bCalls == 0).Should().BeTrue(
+            "Leader 模式：只有一个 Relay 实例（leader）能调用 publisher，follower 全程不投递 — "
+            + $"实测 A={aCalls} B={bCalls}");
+
+        // Assert 3: leader 的 publisher 每条恰好 1 次
+        var leader = aCalls > 0 ? publisherA : publisherB;
+        foreach (var id in seededIds)
+        {
+            leader.CallCount(id).Should().Be(
+                1,
+                $"Leader 模式：leader 的 publisher 对消息 {id} 必须恰好调用 1 次");
+        }
+    }
+}
