@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.Extensions.Time.Testing;
 using TenE0.Core.Events.Outbox;
 
 namespace TenE0.Core.Tests.Events.Outbox;
@@ -312,6 +313,67 @@ public sealed class SqlServerOutboxLockTests
         // Then — 行不存在时返回 false，不抛异常
         acquired.Should().BeFalse(
             "行不存在时 TryAcquire 必须返回 false — 不能因 'no row affected' 抛异常破坏 Relay");
+    }
+
+    // ================================================================
+    // Scenario: TimeProvider 注入（issue #96）— FakeTime 推进后 lease 视为过期
+    // ================================================================
+
+    [Fact]
+    public async Task GivenSqlServerLockAndActiveLease_WhenFakeTimeAdvancesPastLease_ThenReacquireSucceeds()
+    {
+        // Arrange — instance-A 在 t=0 抢到 lease=10min 的锁
+        var dbName = Guid.NewGuid().ToString("N");
+        var factory = CreateFactory(dbName);
+        var start = new DateTimeOffset(2026, 6, 22, 12, 0, 0, TimeSpan.Zero);
+        var timeProvider = new FakeTimeProvider(start);
+        var msgId = await SeedAsync(factory, NewMessage("TimeProbe", start));
+
+        IOutboxLock sut = new SqlServerOutboxLock<TestDbContext>(factory, timeProvider);
+        var firstAcquire = await sut.TryAcquireAsync(
+            messageId: msgId, instanceId: "instance-A",
+            lease: TimeSpan.FromMinutes(10), cancellationToken: CancellationToken.None);
+        firstAcquire.Should().BeTrue();
+
+        // Act — 推进 15 分钟（超过 lease），instance-B 试图重新抢占
+        timeProvider.Advance(TimeSpan.FromMinutes(15));
+        var reacquireByB = await sut.TryAcquireAsync(
+            messageId: msgId, instanceId: "instance-B",
+            lease: TimeSpan.FromMinutes(10), cancellationToken: CancellationToken.None);
+
+        // Assert — 锁过期判定走 TimeProvider（issue #96 修复），B 抢占成功
+        reacquireByB.Should().BeTrue(
+            "FakeTime 推进 15min 超过 lease=10min，Lock 视为过期，新实例必须能抢占（issue #96 修复 TimeProvider 注入后验收测试不再 Thread.Sleep）");
+        var reloaded = await ReloadAsync(factory, msgId);
+        reloaded!.LockedByInstance.Should().Be("instance-B");
+        reloaded.LockedUntil.Should().Be(start.AddMinutes(15).AddMinutes(10),
+            "LockedUntil = 推进后的 now + lease = 12:15 + 10min = 12:25");
+    }
+
+    [Fact]
+    public async Task GivenSqlServerLockAndActiveLease_WhenFakeTimeNotPastLease_ThenReacquireFails()
+    {
+        // Arrange — lease=10min，t=0 抢锁
+        var dbName = Guid.NewGuid().ToString("N");
+        var factory = CreateFactory(dbName);
+        var start = new DateTimeOffset(2026, 6, 22, 12, 0, 0, TimeSpan.Zero);
+        var timeProvider = new FakeTimeProvider(start);
+        var msgId = await SeedAsync(factory, NewMessage("TimeProbe2", start));
+
+        IOutboxLock sut = new SqlServerOutboxLock<TestDbContext>(factory, timeProvider);
+        await sut.TryAcquireAsync(msgId, "instance-A", TimeSpan.FromMinutes(10), CancellationToken.None);
+
+        // Act — 只推进 5min（lease 还没到），B 试图抢占
+        timeProvider.Advance(TimeSpan.FromMinutes(5));
+        var reacquireByB = await sut.TryAcquireAsync(
+            messageId: msgId, instanceId: "instance-B",
+            lease: TimeSpan.FromMinutes(10), cancellationToken: CancellationToken.None);
+
+        // Assert — 锁未过期，B 抢占失败
+        reacquireByB.Should().BeFalse(
+            "lease=10min 只推进 5min，Lock 仍有效，其他实例不能抢占（issue #96 验证 TimeProvider 真实影响过期判定）");
+        var reloaded = await ReloadAsync(factory, msgId);
+        reloaded!.LockedByInstance.Should().Be("instance-A");
     }
 
     // ================================================================

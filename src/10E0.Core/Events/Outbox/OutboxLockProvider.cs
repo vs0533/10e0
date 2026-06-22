@@ -121,13 +121,16 @@ internal sealed class OutboxRowLockResolver<TContext> : IOutboxRowLockResolver<T
 {
     private readonly IDbContextFactory<TContext> _factory;
     private readonly OutboxRelayOptions _options;
+    private readonly TimeProvider _timeProvider;
 
     public OutboxRowLockResolver(
         IDbContextFactory<TContext> factory,
-        IOptions<OutboxRelayOptions> options)
+        IOptions<OutboxRelayOptions> options,
+        TimeProvider? timeProvider = null)
     {
         _factory = factory;
         _options = options.Value;
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     /// <inheritdoc />
@@ -148,9 +151,10 @@ internal sealed class OutboxRowLockResolver<TContext> : IOutboxRowLockResolver<T
             return new NoOpOutboxLock();
         }
 
-        // 泛型开放类型（SqlServerOutboxLock<> / PostgresOutboxLock<>）用 TContext 闭合后实例化
+        // 泛型开放类型（SqlServerOutboxLock<> / PostgresOutboxLock<>）用 TContext 闭合后实例化。
+        // 传 factory + timeProvider 两个参数（issue #96 修复后两个 lock provider 都接受 TimeProvider）。
         var closedType = lockType.MakeGenericType(typeof(TContext));
-        return (IOutboxLock)Activator.CreateInstance(closedType, _factory)!;
+        return (IOutboxLock)Activator.CreateInstance(closedType, _factory, _timeProvider)!;
     }
 
     /// <inheritdoc />
