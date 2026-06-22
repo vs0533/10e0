@@ -214,6 +214,8 @@ public sealed class OutboxRelayConcurrencyTests : IClassFixture<SqlServerContain
         // Arrange — 用 fixture 共享容器 + EnsureCreated 建表
         var connectionString = _fixture.ConnectionString;
         await _fixture.EnsureSchemaAsync();
+        // 关键：清空前一个 test method 留下的 OutboxMessage 行（PR #88 docker CI 教训）
+        await _fixture.TruncateOutboxMessagesAsync();
 
         // Seed 50 条 OutboxMessage
         var baseTime = DateTimeOffset.UtcNow.AddMinutes(-1);
@@ -354,6 +356,8 @@ public sealed class OutboxRelayConcurrencyTests : IClassFixture<SqlServerContain
         // Arrange — 与 Scenario 1 共用 fixture + schema
         var connectionString = _fixture.ConnectionString;
         await _fixture.EnsureSchemaAsync();
+        // 关键：清空前一个 test method 留下的 OutboxMessage 行（PR #88 docker CI 教训）
+        await _fixture.TruncateOutboxMessagesAsync();
 
         // Seed 50 条
         var baseTime = DateTimeOffset.UtcNow.AddMinutes(-1);

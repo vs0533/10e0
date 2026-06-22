@@ -103,6 +103,21 @@ public sealed class SqlServerContainerFixture : IAsyncLifetime
     }
 
     /// <summary>
+    /// 清空 OutboxMessages 表所有行（PR #88 docker-integration-tests CI 教训）：
+    /// IClassFixture 跨 test method 共享同一 SQL 容器，前一个 method seed 的行会被后一个 method 看到。
+    /// 每次 seed 前必须 TruncateAsync() 让 verify 阶段读到的是本 method 的状态。
+    /// </summary>
+    public async Task TruncateOutboxMessagesAsync()
+    {
+        if (string.IsNullOrEmpty(ConnectionString)) return;
+        await using var conn = new Microsoft.Data.SqlClient.SqlConnection(ConnectionString);
+        await conn.OpenAsync();
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = "TRUNCATE TABLE OutboxMessages";
+        await cmd.ExecuteNonQueryAsync();
+    }
+
+    /// <summary>
     /// 测试专用 DbContext —— fixture 内部建表用。生产代码的 DbContext 仍由各测试方法自己建。
     /// </summary>
     private sealed class TestOutboxDbContext(DbContextOptions<TestOutboxDbContext> options)
