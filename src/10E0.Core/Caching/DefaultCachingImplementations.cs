@@ -66,24 +66,62 @@ internal sealed class MultiLevelCache : IMultiLevelCache
 
     /// <summary>
     /// SETNX 语义实现：L1+L2 都未命中时写入，否则返回 false。
-    /// 注：单进程 + MemoryDistributedCache 场景下 L1 lock 串行化保证原子；多进程部署
-    /// 应替换底层 IDistributedCache 为 Redis 实现并暴露 SETNX（包装接口），本方法只作为契约。
+    ///
+    /// <para>
+    /// <b>原子性</b>：用 <see cref="_setnxGate"/> 锁住整个 "L1 check + L2 check + L2 set + L1 set"
+    /// 序列，让同进程内多线程并发 SETNX 同一 key 严格只一个 success。生产 Redis 后端天然
+    /// 提供原子 SETNX (<c>SET key NX EX</c>)；InMemory / MemoryDistributedCache / Redis
+    /// (StackExchange.Redis multiplexer sync API) 都在 <see cref="IDistributedCache"/> 同步
+    /// Get/Set 路径上工作，锁内不 await，原子性由 lock + sync I/O 双重保证。
+    /// </para>
+    ///
+    /// <para>
+    /// 这是 PR #88 docker-integration-tests CI 暴露的真 bug 修复：早期实现用 "GetAsync + SetAsync"
+    /// 序列无锁，hostA 跑到 Set 之前 hostB 也 Get 完成 → 两个都 success → 两个 host 都 publish
+    /// 同一消息 → exactly-once 失败。
+    /// </para>
     /// </summary>
-    public async Task<bool> TrySetAsync<T>(
+    public Task<bool> TrySetAsync<T>(
         string key,
         T value,
         CacheOptions options,
         CancellationToken cancellationToken = default) where T : class
     {
-        if (_l1.TryGetValue(key, out _)) return false;
+        // 在 L2 short-circuit 路径（生产 L2Duration=0）下直接跳过
+        if (options.L2Duration <= TimeSpan.Zero) return Task.FromResult(false);
 
-        var existing = await _l2.GetAsync(key, cancellationToken);
-        if (existing is { Length: > 0 }) return false;
+        // 序列化 SETNX 调用（同进程内多线程并发同一 key 必有 1 winner）
+        // 锁内全 sync 调用（IDistributedCache.Get/Set 都有 sync 版本），不 await yield。
+        lock (_setnxGate)
+        {
+            if (_l1.TryGetValue(key, out _)) return Task.FromResult(false);
 
-        await SetL2Async(key, value, options, cancellationToken);
-        SetL1(key, value, options);
-        return true;
+            // L2 sync Get（IDistributedCache.Get 同步接口；不 yield，锁内安全）
+            var existing = _l2.Get(key);
+            if (existing is { Length: > 0 }) return Task.FromResult(false);
+
+            // L2 sync Set（IDistributedCache.Set 同步接口）
+            _l2.Set(
+                key,
+                JsonSerializer.SerializeToUtf8Bytes(value),
+                new DistributedCacheEntryOptions
+                {
+                    AbsoluteExpirationRelativeToNow = options.L2Duration,
+                });
+
+            // L1 同步写
+            if (options.L1Duration > TimeSpan.Zero)
+            {
+                _l1.Set(key, value, new MemoryCacheEntryOptions
+                {
+                    AbsoluteExpirationRelativeToNow = options.L1Duration,
+                });
+            }
+            return Task.FromResult(true);
+        }
     }
+
+    private readonly object _setnxGate = new();
 
     /// <summary>
     /// 覆盖写入：用于锁续约或主动改值。L1+L2 都覆盖。
