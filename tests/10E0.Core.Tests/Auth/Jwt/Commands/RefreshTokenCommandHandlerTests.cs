@@ -15,6 +15,7 @@ namespace TenE0.Core.Tests.Auth.Jwt.Commands;
 [Trait("Category", "Unit")]
 public sealed class RefreshTokenCommandHandlerTests
 {
+
     private sealed class TestUser : TenE0User { }
 
     private sealed class TestDbContext(DbContextOptions<TestDbContext> options) : DbContext(options)

@@ -152,6 +152,48 @@ public sealed class SqlServerContainerFixture : IAsyncLifetime
     }
 
     /// <summary>
+    /// 在当前 <see cref="ConnectionString"/> 上建 <c>RefreshTokenRotationConcurrencyAcceptanceTests</c> 需要的
+    /// 4 张表：<c>Users</c> / <c>UserRoles</c> / <c>RefreshTokens</c> / <c>TenE0Roles</c>。
+    /// 跨测试方法复用：第一次调 <c>EnsureCreated</c> 建表，后续调用因表已存在 SqlException 忽略。
+    /// </summary>
+    /// <remarks>
+    /// 设计原因：issue #94 CI 修复 — 测试不能在 <c>master</c> 库上调 <c>EnsureDeletedAsync</c>（SQL Server 报
+    /// "Option 'SINGLE_USER' cannot be set in database 'master'"）。改用 fixture 共享建表 + 测试方法自己 DELETE 行。
+    /// </remarks>
+    public async Task EnsureRefreshTokenSchemaAsync()
+    {
+        var options = new DbContextOptionsBuilder<TestRefreshTokenDbContext>()
+            .UseSqlServer(ConnectionString)
+            .Options;
+        await using var ctx = new TestRefreshTokenDbContext(options);
+        try
+        {
+            await ctx.Database.EnsureCreatedAsync();
+        }
+        catch (Microsoft.Data.SqlClient.SqlException ex) when (ex.Number == 2714 /* table already exists */)
+        {
+            // 后续测试复用已建表，忽略重复 EnsureCreated 抛错
+        }
+    }
+
+    /// <summary>
+    /// 清空 RefreshToken 测试相关的所有行（issue #94 CI 修复）：fixture 跨测试共享 SQL 容器，
+    /// 后续测试方法需要 DELETE 上一轮的 user / token 行，<b>不能用 EnsureDeleted</b>（SQL Server master 库限制）。
+    /// </summary>
+    public async Task TruncateRefreshTokenTestDataAsync()
+    {
+        if (string.IsNullOrEmpty(ConnectionString)) return;
+        await using var conn = new Microsoft.Data.SqlClient.SqlConnection(ConnectionString);
+        await conn.OpenAsync();
+        // FK 约束：先删 UserRoles / RefreshTokens，再删 Users
+        await using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText = "DELETE FROM [UserRoles]; DELETE FROM [RefreshTokens]; DELETE FROM [Users];";
+            await cmd.ExecuteNonQueryAsync();
+        }
+    }
+
+    /// <summary>
     /// 清空 OutboxMessages 表所有行（PR #88 docker-integration-tests CI 教训）：
     /// IClassFixture 跨 test method 共享同一 SQL 容器，前一个 method seed 的行会被后一个 method 看到。
     /// 每次 seed 前必须 TruncateAsync() 让 verify 阶段读到的是本 method 的状态。
@@ -177,6 +219,31 @@ public sealed class SqlServerContainerFixture : IAsyncLifetime
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             modelBuilder.ConfigureTenE0OutboxTables();
+        }
+    }
+
+    /// <summary>
+    /// RefreshToken 测试专用 DbContext —— fixture 内部建 Users/UserRoles/RefreshTokens/Roles 表用。
+    /// </summary>
+    private sealed class TestRefreshTokenDbContext(DbContextOptions<TestRefreshTokenDbContext> options)
+        : DbContext(options)
+    {
+        public Microsoft.EntityFrameworkCore.DbSet<TenE0.Core.Auth.Jwt.Storage.TenE0User> Users => Set<TenE0.Core.Auth.Jwt.Storage.TenE0User>();
+        public Microsoft.EntityFrameworkCore.DbSet<TenE0.Core.Auth.Jwt.Storage.TenE0UserRole> UserRoles => Set<TenE0.Core.Auth.Jwt.Storage.TenE0UserRole>();
+        public Microsoft.EntityFrameworkCore.DbSet<TenE0.Core.Auth.Jwt.Storage.TenE0RefreshToken> RefreshTokens => Set<TenE0.Core.Auth.Jwt.Storage.TenE0RefreshToken>();
+        public Microsoft.EntityFrameworkCore.DbSet<TenE0.Core.Permissions.Storage.TenE0Role> TenE0Roles => Set<TenE0.Core.Permissions.Storage.TenE0Role>();
+
+        protected override void OnModelCreating(ModelBuilder modelBuilder)
+        {
+            modelBuilder.Entity<TenE0.Core.Auth.Jwt.Storage.TenE0User>(b =>
+            {
+                b.HasKey(e => e.Id);
+                b.Property(u => u.UserCode);
+            });
+            modelBuilder.Entity<TenE0.Core.Auth.Jwt.Storage.TenE0UserRole>(b =>
+                b.HasKey(nameof(TenE0.Core.Auth.Jwt.Storage.TenE0UserRole.UserCode), nameof(TenE0.Core.Auth.Jwt.Storage.TenE0UserRole.RoleCode)));
+            modelBuilder.Entity<TenE0.Core.Auth.Jwt.Storage.TenE0RefreshToken>(b => b.HasKey(e => e.Id));
+            modelBuilder.Entity<TenE0.Core.Permissions.Storage.TenE0Role>(b => b.HasKey(r => r.Code));
         }
     }
 }

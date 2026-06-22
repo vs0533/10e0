@@ -112,10 +112,66 @@ public sealed class RefreshTokenCommandHandler<TUser, TContext>(
 
         if (rotationEnabled)
         {
-            // 旋转：撤销旧 token + 写入新 token
-            record.RevokedAt = now;
-            record.RevokedReason = RevokedReasonRotated;
-            record.ReplacedByTokenHash = tokens.RefreshTokenHash;
+            // 旋转：原子化撤销旧 token + 写入新 token。
+            // 用 ExecuteUpdateAsync + WHERE RevokedAt IS NULL 原子化：并发请求中只有 1 个能成功撤销，
+            // 竞争失败方（rows=0）走 reuse-detection 路径（issue #94 修复）。
+            // EF Core 9 直发 UPDATE，避免 tracked record 的 TOCTOU 窗口。
+            //
+            // ⚠️ 已知简化：Microsoft.EntityFrameworkCore.InMemory provider 不支持 ExecuteUpdateAsync
+            // （设计上 provider 模拟内存而不实现 SQL UPDATE 语义）。InMemory 测试场景（单线程、
+            // 无真并发）下走 fallback 路径：tracked record + SaveChanges，覆盖业务逻辑分支但不验证
+            // 原子化。生产 SQL Server / PostgreSQL 走 ExecuteUpdateAsync 真原子化路径。
+            int rows;
+            // ⚠️ Microsoft.EntityFrameworkCore.InMemory provider 不支持 ExecuteUpdateAsync
+            // （设计上 provider 模拟内存而不实现 SQL UPDATE 语义）。InMemory 测试场景
+            // （单线程、无真并发）下走 fallback 路径，让单测能跑。生产 SQL Server /
+            // PostgreSQL 走 ExecuteUpdateAsync 真原子化路径（真并发验证见
+            // RefreshTokenRotationConcurrencyAcceptanceTests）。
+            if (dc.Database.ProviderName == "Microsoft.EntityFrameworkCore.InMemory")
+            {
+                // InMemory fallback：保留旧 tracked record 路径，让单测能跑
+                var existing = await dc.Set<TenE0RefreshToken>()
+                    .FirstOrDefaultAsync(t => t.TokenHash == hash, ct);
+                if (existing is null || existing.RevokedAt is not null)
+                {
+                    // tracked record 路径下几乎不会进这里（前面 FirstOrDefaultAsync 已查过）
+                    // 但保留兜底防止漏判
+                    errs.Add("refresh token 已撤销，请重新登录", code: ErrorCodes.TokenRevoked);
+                    return null!;
+                }
+                existing.RevokedAt = now;
+                existing.RevokedReason = RevokedReasonRotated;
+                existing.ReplacedByTokenHash = tokens.RefreshTokenHash;
+                rows = 1;
+            }
+            else
+            {
+                rows = await dc.Set<TenE0RefreshToken>()
+                    .Where(t => t.TokenHash == hash && t.RevokedAt == null)
+                    .ExecuteUpdateAsync(s => s
+                        .SetProperty(t => t.RevokedAt, _ => now)
+                        .SetProperty(t => t.RevokedReason, _ => RevokedReasonRotated)
+                        .SetProperty(t => t.ReplacedByTokenHash, _ => tokens.RefreshTokenHash),
+                        ct);
+            }
+
+            if (rows == 0)
+            {
+                // 竞争失败：另一并发请求已撤销该 token。走 reuse-detection 路径撤销用户全链。
+                logger.LogWarning(
+                    "检测到 refresh token 旋转竞争失败（issue #94）：UserCode={User}，触发 reuse-detection 撤销该用户全链",
+                    user.UserCode);
+
+                var active = await dc.Set<TenE0RefreshToken>()
+                    .Where(t => t.UserCode == user.UserCode && t.RevokedAt == null)
+                    .ToListAsync(ct);
+                foreach (var t in active) t.RevokedAt = now;
+                await dc.SaveChangesAsync(ct);
+
+                errs.Add("refresh token 已撤销，请重新登录", code: ErrorCodes.TokenRevoked);
+                return null!;
+            }
+
             dc.Set<TenE0RefreshToken>().Add(new TenE0RefreshToken
             {
                 TokenHash = tokens.RefreshTokenHash,
