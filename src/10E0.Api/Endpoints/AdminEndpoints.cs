@@ -12,11 +12,22 @@ namespace TenE0.Api.Endpoints;
 
 /// <summary>
 /// 自定义认证简写（要求 super_admin 或具备 perm.admin 权限）。
-/// 简化：Dev 模式仅认证即可，权限交由 PermissionBehavior 验，此处用于演示。
+///
+/// <para>
+/// 走 <see cref="PermissionPolicies.Admin"/> Policy：底层是
+/// <see cref="PermissionAuthorizationHandler"/> 调用 <see cref="IPermissionEvaluator"/>，
+/// 与 <see cref="PermissionEvaluator"/> 同一套 super_admin bypass + role-version 检查，
+/// 保证 CQRS 命令和 Minimal API endpoint 行为一致。
+/// </para>
+///
+/// <para>
+/// #119：<c>/admin/outbox</c> 之前未挂此属性导致 Payload 泄露；现在所有
+/// <c>/admin/*</c> 端点都用同一道闸门。
+/// </para>
 /// </summary>
 internal sealed class RequireAdminAttribute : AuthorizeAttribute
 {
-    public RequireAdminAttribute() { }
+    public RequireAdminAttribute() : base(PermissionPolicies.Admin) { }
 }
 
 internal static class AdminEndpoints
@@ -71,7 +82,12 @@ internal static class AdminEndpoints
         });
 
         // 查看 Outbox 表（调试用）
-        app.MapGet("/admin/outbox", async (IDbContextFactory<DemoDbContext> f, CancellationToken ct) =>
+        // #119：把端点接入 perm.admin Policy，未持 perm.admin 的角色（viewer/editor）
+        // 必须 403；admin (super_admin) 自动 bypass。同时把 [RequireAdmin] attribute
+        // 显式挂到 endpoint metadata（Minimal API source generator 对 [Authorize]
+        // 在 anonymous 路径上的处理在 .NET 10 行为有差异，WithMetadata 走显式路径
+        // 确保 Authorization middleware 对未认证用户也调用 challenge）。
+        app.MapGet("/admin/outbox", [RequireAdmin] async (IDbContextFactory<DemoDbContext> f, CancellationToken ct) =>
         {
             await using var dc = await f.CreateDbContextAsync(ct);
             var items = await dc.OutboxMessages
@@ -88,7 +104,7 @@ internal static class AdminEndpoints
                 })
                 .ToListAsync(ct);
             return Results.Ok(items);
-        });
+        }).WithMetadata(new RequireAdminAttribute());
 
         // ----------------- 权限管理 Admin API（需 perm.admin 权限）-----------------
         app.MapGet("/admin/permissions",
