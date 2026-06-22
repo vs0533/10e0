@@ -31,9 +31,8 @@ namespace TenE0.Core.Events.Outbox;
 /// </para>
 ///
 /// <para>
-/// <b>租约 / 当前时间来源</b>：本实现直接使用 <see cref="DateTimeOffset.UtcNow"/>，
-/// 未注入 <see cref="TimeProvider"/>；构造函数只接 <see cref="IDbContextFactory{TContext}"/>
-/// 是与 Step 1 验收测试的契约签名严格对齐（见 <c>OutboxLockProviderAcceptanceTests</c>）。
+/// <b>租约 / 当前时间来源</b>：<see cref="TimeProvider"/> 注入（issue #96 修复），
+/// 测试用 <c>FakeTimeProvider</c> 完全控制时间，验收测试不再 <c>Thread.Sleep</c>。
 /// </para>
 /// </summary>
 /// <typeparam name="TContext">承载 OutboxMessage 表的 EF Core DbContext 类型。</typeparam>
@@ -41,14 +40,17 @@ public sealed class PostgresOutboxLock<TContext> : IOutboxLock
     where TContext : DbContext
 {
     private readonly IDbContextFactory<TContext> _factory;
+    private readonly TimeProvider _timeProvider;
 
     /// <summary>
     /// 构造 PostgreSQL 行级锁 provider。
     /// </summary>
     /// <param name="factory">承载 OutboxMessage 表的 DbContext 工厂 — 每次调用 <c>TryAcquire / Release</c> 都新建 DbContext，避免多实例共享 DbContext 的线程安全陷阱。</param>
-    public PostgresOutboxLock(IDbContextFactory<TContext> factory)
+    /// <param name="timeProvider">当前时间来源（issue #96）。默认 <see cref="TimeProvider.System"/> 保持现有调用方零改动。</param>
+    public PostgresOutboxLock(IDbContextFactory<TContext> factory, TimeProvider? timeProvider = null)
     {
         _factory = factory ?? throw new ArgumentNullException(nameof(factory));
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     /// <inheritdoc />
@@ -64,7 +66,7 @@ public sealed class PostgresOutboxLock<TContext> : IOutboxLock
         }
 
         await using var ctx = await _factory.CreateDbContextAsync(cancellationToken);
-        var now = DateTimeOffset.UtcNow;
+        var now = _timeProvider.GetUtcNow();
         var newLockedUntil = now + lease;
 
         // InMemory provider：走 LINQ 路径，让 Step 1 验收测试在内存库上跑通
