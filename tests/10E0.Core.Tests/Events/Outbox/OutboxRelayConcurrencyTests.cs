@@ -286,21 +286,29 @@ public sealed class OutboxRelayConcurrencyTests : IClassFixture<SqlServerContain
             attemptSum = allRows.Sum(m => m.AttemptCount);
             sentCount = allRows.Count(m => m.SentTime != null);
 
-            // DIAG: 失败时把所有行的 Id+SentTime+AttemptCount 写到 trx 让 CI 看到
+            // DIAG: 失败时把所有行 dump 到 /tmp/outbox-diag.txt 供 CI artifact 上传
             if (sentCount != 50 || attemptSum != 50)
             {
-                var sorted = allRows.OrderBy(m => m.OccurredOn).ToList();
-                var first5 = string.Join("\n", sorted.Take(5).Select(m => $"  Id={m.Id} OccurredOn={m.OccurredOn:o} SentTime={(m.SentTime?.ToString("o") ?? "null")} Attempt={m.AttemptCount}"));
-                var last5 = string.Join("\n", sorted.TakeLast(5).Select(m => $"  Id={m.Id} OccurredOn={m.OccurredOn:o} SentTime={(m.SentTime?.ToString("o") ?? "null")} Attempt={m.AttemptCount}"));
-                var idPrefixes = sorted.GroupBy(m => m.Id.Length > 6 ? m.Id.Substring(0, 6) : m.Id)
-                    .Select(g => $"  prefix={g.Key}: count={g.Count()}")
-                    .Take(20);
-                Assert.Fail(
-                    $"[DIAG] sentCount={sentCount}, attemptSum={attemptSum}, totalRows={allRows.Count}\n"
+                var sorted = allRows.OrderBy(m => m.OccurredOn).ThenBy(m => m.Id).ToList();
+                var dump = $"sentCount={sentCount}, attemptSum={attemptSum}, totalRows={allRows.Count}\n"
                     + $"distinctIds={allRows.Select(m => m.Id).Distinct().Count()}\n"
-                    + $"first 5 (by OccurredOn):\n{first5}\n"
-                    + $"last 5 (by OccurredOn):\n{last5}\n"
-                    + $"id prefixes:\n{string.Join("\n", idPrefixes)}");
+                    + "---\n"
+                    + string.Join("\n", sorted.Select(m =>
+                        $"Id={m.Id}|SentTime={(m.SentTime?.ToString("o") ?? "null")}|Attempt={m.AttemptCount}|OccurredOn={m.OccurredOn:o}"));
+                try
+                {
+                    File.WriteAllText("/tmp/outbox-diag.txt", dump);
+                }
+                catch
+                {
+                    // best-effort dump; 不影响主断言失败
+                }
+                Assert.Fail(
+                    $"[DIAG] sentCount={sentCount}, attemptSum={attemptSum}, totalRows={allRows.Count}, "
+                    + $"distinctIds={allRows.Select(m => m.Id).Distinct().Count()}. "
+                    + $"Full row dump written to /tmp/outbox-diag.txt (CI uploads via actions/upload-artifact). "
+                    + $"First 3: {string.Join(" | ", sorted.Take(3).Select(m => $"Id={m.Id} Attempt={m.AttemptCount}"))}. "
+                    + $"Last 3: {string.Join(" | ", sorted.TakeLast(3).Select(m => $"Id={m.Id} Attempt={m.AttemptCount}"))}.");
             }
         }
 

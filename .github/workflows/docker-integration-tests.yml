@@ -57,4 +57,5 @@ jobs:
           path: |
             **/TestResults/*.trx
             **/TestResults/*.html
+            /tmp/outbox-diag.txt
           retention-days: 14
