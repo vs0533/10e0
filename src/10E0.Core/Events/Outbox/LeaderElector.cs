@@ -75,12 +75,11 @@ public sealed class LeaderElector : IOutboxLock
             return true;
         }
 
-        // 已有 leader：读 owner 判断是否自己（同实例续约）
-        var current = await _cache.GetOrSetAsync<string>(
-            leaderKey,
-            _ => ValueTask.FromResult<string?>(null),
-            BuildCacheOptions(ttl),
-            cancellationToken).ConfigureAwait(false);
+        // 已有 leader：用 GetAsync（**不调 factory**）读 owner 判断是否自己。
+        // ⚠️ 不用 GetOrSetAsync（PR #88 bot review Critical #1）：虽然本处 factory 返回 null
+        // （更安全），但 GetAsync 是显式纯读契约，比依赖 factory 行为更可靠 —— 后续若把
+        // GetOrSetAsync 实现改成"null 也回写哨兵"也不会污染 ownership 读路径。
+        var current = await _cache.GetAsync<string>(leaderKey, cancellationToken).ConfigureAwait(false);
 
         if (!string.Equals(current, instanceId, StringComparison.Ordinal))
         {
@@ -104,6 +103,8 @@ public sealed class LeaderElector : IOutboxLock
         CancellationToken cancellationToken)
     {
         _ = messageId;
+        _ = instanceId;
+        _ = cancellationToken;
 
         // Leader 模式 Release 语义：no-op —— Leader 是全局身份，不应因"处理完一条消息"就退位。
         // 早期实现调 RemoveAsync 删 leader key，触发 PR #88 docker-integration-tests CI 暴露的真 bug：
@@ -114,8 +115,6 @@ public sealed class LeaderElector : IOutboxLock
         // 不续约则 lease 过期后其他实例能抢主）。实例 shutdown 时由调用方显式调专门的退位 API
         // （尚未提供——见后续 issue）。
         await Task.CompletedTask;
-        _ = cancellationToken;
-        _ = instanceId;
     }
 
     private static string BuildLeaderKey(string prefix) => $"{prefix}:election";

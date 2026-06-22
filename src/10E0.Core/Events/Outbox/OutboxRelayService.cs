@@ -105,7 +105,12 @@ public sealed class OutboxRelayService<TContext>(
         }
     }
 
-    private async Task<int> ProcessBatchAsync(CancellationToken cancellationToken)
+    /// <summary>
+    /// 处理一批未发布消息：pick 候选 → 抢锁 → publish → 释放 → SaveChanges。
+    /// 标记为 <c>internal</c>（不再 <c>private</c>）让测试项目（<c>10E0.Core.Tests</c>）可直接调
+    /// 而无需走反射 —— 反射调用对 private 签名变更脆弱，internal + InternalsVisibleTo 更稳。
+    /// </summary>
+    internal async Task<int> ProcessBatchAsync(CancellationToken cancellationToken)
     {
         await using var scope = scopeFactory.CreateAsyncScope();
         var sp = scope.ServiceProvider;

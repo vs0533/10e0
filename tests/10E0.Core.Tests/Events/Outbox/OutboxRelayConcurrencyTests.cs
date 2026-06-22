@@ -244,13 +244,13 @@ public sealed class OutboxRelayConcurrencyTests : IClassFixture<SqlServerContain
             connectionString, "host-B", OutboxLockProviderKind.Distributed, sharedPublisher,
             sharedMemoryCache, sharedDistributedCache, sharedCounter, out _);
 
-        // 反射驱动 OutboxRelayService<TestDbContext>.ProcessBatchAsync
-        // （private 走反射避免 BackgroundService.StartAsync 时序复杂度）
+        // 直接调 internal ProcessBatchAsync（不再用反射 — PR #88 bot review 🟡 Suggestion 3）
+        // internal 由 10E0.Core 的 InternalsVisibleTo("10E0.Core.Tests") 开放
         var batchProcessor = typeof(OutboxRelayService<TestDbContext>).GetMethod(
             "ProcessBatchAsync",
             System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)
             ?? throw new InvalidOperationException(
-                "OutboxRelayService<TestDbContext>.ProcessBatchAsync 不可见 — 私有方法签名变更？");
+                "OutboxRelayService<TestDbContext>.ProcessBatchAsync 不可见 — 方法签名变更或 access modifier 改回 private？");
 
         // OutboxRelayService<TContext> 只以 IHostedService 身份注册（生产代码仅 BackgroundService 消费），
         // 拿实例要走 GetServices<IHostedService>().OfType<...>().First()（PR #88 CI 教训：直接 GetRequiredService<T> 找不到）。

@@ -76,12 +76,13 @@ public sealed class DistributedOutboxLock : IOutboxLock
             return true;
         }
 
-        // key 已存在：读 owner 判断是否自己（同实例续约）
-        var observed = await _cache.GetOrSetAsync<string>(
-            key,
-            factory: _ => new ValueTask<string?>(instanceId),
-            new CacheOptions { L1Duration = ttl, L2Duration = ttl },
-            cancellationToken);
+        // key 已存在：用 GetAsync（**不调 factory**）读 owner 判断是否自己。
+        // ⚠️ 关键：不能用 GetOrSetAsync 做读（PR #88 bot review Critical #1）：
+        // GetOrSetAsync 在 L1 miss + L2 miss 时会调 factory，factory 返回非 null 会回写
+        // L2 → 如果 key 恰好 lease 过期 / Redis LRU 失效，factory 写自己的 instanceId →
+        // 后续读到 "自己" → string.Equals 命中 → 调用方误以为抢到锁 → 双 publish。
+        // GetAsync 是纯读，L1 miss + L2 miss 时返回 null，调用方直接判定"非自己 owner"。
+        var observed = await _cache.GetAsync<string>(key, cancellationToken);
 
         if (!string.Equals(observed, instanceId, StringComparison.Ordinal))
         {

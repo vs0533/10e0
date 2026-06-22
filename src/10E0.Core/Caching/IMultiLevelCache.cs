@@ -59,4 +59,19 @@ public interface IMultiLevelCache
     /// <param name="key">要失效的 key。</param>
     /// <param name="cancellationToken">取消令牌。</param>
     Task RemoveAsync(string key, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// 仅读 L1+L2（不调 factory、不写回）。用于分布式锁 ownership 检查等"读但不能写"的场景。
+    ///
+    /// <para>
+    /// <b>不要用 <see cref="GetOrSetAsync{T}"/> 做读</b>：GetOrSetAsync 在 L1 miss 且 L2 miss 时会调 factory，
+    /// factory 写入的值会污染 L2（即便 value 是"哨兵 null"也不安全，因为生产实现可能在 null 时
+    /// 也回写 L2）。锁 ownership 检查必须是纯读。
+    /// </para>
+    /// </summary>
+    /// <returns>命中返回反序列化后的值；L1+L2 双 miss 返回 <c>null</c>。</returns>
+    Task<T?> GetAsync<T>(
+        string key,
+        CancellationToken cancellationToken = default)
+        where T : class;
 }

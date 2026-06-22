@@ -74,6 +74,25 @@ internal sealed class MultiLevelCache : IMultiLevelCache
     }
 
     /// <summary>
+    /// 仅读 L1 + L2，不调 factory、不回写。供分布式锁 ownership 检查等"读不能写"场景用。
+    /// （PR #88 bot review Critical #1：之前 DistributedOutboxLock 用 GetOrSetAsync + factory=>instanceId
+    /// 做读，key 恰好消失时 factory 会被调并写入自己的 instanceId，调用方误以为抢到锁 → 双 publish。）
+    /// </summary>
+    public async Task<T?> GetAsync<T>(
+        string key,
+        CancellationToken cancellationToken = default) where T : class
+    {
+        if (_l1.TryGetValue(key, out T? hit) && hit is not null)
+            return hit;
+        var l2Bytes = await _l2.GetAsync(key, cancellationToken);
+        if (l2Bytes is not null && l2Bytes.Length > 0)
+        {
+            return JsonSerializer.Deserialize<T>(l2Bytes);
+        }
+        return null;
+    }
+
+    /// <summary>
     /// SETNX 语义实现：L1+L2 都未命中时写入，否则返回 false。
     ///
     /// <para>

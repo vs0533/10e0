@@ -125,6 +125,22 @@ public sealed class L1L2CacheForTest : IMultiLevelCache
         await _l2.RemoveAsync(key, cancellationToken);
     }
 
+    /// <summary>
+    /// 仅读 L1+L2（不写回）。与生产 MultiLevelCache.GetAsync 行为一致。
+    /// 锁 ownership 检查必须用 GetAsync 不用 GetOrSetAsync（后者 factory 会污染 L2 — PR #88 教训）。
+    /// </summary>
+    public async Task<T?> GetAsync<T>(
+        string key,
+        CancellationToken cancellationToken = default) where T : class
+    {
+        if (_l1.TryGetValue(key, out var l1Hit) && l1Hit is T l1Typed)
+            return l1Typed;
+        var l2Bytes = await _l2.GetAsync(key, cancellationToken);
+        if (l2Bytes is { Length: > 0 })
+            return JsonSerializer.Deserialize<T>(l2Bytes);
+        return null;
+    }
+
     private void SetL1<T>(string key, T value, CacheOptions options) where T : class
     {
         if (options.L1Duration <= TimeSpan.Zero) return;
