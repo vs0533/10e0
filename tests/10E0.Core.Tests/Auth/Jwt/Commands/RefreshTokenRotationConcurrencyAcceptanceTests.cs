@@ -105,11 +105,14 @@ public sealed class RefreshTokenRotationConcurrencyAcceptanceTests
             return;
         }
 
-        // Arrange：建表 + 种子 user + 1 个未撤销 refresh token
+        // Arrange：fixture 共享容器 + 跨测试复用 schema（不能用 EnsureDeleted —
+        // SQL Server master 库报 "Option 'SINGLE_USER' cannot be set in database 'master'"，
+        // PR #94 CI 修复后改用 fixture.EnsureRefreshTokenSchemaAsync + DELETE 行清表）。
         var factory = CreateFactory();
+        await _fixture.EnsureRefreshTokenSchemaAsync();
+        await _fixture.TruncateRefreshTokenTestDataAsync();
         await using (var setup = factory.CreateDbContext())
         {
-            await setup.Database.EnsureCreatedAsync();
             setup.Users.Add(new TestUser
             {
                 UserCode = "alice",
@@ -177,10 +180,6 @@ public sealed class RefreshTokenRotationConcurrencyAcceptanceTests
             .ToListAsync();
         activeTokens.Count.Should().BeLessThanOrEqualTo(1,
             "reuse-detection 应撤销用户全链 active token；最多保留 1 条 success 签发的新 token");
-
-        // 清理
-        await using var cleanup = factory.CreateDbContext();
-        await cleanup.Database.EnsureDeletedAsync();
     }
 
     private static (RefreshTokenCommandHandler<TestUser, TestDbContext> Handler, Errs Errs) NewHandlerPair(
