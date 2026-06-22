@@ -9,6 +9,7 @@ public class LocalFileStorage : IFileStorage
 {
     private readonly TimeProvider _timeProvider;
     private readonly LocalStorageOptions _options;
+    private readonly string _baseFullPath;
 
     public LocalFileStorage(TimeProvider timeProvider, IOptions<LocalStorageOptions> options)
     {
@@ -16,6 +17,8 @@ public class LocalFileStorage : IFileStorage
         _timeProvider = timeProvider;
         _options = options.Value;
         Directory.CreateDirectory(_options.BasePath);
+        _baseFullPath = Path.GetFullPath(_options.BasePath)
+            .TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
     }
 
     public async Task<StorageResult> StoreAsync(Stream stream, string fileName, string contentType, CancellationToken ct = default)
@@ -41,11 +44,11 @@ public class LocalFileStorage : IFileStorage
 
     public async Task<Stream?> RetrieveAsync(string storagePath, CancellationToken ct = default)
     {
-        var fullPath = Path.Combine(_options.BasePath, storagePath);
+        if (!TryResolveSafePath(storagePath, out var fullPath)) return null;
         if (!File.Exists(fullPath)) return null;
 
         var ms = new MemoryStream();
-        using var fs = new FileStream(fullPath, FileMode.Open, FileAccess.Read);
+        await using var fs = new FileStream(fullPath, FileMode.Open, FileAccess.Read);
         await fs.CopyToAsync(ms, ct);
         ms.Position = 0;
         return ms;
@@ -53,13 +56,11 @@ public class LocalFileStorage : IFileStorage
 
     public Task<bool> DeleteAsync(string storagePath, CancellationToken ct = default)
     {
-        var fullPath = Path.Combine(_options.BasePath, storagePath);
-        if (File.Exists(fullPath))
-        {
-            File.Delete(fullPath);
-            return Task.FromResult(true);
-        }
-        return Task.FromResult(false);
+        if (!TryResolveSafePath(storagePath, out var fullPath)) return Task.FromResult(false);
+        if (!File.Exists(fullPath)) return Task.FromResult(false);
+
+        File.Delete(fullPath);
+        return Task.FromResult(true);
     }
 
     public string GetAccessUrl(string storagePath)
@@ -69,7 +70,7 @@ public class LocalFileStorage : IFileStorage
 
     public Task<bool> ExistsAsync(string storagePath, CancellationToken ct = default)
     {
-        var fullPath = Path.Combine(_options.BasePath, storagePath);
+        if (!TryResolveSafePath(storagePath, out var fullPath)) return Task.FromResult(false);
         return Task.FromResult(File.Exists(fullPath));
     }
 
@@ -79,6 +80,31 @@ public class LocalFileStorage : IFileStorage
         var ext = Path.GetExtension(fileName);
         var uniqueName = $"{Guid.NewGuid()}{ext}";
         return Path.Combine(date.ToString("yyyy"), date.ToString("MM"), uniqueName);
+    }
+
+    /// <summary>
+    /// 把 storagePath 解析为绝对路径，并校验其落在 BasePath 沙箱内。
+    /// 拒绝 ../、绝对路径、以及任何逃出 BasePath 的形式（含 symlink 绕过）。
+    /// </summary>
+    private bool TryResolveSafePath(string? storagePath, out string fullPath)
+    {
+        fullPath = string.Empty;
+        if (string.IsNullOrWhiteSpace(storagePath)) return false;
+
+        string resolved;
+        try
+        {
+            resolved = Path.GetFullPath(Path.Combine(_options.BasePath, storagePath));
+        }
+        catch
+        {
+            return false;
+        }
+
+        if (!resolved.StartsWith(_baseFullPath, StringComparison.Ordinal)) return false;
+
+        fullPath = resolved;
+        return true;
     }
 }
 
