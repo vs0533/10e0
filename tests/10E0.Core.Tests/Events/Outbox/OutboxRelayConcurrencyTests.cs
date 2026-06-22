@@ -278,24 +278,25 @@ public sealed class OutboxRelayConcurrencyTests : IClassFixture<SqlServerContain
         // 读回真实状态
         int attemptSum;
         int sentCount;
-        int totalRows;
+        List<OutboxMessage> allRows;
         await using (var verifyCtx = new TestDbContext(
             new DbContextOptionsBuilder<TestDbContext>().UseSqlServer(connectionString).Options))
         {
-            var all = await verifyCtx.OutboxMessages.ToListAsync();
-            totalRows = all.Count;
-            attemptSum = all.Sum(m => m.AttemptCount);
-            sentCount = all.Count(m => m.SentTime != null);
-            // DIAG: 写时直接 SQL 看 OutboxMessage 表实际行数
-            await using var raw = new Microsoft.Data.SqlClient.SqlConnection(connectionString);
-            await raw.OpenAsync();
-            await using var cmd = raw.CreateCommand();
-            cmd.CommandText = "SELECT COUNT(*) FROM OutboxMessages";
-            var rawCount = (int)(await cmd.ExecuteScalarAsync())!;
-            Console.WriteLine($"[DIAG] all.Count={totalRows}, rawCount={rawCount}, sentCount={sentCount}, attemptSum={attemptSum}");
-            var distinctIds = all.Select(m => m.Id).Distinct().Count();
-            var dupIds = all.GroupBy(m => m.Id).Where(g => g.Count() > 1).Select(g => $"{g.Key}={g.Count()}").Take(10);
-            Console.WriteLine($"[DIAG] distinctIds={distinctIds}, duplicates={string.Join(",", dupIds)}");
+            allRows = await verifyCtx.OutboxMessages.ToListAsync();
+            attemptSum = allRows.Sum(m => m.AttemptCount);
+            sentCount = allRows.Count(m => m.SentTime != null);
+
+            // DIAG: 失败时把所有行的 Id+SentTime+AttemptCount 写到 trx 让 CI 看到
+            if (sentCount != 50 || attemptSum != 50)
+            {
+                var dump = string.Join("\n", allRows
+                    .OrderBy(m => m.OccurredOn)
+                    .Select(m => $"  Id={m.Id} SentTime={(m.SentTime?.ToString("o") ?? "null")} Attempt={m.AttemptCount}"));
+                Assert.Fail(
+                    $"[DIAG] sentCount={sentCount}, attemptSum={attemptSum}, totalRows={allRows.Count}\n"
+                    + $"distinctIds={allRows.Select(m => m.Id).Distinct().Count()}\n"
+                    + $"rows:\n{dump}");
+            }
         }
 
         // Assert — 每条消息恰好投递 1 次
