@@ -97,6 +97,49 @@ public sealed class ImageProcessorTests
         output.Length.Should().BeGreaterThan(0);
     }
 
+    // ── #104: ImageProcessResult 实现 IDisposable，让 ProcessedStream 自动释放 ────────
+
+    [Fact]
+    public void ImageProcessResult_ImplementsIDisposable()
+    {
+        // #104: 必须把 dispose 责任编码到类型契约里，否则调用方易忘记 using → MemoryStream LOH 碎片
+        typeof(ImageProcessResult).Should().Implement<IDisposable>(
+            "ImageProcessResult 必须实现 IDisposable，把 ProcessedStream 的释放责任编码到类型契约");
+    }
+
+    [Fact]
+    public async Task ProcessAsync_AfterResultDispose_ProcessedStreamIsDisposed()
+    {
+        // Arrange
+        using var input = CreateTestImage();
+        var options = new ImageProcessOptions();
+
+        // Act
+        var result = await _sut.ProcessAsync(input, options);
+        var stream = result.ProcessedStream;
+        result.Dispose();   // 调用方用 `using var result = ...` 时自动触发
+
+        // Assert — MemoryStream Dispose 后 CanWrite/CanRead 变 false
+        stream.CanWrite.Should().BeFalse(
+            "Dispose result 后 ProcessedStream 必须被释放，避免 MemoryStream LOH 碎片（#104）");
+    }
+
+    [Fact]
+    public async Task ProcessAsync_OnFailure_DoesNotThrowOnDispose()
+    {
+        // Arrange — 故意用无效字节让 ProcessAsync 走 catch 分支返回 Stream.Null
+        using var input = new MemoryStream(new byte[] { 0x00, 0x01, 0x02, 0x03 });
+
+        // Act
+        var result = await _sut.ProcessAsync(input, new ImageProcessOptions());
+        result.Success.Should().BeFalse();
+        result.ProcessedStream.Should().BeSameAs(Stream.Null);
+
+        // Assert — Dispose 不应抛（即使 ProcessedStream = Stream.Null）
+        var act = () => result.Dispose();
+        act.Should().NotThrow("失败结果 Stream.Null 不需要 dispose，但 dispose 调用本身必须幂等无副作用");
+    }
+
     [Fact]
     public async Task ProcessAsync_WithWidthOnly_MaintainsAspectRatio()
     {
