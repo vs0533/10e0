@@ -231,8 +231,15 @@ internal static class AdminEndpoints
             var list = await store.ListLatestAsync(skip, take, ct);
             return Results.Ok(list.Select(d => new
             {
-                d.Id, d.Code, d.Name, d.Version, d.CategoryCode,
-                d.IsEnabled, d.IsLatest, d.Description, d.CreateTime,
+                d.Id,
+                d.Code,
+                d.Name,
+                d.Version,
+                d.CategoryCode,
+                d.IsEnabled,
+                d.IsLatest,
+                d.Description,
+                d.CreateTime,
             }));
         });
 
@@ -245,7 +252,12 @@ internal static class AdminEndpoints
             var versions = await store.ListVersionsAsync(code, ct);
             return Results.Ok(versions.Select(d => new
             {
-                d.Id, d.Code, d.Version, d.IsEnabled, d.IsLatest, d.CreateTime,
+                d.Id,
+                d.Code,
+                d.Version,
+                d.IsEnabled,
+                d.IsLatest,
+                d.CreateTime,
             }));
         });
 

@@ -38,7 +38,7 @@ public sealed class StateMachine<TState, TAction>
 
     /// <summary>
     /// 触发动作，执行状态转换。
-/// </summary>
+    /// </summary>
     /// <param name="currentState">实体当前状态。</param>
     /// <param name="action">触发的动作。</param>
     /// <param name="entity">触发转换的实体（用于 Guard 求值 + 事件载荷）。无 Guard 时传 null 也可。</param>

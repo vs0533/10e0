@@ -103,16 +103,22 @@ public sealed class TimeoutProcessor<TContext>(
                 task.Status = ProcessTaskStatus.Approved;
                 dc.Set<TenE0ProcessHistory>().Add(new TenE0ProcessHistory
                 {
-                    InstanceId = task.InstanceId, NodeCode = task.NodeCode,
-                    Action = "TimeoutAutoApprove", Actor = "system:timeout", Timestamp = now,
+                    InstanceId = task.InstanceId,
+                    NodeCode = task.NodeCode,
+                    Action = "TimeoutAutoApprove",
+                    Actor = "system:timeout",
+                    Timestamp = now,
                 });
                 break;
             case TimeoutAction.AutoReject:
                 task.Status = ProcessTaskStatus.Rejected;
                 dc.Set<TenE0ProcessHistory>().Add(new TenE0ProcessHistory
                 {
-                    InstanceId = task.InstanceId, NodeCode = task.NodeCode,
-                    Action = "TimeoutAutoReject", Actor = "system:timeout", Timestamp = now,
+                    InstanceId = task.InstanceId,
+                    NodeCode = task.NodeCode,
+                    Action = "TimeoutAutoReject",
+                    Actor = "system:timeout",
+                    Timestamp = now,
                 });
                 break;
             case TimeoutAction.NotifyOnly:
@@ -120,8 +126,11 @@ public sealed class TimeoutProcessor<TContext>(
                 task.Status = ProcessTaskStatus.Timeout;
                 dc.Set<TenE0ProcessHistory>().Add(new TenE0ProcessHistory
                 {
-                    InstanceId = task.InstanceId, NodeCode = task.NodeCode,
-                    Action = "TimeoutNotify", Actor = "system:timeout", Timestamp = now,
+                    InstanceId = task.InstanceId,
+                    NodeCode = task.NodeCode,
+                    Action = "TimeoutNotify",
+                    Actor = "system:timeout",
+                    Timestamp = now,
                 });
                 break;
         }

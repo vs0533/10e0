@@ -158,7 +158,11 @@ public sealed class ProcessRuntimeTests
 
         var act = () => stack.Runtime.StartAsync(new StartProcessRequest
         {
-            DefinitionCode = "missing", BusinessKey = "b", EntityType = "T", EntityId = "e", Initiator = "u",
+            DefinitionCode = "missing",
+            BusinessKey = "b",
+            EntityType = "T",
+            EntityId = "e",
+            Initiator = "u",
         });
 
         await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*missing*");
@@ -182,7 +186,11 @@ public sealed class ProcessRuntimeTests
 
         await stack.Runtime.StartAsync(new StartProcessRequest
         {
-            DefinitionCode = "test-flow", BusinessKey = "B", EntityType = "T", EntityId = "e", Initiator = "u0",
+            DefinitionCode = "test-flow",
+            BusinessKey = "B",
+            EntityType = "T",
+            EntityId = "e",
+            Initiator = "u0",
         });
 
         // u1 通过 → 节点应推进到 end
@@ -215,21 +223,31 @@ public sealed class ProcessRuntimeTests
 
         await stack.Runtime.StartAsync(new StartProcessRequest
         {
-            DefinitionCode = "test-flow", BusinessKey = "B", EntityType = "T", EntityId = "e", Initiator = "u0",
+            DefinitionCode = "test-flow",
+            BusinessKey = "B",
+            EntityType = "T",
+            EntityId = "e",
+            Initiator = "u0",
         });
         var instanceId = (await stack.Tasks.GetMyPendingTasksAsync("u1", new WorkflowPagedQuery())).Items[0].InstanceId;
 
         // u1 通过 → 不应推进（Countersign 需全部）
         var r1 = await stack.Runtime.ExecuteActionAsync(new ExecuteActionRequest
         {
-            InstanceId = instanceId, Action = ProcessActionKind.Approve, Actor = "u1", Comment = "ok",
+            InstanceId = instanceId,
+            Action = ProcessActionKind.Approve,
+            Actor = "u1",
+            Comment = "ok",
         });
         r1.InstanceStatus.Should().Be(ProcessStatus.Running);
 
         // u2 通过 → 全部完成，推进
         var r2 = await stack.Runtime.ExecuteActionAsync(new ExecuteActionRequest
         {
-            InstanceId = instanceId, Action = ProcessActionKind.Approve, Actor = "u2", Comment = "ok",
+            InstanceId = instanceId,
+            Action = ProcessActionKind.Approve,
+            Actor = "u2",
+            Comment = "ok",
         });
         r2.InstanceStatus.Should().Be(ProcessStatus.Approved);
     }
@@ -252,13 +270,20 @@ public sealed class ProcessRuntimeTests
 
         await stack.Runtime.StartAsync(new StartProcessRequest
         {
-            DefinitionCode = "test-flow", BusinessKey = "B", EntityType = "T", EntityId = "e", Initiator = "u0",
+            DefinitionCode = "test-flow",
+            BusinessKey = "B",
+            EntityType = "T",
+            EntityId = "e",
+            Initiator = "u0",
         });
         var instanceId = (await stack.Tasks.GetMyPendingTasksAsync("u1", new WorkflowPagedQuery())).Items[0].InstanceId;
 
         var result = await stack.Runtime.ExecuteActionAsync(new ExecuteActionRequest
         {
-            InstanceId = instanceId, Action = ProcessActionKind.Reject, Actor = "u1", Comment = "no",
+            InstanceId = instanceId,
+            Action = ProcessActionKind.Reject,
+            Actor = "u1",
+            Comment = "no",
         });
 
         result.InstanceStatus.Should().Be(ProcessStatus.Rejected);
@@ -286,13 +311,21 @@ public sealed class ProcessRuntimeTests
 
         await stack.Runtime.StartAsync(new StartProcessRequest
         {
-            DefinitionCode = "test-flow", BusinessKey = "B", EntityType = "T", EntityId = "e", Initiator = "u0",
+            DefinitionCode = "test-flow",
+            BusinessKey = "B",
+            EntityType = "T",
+            EntityId = "e",
+            Initiator = "u0",
         });
         var instanceId = (await stack.Tasks.GetMyPendingTasksAsync("u1", new WorkflowPagedQuery())).Items[0].InstanceId;
 
         var result = await stack.Runtime.ExecuteActionAsync(new ExecuteActionRequest
         {
-            InstanceId = instanceId, Action = ProcessActionKind.Delegate, Actor = "u1", DelegateTo = "u9", Comment = "请代审",
+            InstanceId = instanceId,
+            Action = ProcessActionKind.Delegate,
+            Actor = "u1",
+            DelegateTo = "u9",
+            Comment = "请代审",
         });
 
         result.NewTaskAssignees.Should().Contain("u9");
@@ -315,13 +348,20 @@ public sealed class ProcessRuntimeTests
 
         await stack.Runtime.StartAsync(new StartProcessRequest
         {
-            DefinitionCode = "test-flow", BusinessKey = "B", EntityType = "T", EntityId = "e", Initiator = "u0",
+            DefinitionCode = "test-flow",
+            BusinessKey = "B",
+            EntityType = "T",
+            EntityId = "e",
+            Initiator = "u0",
         });
         var instanceId = (await stack.Tasks.GetMyPendingTasksAsync("u1", new WorkflowPagedQuery())).Items[0].InstanceId;
 
         var act = () => stack.Runtime.ExecuteActionAsync(new ExecuteActionRequest
         {
-            InstanceId = instanceId, Action = ProcessActionKind.Delegate, Actor = "u1", DelegateTo = "u9",
+            InstanceId = instanceId,
+            Action = ProcessActionKind.Delegate,
+            Actor = "u1",
+            DelegateTo = "u9",
         });
 
         await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*不允许委派*");
@@ -345,13 +385,20 @@ public sealed class ProcessRuntimeTests
 
         await stack.Runtime.StartAsync(new StartProcessRequest
         {
-            DefinitionCode = "test-flow", BusinessKey = "B", EntityType = "T", EntityId = "e", Initiator = "u0",
+            DefinitionCode = "test-flow",
+            BusinessKey = "B",
+            EntityType = "T",
+            EntityId = "e",
+            Initiator = "u0",
         });
         var instanceId = (await stack.Tasks.GetMyPendingTasksAsync("u1", new WorkflowPagedQuery())).Items[0].InstanceId;
 
         await stack.Runtime.ExecuteActionAsync(new ExecuteActionRequest
         {
-            InstanceId = instanceId, Action = ProcessActionKind.AddSigner, Actor = "u1", AddSigners = ["u7", "u8"],
+            InstanceId = instanceId,
+            Action = ProcessActionKind.AddSigner,
+            Actor = "u1",
+            AddSigners = ["u7", "u8"],
         });
 
         (await stack.Tasks.GetMyPendingTasksAsync("u7", new WorkflowPagedQuery())).Items.Should().ContainSingle();
@@ -381,19 +428,29 @@ public sealed class ProcessRuntimeTests
 
         await stack.Runtime.StartAsync(new StartProcessRequest
         {
-            DefinitionCode = "test-flow", BusinessKey = "B", EntityType = "T", EntityId = "e", Initiator = "u0",
+            DefinitionCode = "test-flow",
+            BusinessKey = "B",
+            EntityType = "T",
+            EntityId = "e",
+            Initiator = "u0",
         });
         // 推进到 a2：u1 审批 a1 通过
         var instanceId = (await stack.Tasks.GetMyPendingTasksAsync("u1", new WorkflowPagedQuery())).Items[0].InstanceId;
         await stack.Runtime.ExecuteActionAsync(new ExecuteActionRequest
         {
-            InstanceId = instanceId, Action = ProcessActionKind.Approve, Actor = "u1",
+            InstanceId = instanceId,
+            Action = ProcessActionKind.Approve,
+            Actor = "u1",
         });
 
         // 现在 a2 节点，回退到 a1
         var result = await stack.Runtime.ExecuteActionAsync(new ExecuteActionRequest
         {
-            InstanceId = instanceId, Action = ProcessActionKind.Rollback, Actor = "u1", RollbackToNodeCode = "a1", Comment = "打回",
+            InstanceId = instanceId,
+            Action = ProcessActionKind.Rollback,
+            Actor = "u1",
+            RollbackToNodeCode = "a1",
+            Comment = "打回",
         });
 
         result.NextNodeCode.Should().Be("a1");
@@ -419,7 +476,11 @@ public sealed class ProcessRuntimeTests
 
         var dto = await stack.Runtime.StartAsync(new StartProcessRequest
         {
-            DefinitionCode = "test-flow", BusinessKey = "B", EntityType = "T", EntityId = "e", Initiator = "u0",
+            DefinitionCode = "test-flow",
+            BusinessKey = "B",
+            EntityType = "T",
+            EntityId = "e",
+            Initiator = "u0",
         });
 
         // 非发起人撤销 → 抛
@@ -451,13 +512,19 @@ public sealed class ProcessRuntimeTests
 
         await stack.Runtime.StartAsync(new StartProcessRequest
         {
-            DefinitionCode = "test-flow", BusinessKey = "B", EntityType = "T", EntityId = "e", Initiator = "u0",
+            DefinitionCode = "test-flow",
+            BusinessKey = "B",
+            EntityType = "T",
+            EntityId = "e",
+            Initiator = "u0",
         });
         var instanceId = (await stack.Tasks.GetMyPendingTasksAsync("u1", new WorkflowPagedQuery())).Items[0].InstanceId;
 
         var act = () => stack.Runtime.ExecuteActionAsync(new ExecuteActionRequest
         {
-            InstanceId = instanceId, Action = ProcessActionKind.Approve, Actor = "u999", // 非审批人
+            InstanceId = instanceId,
+            Action = ProcessActionKind.Approve,
+            Actor = "u999", // 非审批人
         });
 
         await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*没有待处理任务*");
@@ -481,11 +548,18 @@ public sealed class ProcessRuntimeTests
 
         var dto = await stack.Runtime.StartAsync(new StartProcessRequest
         {
-            DefinitionCode = "test-flow", BusinessKey = "B", EntityType = "T", EntityId = "e", Initiator = "u0",
+            DefinitionCode = "test-flow",
+            BusinessKey = "B",
+            EntityType = "T",
+            EntityId = "e",
+            Initiator = "u0",
         });
         await stack.Runtime.ExecuteActionAsync(new ExecuteActionRequest
         {
-            InstanceId = dto.Id, Action = ProcessActionKind.Approve, Actor = "u1", Comment = "approve",
+            InstanceId = dto.Id,
+            Action = ProcessActionKind.Approve,
+            Actor = "u1",
+            Comment = "approve",
         });
 
         var history = await stack.Tasks.GetInstanceHistoryAsync(dto.Id);
@@ -520,14 +594,20 @@ public sealed class ProcessRuntimeTests
         // Amount=20000 → 走 director 分支
         var dto = await stack.Runtime.StartAsync(new StartProcessRequest
         {
-            DefinitionCode = "test-flow", BusinessKey = "B", EntityType = "T", EntityId = "e", Initiator = "u0",
+            DefinitionCode = "test-flow",
+            BusinessKey = "B",
+            EntityType = "T",
+            EntityId = "e",
+            Initiator = "u0",
             SummaryJson = """{"Amount":20000}""",
         });
 
         // 主管审批通过 → 应路由到 director（而非 end）
         await stack.Runtime.ExecuteActionAsync(new ExecuteActionRequest
         {
-            InstanceId = dto.Id, Action = ProcessActionKind.Approve, Actor = "u1",
+            InstanceId = dto.Id,
+            Action = ProcessActionKind.Approve,
+            Actor = "u1",
         });
 
         var fetched = await stack.Tasks.GetInstanceAsync(dto.Id);
@@ -536,7 +616,9 @@ public sealed class ProcessRuntimeTests
         // director 审批通过 → 完成
         var r2 = await stack.Runtime.ExecuteActionAsync(new ExecuteActionRequest
         {
-            InstanceId = dto.Id, Action = ProcessActionKind.Approve, Actor = "u1",
+            InstanceId = dto.Id,
+            Action = ProcessActionKind.Approve,
+            Actor = "u1",
         });
         r2.InstanceStatus.Should().Be(ProcessStatus.Approved);
     }
