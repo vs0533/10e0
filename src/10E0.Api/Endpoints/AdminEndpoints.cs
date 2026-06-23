@@ -133,49 +133,36 @@ internal static class AdminEndpoints
             });
 
         // ----------------- 菜单端点 -----------------
-        app.MapGet("/menus/tree", async (CancellationToken ct) =>
-        {
-            await using var scope = app.Services.CreateAsyncScope();
-            var menuService = scope.ServiceProvider.GetRequiredService<IMenuService>();
-            return Results.Ok(await menuService.GetMenuTreeAsync(ct));
-        });
+        // #115: 改为参数注入 IMenuService（Minimal API 自动为每请求建 scope 解析 Scoped 服务），
+        // 消除 Service Locator 模式（app.Services.CreateAsyncScope + GetRequiredService）。
+        // 与上方 orgs/permissions 端点的参数注入风格一致。
+        app.MapGet("/menus/tree", async (IMenuService menuService, CancellationToken ct) =>
+            Results.Ok(await menuService.GetMenuTreeAsync(ct)));
 
-        app.MapGet("/menus/user-tree", async (CancellationToken ct) =>
-        {
-            await using var scope = app.Services.CreateAsyncScope();
-            var menuService = scope.ServiceProvider.GetRequiredService<IMenuService>();
-            return Results.Ok(await menuService.GetUserMenuTreeAsync(ct));
-        });
+        app.MapGet("/menus/user-tree", async (IMenuService menuService, CancellationToken ct) =>
+            Results.Ok(await menuService.GetUserMenuTreeAsync(ct)));
 
         // ----------------- 菜单管理 Admin API -----------------
-        app.MapPost("/admin/menus", async (MenuCreateRequest request, CancellationToken ct) =>
+        app.MapPost("/admin/menus", async (MenuCreateRequest request, IMenuService menuService, CancellationToken ct) =>
         {
-            await using var scope = app.Services.CreateAsyncScope();
-            var menuService = scope.ServiceProvider.GetRequiredService<IMenuService>();
             var menu = await menuService.AddAsync(request, ct);
             return Results.Ok(menu);
         });
 
-        app.MapPut("/admin/menus/{id}", async (string id, MenuUpdateRequest request, CancellationToken ct) =>
+        app.MapPut("/admin/menus/{id}", async (string id, MenuUpdateRequest request, IMenuService menuService, CancellationToken ct) =>
         {
-            await using var scope = app.Services.CreateAsyncScope();
-            var menuService = scope.ServiceProvider.GetRequiredService<IMenuService>();
             await menuService.UpdateAsync(id, request, ct);
             return Results.Ok(new { ok = true });
         });
 
-        app.MapDelete("/admin/menus/{id}", async (string id, CancellationToken ct) =>
+        app.MapDelete("/admin/menus/{id}", async (string id, IMenuService menuService, CancellationToken ct) =>
         {
-            await using var scope = app.Services.CreateAsyncScope();
-            var menuService = scope.ServiceProvider.GetRequiredService<IMenuService>();
             await menuService.DeleteAsync(id, ct);
             return Results.Ok(new { ok = true });
         });
 
-        app.MapPut("/admin/menus/{id}/move", async (string id, string? parentId, CancellationToken ct) =>
+        app.MapPut("/admin/menus/{id}/move", async (string id, string? parentId, IMenuService menuService, CancellationToken ct) =>
         {
-            await using var scope = app.Services.CreateAsyncScope();
-            var menuService = scope.ServiceProvider.GetRequiredService<IMenuService>();
             try
             {
                 await menuService.MoveAsync(id, parentId, ct);
@@ -184,72 +171,49 @@ internal static class AdminEndpoints
             catch (InvalidOperationException ex) { return Results.BadRequest(new { error = ex.Message }); }
         });
 
-        app.MapPut("/admin/roles/{code}/menus", async (string code, string[] menuIds, CancellationToken ct) =>
+        app.MapPut("/admin/roles/{code}/menus", async (string code, string[] menuIds, IMenuService menuService, CancellationToken ct) =>
         {
-            await using var scope = app.Services.CreateAsyncScope();
-            var menuService = scope.ServiceProvider.GetRequiredService<IMenuService>();
             await menuService.AssignToRoleAsync(code, menuIds, ct);
             return Results.Ok(new { ok = true });
         });
 
-        app.MapGet("/admin/roles/{code}/menus", async (string code, CancellationToken ct) =>
-        {
-            await using var scope = app.Services.CreateAsyncScope();
-            var menuService = scope.ServiceProvider.GetRequiredService<IMenuService>();
-            return Results.Ok(await menuService.GetRoleMenuIdsAsync(code, ct));
-        });
+        app.MapGet("/admin/roles/{code}/menus", async (string code, IMenuService menuService, CancellationToken ct) =>
+            Results.Ok(await menuService.GetRoleMenuIdsAsync(code, ct)));
 
         // ----------------- 动态数据过滤规则管理 Admin API -----------------
-        app.MapGet("/admin/data-filters", async (CancellationToken ct) =>
-        {
-            using var scope = app.Services.CreateScope();
-            var service = scope.ServiceProvider.GetRequiredService<IDataFilterRuleService>();
-            return Results.Ok(await service.GetAllAsync(ct));
-        });
+        // #115: 同样改为参数注入 IDataFilterRuleService，消除 Service Locator。
+        app.MapGet("/admin/data-filters", async (IDataFilterRuleService service, CancellationToken ct) =>
+            Results.Ok(await service.GetAllAsync(ct)));
 
-        app.MapGet("/admin/data-filters/{id}", async (string id, CancellationToken ct) =>
+        app.MapGet("/admin/data-filters/{id}", async (string id, IDataFilterRuleService service, CancellationToken ct) =>
         {
-            using var scope = app.Services.CreateScope();
-            var service = scope.ServiceProvider.GetRequiredService<IDataFilterRuleService>();
             var rule = await service.GetByIdAsync(id, ct);
             return rule is not null ? Results.Ok(rule) : Results.NotFound();
         });
 
-        app.MapGet("/admin/data-filters/entity/{entityTypeName}", async (string entityTypeName, CancellationToken ct) =>
-        {
-            using var scope = app.Services.CreateScope();
-            var service = scope.ServiceProvider.GetRequiredService<IDataFilterRuleService>();
-            return Results.Ok(await service.GetByEntityAsync(entityTypeName, ct));
-        });
+        app.MapGet("/admin/data-filters/entity/{entityTypeName}", async (string entityTypeName, IDataFilterRuleService service, CancellationToken ct) =>
+            Results.Ok(await service.GetByEntityAsync(entityTypeName, ct)));
 
-        app.MapPost("/admin/data-filters", async (DataFilterRuleCreateRequest request, CancellationToken ct) =>
+        app.MapPost("/admin/data-filters", async (DataFilterRuleCreateRequest request, IDataFilterRuleService service, CancellationToken ct) =>
         {
-            using var scope = app.Services.CreateScope();
-            var service = scope.ServiceProvider.GetRequiredService<IDataFilterRuleService>();
             var rule = await service.CreateAsync(request, ct);
             return Results.Ok(rule);
         });
 
-        app.MapPut("/admin/data-filters/{id}", async (string id, DataFilterRuleUpdateRequest request, CancellationToken ct) =>
+        app.MapPut("/admin/data-filters/{id}", async (string id, DataFilterRuleUpdateRequest request, IDataFilterRuleService service, CancellationToken ct) =>
         {
-            using var scope = app.Services.CreateScope();
-            var service = scope.ServiceProvider.GetRequiredService<IDataFilterRuleService>();
             await service.UpdateAsync(id, request, ct);
             return Results.Ok(new { ok = true });
         });
 
-        app.MapDelete("/admin/data-filters/{id}", async (string id, CancellationToken ct) =>
+        app.MapDelete("/admin/data-filters/{id}", async (string id, IDataFilterRuleService service, CancellationToken ct) =>
         {
-            using var scope = app.Services.CreateScope();
-            var service = scope.ServiceProvider.GetRequiredService<IDataFilterRuleService>();
             await service.DeleteAsync(id, ct);
             return Results.Ok(new { ok = true });
         });
 
-        app.MapPatch("/admin/data-filters/{id}/toggle", async (string id, bool enabled, CancellationToken ct) =>
+        app.MapPatch("/admin/data-filters/{id}/toggle", async (string id, bool enabled, IDataFilterRuleService service, CancellationToken ct) =>
         {
-            using var scope = app.Services.CreateScope();
-            var service = scope.ServiceProvider.GetRequiredService<IDataFilterRuleService>();
             await service.SetEnabledAsync(id, enabled, ct);
             return Results.Ok(new { ok = true });
         });

@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using TenE0.Api.Domain;
 using TenE0.Api.Handlers;
 using TenE0.Core.Abstractions;
@@ -90,13 +91,16 @@ internal static class DemoEndpoints
         });
 
         // 部分更新演示：自动提取客户端提交的字段，传给 EntityService
-        app.MapPut("/demo/partial/{id}", async (string id, HttpContext http, IDbContextFactory<DemoDbContext> f, IEntityService entitySvc, CancellationToken ct) =>
+        // #116: 用 host 配置的 JsonOptions（IOptions<JsonOptions>）而非裸 JsonSerializerOptions，
+        // 与 TenE0ExceptionHandler 的序列化策略对齐 —— host 配置的 naming policy / number handling
+        // 在此端点生效，避免 camelCase body 反序列化字段对不上。
+        app.MapPut("/demo/partial/{id}", async (string id, HttpContext http, IDbContextFactory<DemoDbContext> f, IEntityService entitySvc, IOptions<Microsoft.AspNetCore.Http.Json.JsonOptions> jsonOptions, CancellationToken ct) =>
         {
             var postedProps = await http.Request.GetPostedPropertiesAsync(ct);
             // GetPostedPropertiesAsync 已重置 Body 位置，可直接反序列化
             var entity = await System.Text.Json.JsonSerializer.DeserializeAsync<DemoEntity>(
                 http.Request.Body,
-                new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true },
+                jsonOptions.Value.SerializerOptions,
                 ct);
 
             if (entity is null) return Results.BadRequest("Invalid body");
