@@ -118,4 +118,59 @@ public sealed class OutboxSchemaSeederTests
         seeders.Should().HaveCount(1,
             "TryAddEnumerable 必须保证重复 AddTenE0DomainEvents 不会让 Seeder 被注册多次（Order=0 × N = 跑 N 次）");
     }
+
+    // ══════════════════════════════════════════════════════════════
+    //  #107: pick 查询索引覆盖 + #127: 列长常量一致性
+    // ══════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// #107 回归守护：OutboxMessage 必须有 (SentTime, AttemptCount, OccurredOn) 复合索引，
+    /// 覆盖 Relay pick 查询 `WHERE SentTime IS NULL AND AttemptCount &lt; Max ORDER BY OccurredOn`。
+    /// 大表（&gt;1M 行）缺此索引会导致 Relay 每 2 秒全表扫描。
+    /// </summary>
+    [Fact]
+    public void ConfigureTenE0OutboxTables_HasSentTimeAttemptCountOccurredOnIndex()
+    {
+        var mb = new ModelBuilder();
+        mb.ConfigureTenE0OutboxTables();
+
+        var entity = mb.Model.FindEntityType(typeof(OutboxMessage));
+        entity.Should().NotBeNull();
+
+        // 查找含 SentTime + AttemptCount + OccurredOn 三列的索引
+        var pickIndex = entity!.GetIndexes().FirstOrDefault(idx =>
+            idx.Properties.Select(p => p.Name)
+                .OrderBy(n => n)
+                .SequenceEqual(new[] { nameof(OutboxMessage.AttemptCount), nameof(OutboxMessage.OccurredOn), nameof(OutboxMessage.SentTime) }));
+
+        pickIndex.Should().NotBeNull(
+            "(SentTime, AttemptCount, OccurredOn) 复合索引必须存在 —— Relay pick 查询的热路径索引覆盖");
+    }
+
+    /// <summary>
+    /// #127 回归守护：OutboxSchemaSeeder 的 ALTER SQL 列长必须与 OutboxModelBuilderExtensions 常量一致，
+    /// 避免 entity 改 MaxLength 后 seeder ALTER 出旧长度导致漂移。
+    /// </summary>
+    [Fact]
+    public void OutboxModelBuilderExtensions_ColumnLengthConstants_MatchEntityConfiguration()
+    {
+        var mb = new ModelBuilder();
+        mb.ConfigureTenE0OutboxTables();
+        var entity = mb.Model.FindEntityType(typeof(OutboxMessage));
+        entity.Should().NotBeNull();
+
+        // LockedByInstance 的 MaxLength 必须等于常量
+        var lockedByInstanceProp = entity!.FindProperty(nameof(OutboxMessage.LockedByInstance));
+        lockedByInstanceProp!.GetMaxLength()
+            .Should().Be(OutboxModelBuilderExtensions.LockedByInstanceMaxLength,
+                "entity 配置的列长必须与 seeder ALTER SQL 引用的常量一致（防漂移）");
+
+        var eventTypeProp = entity.FindProperty(nameof(OutboxMessage.EventType));
+        eventTypeProp!.GetMaxLength()
+            .Should().Be(OutboxModelBuilderExtensions.EventTypeMaxLength);
+
+        var lastErrorProp = entity.FindProperty(nameof(OutboxMessage.LastError));
+        lastErrorProp!.GetMaxLength()
+            .Should().Be(OutboxModelBuilderExtensions.LastErrorMaxLength);
+    }
 }

@@ -39,6 +39,17 @@ public sealed class OutboxSchemaSeeder : IDataSeeder
     private const string LockIndexName = "IX_OutboxMessages_LockedUntil_OccurredOn";
 
     /// <inheritdoc />
+    /// <remarks>
+    /// #122 幂等保证：本 Seeder 与 <see cref="DatabaseInitializerService.StartingAsync"/>
+    /// 中的 <c>EnsureCreatedAsync</c> 是双路径互补关系：
+    /// <list type="bullet">
+    /// <item>全新库：<c>EnsureCreatedAsync</c> 按 ModelBuilder（含 LockedUntil/LockedByInstance 列）建表，
+    ///   本 Seeder 的 <see cref="ColumnExistsAsync"/> 探测到列已存在 → 跳过 ALTER，零副作用。</item>
+    /// <item>既有库（升级部署）：表已存在但缺新列 → 探测返回 false → ALTER 补齐。</item>
+    /// </list>
+    /// 因此"跑两次"不是 bug —— 第二次探测必然命中"已存在"短路。生产切换 <c>Migrate()</c>
+    /// 后，迁移历史会接管建表，本 Seeder 探测仍兼容（列存在即跳过）。
+    /// </remarks>
     public async Task SeedAsync(DbContext context, CancellationToken cancellationToken)
     {
         // 关系型 provider 才需要 ALTER；InMemory / Cosmos 等非关系型后端跳过
@@ -132,8 +143,10 @@ public sealed class OutboxSchemaSeeder : IDataSeeder
             : "datetimeoffset";
 
     private static string StringColumnType(string provider)
-        => provider.Contains("Npgsql", StringComparison.OrdinalIgnoreCase) ||
-           provider.Contains("Postgres", StringComparison.OrdinalIgnoreCase)
-            ? "varchar(128)"
-            : "nvarchar(128)";
+        // #127: 列长从 OutboxModelBuilderExtensions 常量取，避免 entity 改 MaxLength 后
+        // seeder ALTER 出旧长度导致漂移。
+        => (provider.Contains("Npgsql", StringComparison.OrdinalIgnoreCase) ||
+            provider.Contains("Postgres", StringComparison.OrdinalIgnoreCase)
+                ? $"varchar({OutboxModelBuilderExtensions.LockedByInstanceMaxLength})"
+                : $"nvarchar({OutboxModelBuilderExtensions.LockedByInstanceMaxLength})");
 }
