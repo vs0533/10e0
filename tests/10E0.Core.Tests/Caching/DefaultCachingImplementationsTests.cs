@@ -203,22 +203,20 @@ public sealed class DefaultCachingImplementationsTests
     private static string GetXmlDoc(Type type)
     {
         // type.Assembly.Location 在 dotnet test 下指向 test bin；10E0.Core.xml 已被 SDK copy 到 test bin。
-        var xmlPath = Path.ChangeExtension(type.Assembly.Location, ".xml");
+        // 单文件发布 / trim 模式下 Location 可能返回空串，防御一下。
+        var asmPath = type.Assembly.Location;
+        if (string.IsNullOrEmpty(asmPath)) return string.Empty;
+        var xmlPath = Path.ChangeExtension(asmPath, ".xml");
         if (!File.Exists(xmlPath)) return string.Empty;
 
-        // 用 XDocument 替代 XmlDocument —— C# 14 / .NET 10 习惯，可读性更好。
-        // 返回 member.ToString() 包含所有子元素（<see cref> 也算），不做标签剥离。
+        // XDocument（C# 14 / .NET 10 习惯）。返回 member.ToString() —— summary 文本里
+        // 已含被断言的 race/INCR/Replace 三个关键字，不需要单独提取 <see cref> 属性值。
         var doc = System.Xml.Linq.XDocument.Load(xmlPath);
         var member = doc.Root?
             .Element("members")?
             .Elements("member")
             .FirstOrDefault(m => m.Attribute("name")?.Value == $"T:{type.FullName}");
-        // 含 <see cref> 时 cref 文本是 XAttribute —— 通过 ToString() 抓出 cref=... 值
-        var rawXml = member?.ToString() ?? string.Empty;
-        var crefTexts = member?.Descendants()
-            .SelectMany(d => d.Attributes("cref"))
-            .Select(a => a.Value) ?? Enumerable.Empty<string>();
-        return rawXml + "\n" + string.Join("\n", crefTexts);
+        return member?.ToString() ?? string.Empty;
     }
 
     /// <summary>
