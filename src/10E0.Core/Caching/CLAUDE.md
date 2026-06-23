@@ -9,6 +9,7 @@
 | `IMultiLevelCache.cs` | 多级缓存抽象：`GetOrSetAsync` (L1→L2→factory 三级回源) / `TrySetAsync` (SETNX) / `SetAsync` (覆盖) / `RemoveAsync` (双清) / **`GetAsync`** (纯读，专为分布式锁 ownership 检查设计，PR #88 新增) |
 | `IAtomicCounter.cs` | 原子计数器：`IncrementAsync` (Redis `INCR` / 内存 `Interlocked.Increment` / EF `UPDATE OUTPUT INSERTED.Value`) / `GetAsync` |
 | `CacheOptions.cs` | TTL 策略 record：`L1Duration` / `L2Duration`；提供 `CacheOptions.Default` (L1=5s / L2=5min) |
+| `CachingOptions.cs` | L1 容量策略 record：`SizeLimit` (默认 16 MB) / `CompactionPercentage` (0.05)；通过 `AddTenE0Caching(opts => opts with { ... })` 委托或 `AddTenE0Caching(configure)` 配置节绑定（PR #101 防 OOM 兜底） |
 | `CacheEntryOptionsExtensions.cs` | `IMemoryCacheEntryOptions` / `IDistributedCacheEntryOptions` 的快速构造扩展 |
 | `DefaultCachingImplementations.cs` | 默认实现：`MultiLevelCache` (PR #88 修复 `_setnxGate` 必须 `static` 锁) + `DistributedAtomicCounter` |
 
