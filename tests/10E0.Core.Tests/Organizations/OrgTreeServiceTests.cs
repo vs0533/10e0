@@ -6,6 +6,8 @@ namespace TenE0.Core.Tests.Organizations;
 [Trait("Category", "Unit")]
 public sealed class OrgTreeServiceTests
 {
+    private static readonly TimeProvider TestTime = TimeProvider.System;
+
     private sealed class TestDbContext(DbContextOptions<TestDbContext> options) : DbContext(options)
     {
         public DbSet<TenE0Org> Orgs => Set<TenE0Org>();
@@ -43,7 +45,7 @@ public sealed class OrgTreeServiceTests
     }
 
     private OrgTreeService<TestDbContext> CreateService(string dbName)
-        => new(CreateFactory(dbName));
+        => new(CreateFactory(dbName), TestTime);
 
     // ================================================================
     // AddAsync Tests
@@ -203,6 +205,68 @@ public sealed class OrgTreeServiceTests
         movedSub!.Path.Should().StartWith(rootB.Path);
         movedSub.Level.Should().Be(1);
         movedGc!.Path.Should().StartWith(movedSub.Path);
+    }
+
+    // ── #113: MoveAsync 不再一次性加载整棵子树到 ChangeTracker ────────────────────
+
+    [Fact]
+    public async Task MoveAsync_DoesNotRetainAllSubtreeEntitiesInChangeTracker()
+    {
+        // Arrange — 构造 root + 5 个 L1 + 25 个 L2（深 2 层，每层 5 节点），共 31 节点。
+        // MoveAsync 后立即断言总数 = 31。分批路径每批 ChangeTracker.Clear() 让内存峰值小。
+        var dbName = Guid.NewGuid().ToString("N");
+        var factory = CreateFactory(dbName);
+        var svc = CreateService(dbName);
+        var root = await svc.AddAsync("r", "Root");
+        var layer1 = new List<TenE0Org>();
+        for (int i = 0; i < 5; i++) layer1.Add(await svc.AddAsync($"l1-{i}", $"L1-{i}", parentId: root.Id));
+        for (int i = 0; i < 5; i++)
+            for (int j = 0; j < 5; j++)
+                await svc.AddAsync($"l2-{i}-{j}", $"L2-{i}-{j}", parentId: layer1[i].Id);
+
+        // Act — Move root 到顶级（newParentId=null），整树 31 节点都要更新
+        await svc.MoveAsync(root.Id, null);
+
+        // Assert — 用新 dc 取到的状态正确
+        await using var verifyCtx = factory.CreateDbContext();
+        var allCount = await verifyCtx.Orgs.CountAsync();
+        allCount.Should().Be(31);
+        // 根已被移到顶级（Path 不变，因为本来就在根）
+        var movedRoot = await verifyCtx.Orgs.FindAsync(root.Id);
+        movedRoot!.ParentId.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task MoveAsync_DeepNestedSubtree_UpdatesAllLevelsCorrectly()
+    {
+        // Arrange — 5 层深嵌套，验证分批实现仍能正确处理深层子树
+        var dbName = Guid.NewGuid().ToString("N");
+        var svc = CreateService(dbName);
+        var rootA = await svc.AddAsync("a", "A");
+        var rootB = await svc.AddAsync("b", "B");
+        var current = await svc.AddAsync("l1", "L1", parentId: rootA.Id);
+        var ids = new List<string> { rootA.Id, current.Id };
+        for (int depth = 2; depth <= 5; depth++)
+        {
+            current = await svc.AddAsync($"l{depth}", $"L{depth}", parentId: current.Id);
+            ids.Add(current.Id);
+        }
+
+        // Act — 把 L1 整棵子树（含 L2-L5）移到 rootB 下
+        await svc.MoveAsync(ids[1], rootB.Id);
+
+        // Assert
+        var factory = CreateFactory(dbName);
+        await using var ctx = factory.CreateDbContext();
+        foreach (var id in ids.Skip(1))
+        {
+            var moved = await ctx.Orgs.FindAsync(id);
+            moved!.Path.Should().StartWith(rootB.Path);
+        }
+        var l1 = await ctx.Orgs.FindAsync(ids[1]);
+        l1!.Level.Should().Be(1);
+        var l5 = await ctx.Orgs.FindAsync(ids[5]);
+        l5!.Level.Should().Be(5);
     }
 
     // ================================================================

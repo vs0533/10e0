@@ -7,7 +7,7 @@
 | 文件 | 职责 |
 |------|------|
 | `IOrgTreeService.cs` | 组织树服务接口 |
-| `OrgTreeService.cs` | 完整实现：Add、Move、GetSubtreeIds、GetDescendants、GetAncestors。维护 `Path`（物化路径）和 `Level`（层级深度） |
+| `OrgTreeService.cs` | 完整实现：Add、Move、GetSubtreeIds、GetDescendants、GetAncestors。维护 `Path`（物化路径）和 `Level`（层级深度）。**`MoveAsync`（PR #113）按 `MoveBatchSize=1000` 分批走 ChangeTracker + SaveChanges + Clear 循环**，避免 100 万节点 Move 一次性加载到内存 OOM；同时保留 AuditInterceptor 写 UpdateTime/UpdateBy 的能力 |
 | `TenE0Org.cs` | 组织实体：Id、Code、Name、ParentId、Path、Level、Description。继承 `AuditedEntity` |
 | `OrgModelBuilderExtensions.cs` | EF Core 表映射 |
 
