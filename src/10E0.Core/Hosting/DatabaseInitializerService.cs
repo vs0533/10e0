@@ -27,7 +27,8 @@ public interface IDataSeeder
 /// 使用 IHostedLifecycleService.StartingAsync 保证在 Kestrel 开始监听之前完成初始化。
 ///
 /// 注意：本服务自身是 Singleton（IHostedService 约定），通过 IServiceScopeFactory
-/// 创建作用域来解析 Scoped 的 IDbContextFactory 和 IDataSeeder，避免生命周期冲突。
+/// 创建作用域来解析 Scoped 的 IDataSeeder（每个 Seeder 拿自己请求 scope 的 DbContext），
+/// 避免 Seed 内部状态污染。IDbContextFactory 本身是 Singleton，跨 Seeder 共享。
 /// </summary>
 public sealed class DatabaseInitializerService<TContext>(
     IServiceScopeFactory scopeFactory,

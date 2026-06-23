@@ -116,7 +116,7 @@ public sealed class UnifiedValidationEnvelopeAcceptanceTests
         // Act
         var response = await client.PostAsJsonAsync(
             "/auth/login",
-            new { userCode = "alice", password = "111111" });
+            new { userCode = "alice", password = "dev-default-password-change-me" });
 
         // Assert — the migration must be additive: the success path keeps its
         // envelope shape (today's success returns LoginResult JSON; after

@@ -37,7 +37,12 @@ public static class DomainEventsExtensions
         else
             services.AddOptions<OutboxRelayOptions>();
 
-        services.AddScoped<OutboxInterceptor>();
+        // #95 captive-dependency 修复：OutboxInterceptor 注册为 Singleton。
+        // .NET 10 中 AddDbContextFactory 默认注册 IDbContextFactory 为 Singleton，
+        // optionsAction 在 root scope 调用一次解析 OutboxInterceptor 并嵌进 DbContextOptions。
+        // 如果 OutboxInterceptor 是 Scoped，会在 root scope 实例化后被所有请求共享 → captive dependency。
+        // OutboxInterceptor 只依赖 Singleton TimeProvider，安全升级为 Singleton。
+        services.AddSingleton<OutboxInterceptor>();
         services.TryAddSingleton<IDomainEventDispatcher, InProcessDomainEventDispatcher>();
 
         // 默认进程内投递。切换 Kafka/CAP/RabbitMQ 时只需：

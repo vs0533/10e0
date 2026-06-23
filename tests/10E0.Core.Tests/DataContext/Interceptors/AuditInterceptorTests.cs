@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Time.Testing;
 using TenE0.Core.Abstractions;
 using TenE0.Core.DataContext.Interceptors;
@@ -53,9 +54,23 @@ public sealed class AuditInterceptorTests
         return mock;
     }
 
+    /// <summary>
+    /// #95 captive-dependency 修复后，AuditInterceptor 唯一构造器是 (IServiceProvider, IHttpContextAccessor, TimeProvider)。
+    /// 测试 mock IHttpContextAccessor.HttpContext.RequestServices.GetService&lt;ICurrentUserContext&gt;()
+    /// 返回当前 mock 用户，模拟"请求 scope 内能拿到 ICurrentUserContext"的真实路径。
+    /// </summary>
     private TestDbContext CreateDbContext()
     {
-        var interceptor = new AuditInterceptor(_currentUser.Object, _timeProvider);
+        var mockSp = new Mock<IServiceProvider>();
+        mockSp.Setup(sp => sp.GetService(typeof(ICurrentUserContext))).Returns(_currentUser.Object);
+
+        var mockHttp = new Mock<HttpContext>();
+        mockHttp.Setup(h => h.RequestServices).Returns(mockSp.Object);
+
+        var mockAccessor = new Mock<IHttpContextAccessor>();
+        mockAccessor.Setup(a => a.HttpContext).Returns(mockHttp.Object);
+
+        var interceptor = new AuditInterceptor(mockSp.Object, mockAccessor.Object, _timeProvider);
         var options = new DbContextOptionsBuilder<TestDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString())
             .Options;

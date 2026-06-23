@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Http;
 using TenE0.Core.Abstractions;
 using TenE0.Core.DataContext.Interceptors;
 using TenE0.Core.Menus;
@@ -87,12 +88,21 @@ public sealed class MenuServiceCrudTests
     /// <summary>
     /// 创建同时注册了 <see cref="AuditInterceptor"/> 的 DbContextOptions。
     /// 模拟生产 <c>AddTenE0Core</c> 自动注册拦截器的行为，让 DeleteAsync 走拦截器路径（issue #95 修复）。
+    /// #95 captive-dependency 修复后 AuditInterceptor 唯一 ctor 是 (IServiceProvider, IHttpContextAccessor, TimeProvider)，
+    /// 这里 mock 出带 HttpContext.RequestServices 的 accessor，让拦截器在 SavingChanges 时能解析 ICurrentUserContext。
     /// </summary>
     private static DbContextOptions<TestDbContext> AddAuditInterceptor(
         DbContextOptions<TestDbContext> options, ICurrentUserContext currentUser, TimeProvider? timeProvider = null)
     {
+        var mockSp = new Mock<IServiceProvider>();
+        mockSp.Setup(sp => sp.GetService(typeof(ICurrentUserContext))).Returns(currentUser);
+        var mockHttp = new Mock<HttpContext>();
+        mockHttp.Setup(h => h.RequestServices).Returns(mockSp.Object);
+        var mockAccessor = new Mock<IHttpContextAccessor>();
+        mockAccessor.Setup(a => a.HttpContext).Returns(mockHttp.Object);
+        var interceptor = new AuditInterceptor(mockSp.Object, mockAccessor.Object, timeProvider ?? TimeProvider.System);
         var builder = new DbContextOptionsBuilder<TestDbContext>(options);
-        builder.AddInterceptors(new AuditInterceptor(currentUser, timeProvider ?? TimeProvider.System));
+        builder.AddInterceptors(interceptor);
         return builder.Options;
     }
 

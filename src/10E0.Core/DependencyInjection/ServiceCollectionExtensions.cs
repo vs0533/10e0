@@ -51,8 +51,13 @@ public static class ServiceCollectionExtensions
         // 业务模块在 IAppModule.ConfigureServices 中 services.Replace(...) 覆盖。
         services.TryAddScoped<IUserInfoLoader, NullUserInfoLoader>();
 
-        // 审计拦截器
-        services.AddScoped<AuditInterceptor>();
+        // 审计拦截器（Singleton）：
+        // .NET 10 中 AddDbContextFactory 默认注册 IDbContextFactory 为 Singleton，
+        // factory 创建 DbContextOptions 时会把拦截器实例嵌进去。如果 AuditInterceptor 是
+        // Scoped，它在 root scope 创建后被所有请求 scope 共享 → captive dependency。
+        // 改为 Singleton 后，AuditInterceptor 通过 IHttpContextAccessor（也是 Singleton）
+        // 在 SavingChanges 时按需解析当前请求 scope 的 ICurrentUserContext，避免共享状态。
+        services.AddSingleton<AuditInterceptor>();
 
         return services;
     }
@@ -84,9 +89,11 @@ public static class ServiceCollectionExtensions
         Action<IServiceProvider, DbContextOptionsBuilder> optionsAction)
         where TContext : DbContext
     {
-        // Scoped 生命周期：每个请求作用域拥有独立 Factory 实例，
-        // 这样可以注入 Scoped 拦截器（依赖 ICurrentUserContext → HttpContext）。
-        // .NET 10 推荐做法 — 工厂模式仍然有效，CreateDbContext() 行为不变。
+        // .NET 10 中 AddDbContextFactory 的 lifetime 默认是 Singleton（lifetime 参数同时
+        // 控制 factory 和 options 的生命周期）。传 Scoped 会被 .NET 10 DI scope 验证拦截
+        // （captive dependency：Singleton factory 不能消费 Scoped DbContextOptions）。
+        // 拦截器走 Singleton：AuditInterceptor 通过 IHttpContextAccessor 按需解析当前用户，
+        // OutboxInterceptor 只依赖 Singleton TimeProvider。
         services.AddDbContextFactory<TContext>((sp, options) =>
         {
             optionsAction(sp, options);
@@ -96,7 +103,7 @@ public static class ServiceCollectionExtensions
             // 用 GetService 避免依赖缺失时崩溃
             var outbox = sp.GetService<TenE0.Core.Events.Outbox.OutboxInterceptor>();
             if (outbox is not null) options.AddInterceptors(outbox);
-        }, lifetime: ServiceLifetime.Scoped);
+        });
 
         // 启动时初始化（IHostedLifecycleService.StartingAsync 在端口监听前完成）
         services.AddHostedService<DatabaseInitializerService<TContext>>();

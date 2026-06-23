@@ -253,8 +253,11 @@ public sealed class PermissionsExtensionsTests
     }
 
     [Fact]
-    public void AddTenE0PermissionsFromAssembly_RegistersEntityFilterContributors_AsScoped()
+    public void AddTenE0PermissionsFromAssembly_RegistersEntityFilterContributors_AsSingleton()
     {
+        // #95 captive-dependency 修复：IEntityFilterContributor 注册为 Singleton。
+        // BaseDataContext 在 OnModelCreating 期间通过 sp 解析 IEnumerable<IEntityFilterContributor>，
+        // 如果是 Scoped 会触发 "Cannot resolve scoped service from root provider"。
         var services = new ServiceCollection();
         services.AddTenE0PermissionsFromAssembly(typeof(PermissionsExtensionsTests).Assembly);
 
@@ -264,7 +267,7 @@ public sealed class PermissionsExtensionsTests
 
         contributorDescriptors.Should().Contain(d => d.ImplementationType == typeof(FakeEntityFilterContributor));
         contributorDescriptors.Should().Contain(d => d.ImplementationType == typeof(SecondFakeFilterContributor));
-        contributorDescriptors.Should().AllSatisfy(d => d.Lifetime.Should().Be(ServiceLifetime.Scoped));
+        contributorDescriptors.Should().AllSatisfy(d => d.Lifetime.Should().Be(ServiceLifetime.Singleton));
     }
 
     [Fact]

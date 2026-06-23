@@ -44,7 +44,7 @@ public sealed class AdminOutboxAuthAcceptanceTests
         using var factory = new IsolatedFactory();
         await factory.ResetAliceRolesAsync();
         var client = factory.CreateClient();
-        var aliceAuth = await LoginAsAsync(client, "alice", "111111");
+        var aliceAuth = await LoginAsAsync(client, "alice", "dev-default-password-change-me");
         client.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", aliceAuth.AccessToken);
 
@@ -68,7 +68,7 @@ public sealed class AdminOutboxAuthAcceptanceTests
         using var factory = new IsolatedFactory();
         await factory.ResetAliceRolesAsync();
         var client = factory.CreateClient();
-        var aliceAuth = await LoginAsAsync(client, "alice", "111111");
+        var aliceAuth = await LoginAsAsync(client, "alice", "dev-default-password-change-me");
         client.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", aliceAuth.AccessToken);
 
@@ -102,7 +102,7 @@ public sealed class AdminOutboxAuthAcceptanceTests
         using var factory = new IsolatedFactory();
         await factory.ResetAliceRolesAsync();
         var client = factory.CreateClient();
-        var aliceAuth = await LoginAsAsync(client, "alice", "111111");
+        var aliceAuth = await LoginAsAsync(client, "alice", "dev-default-password-change-me");
         client.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", aliceAuth.AccessToken);
 
