@@ -126,6 +126,76 @@ public sealed class DistributedPermissionCacheTests
         cacheMock.Verify(c => c.RemoveAsync("perm-role:v7:editor", It.IsAny<CancellationToken>()), Times.Once);
     }
 
+    // ── #114: schema drift 防御（升级部署场景下旧 JSON 不让缓存层持续抛异常） ──
+
+    [Fact]
+    public async Task GetRolePermissionsAsync_ReturnsNullAndEvictsBadJson_WhenStoredJsonIsMalformed()
+    {
+        // Arrange — 缓存里是损坏 JSON（升级到一半、并发写入等场景）
+        var cacheMock = new Mock<IDistributedCache>();
+        cacheMock.Setup(c => c.GetAsync("perm-role:v0:admin", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Encoding.UTF8.GetBytes("{ this is not valid json"));
+        var counter = CreateCounter(0);
+        var sut = new DistributedPermissionCache(cacheMock.Object, counter.Object, DefaultNamespace(), Options.Create(DefaultOptions));
+
+        // Act
+        var result = await sut.GetRolePermissionsAsync("admin");
+
+        // Assert — 不抛异常；返回 null（与"未命中"语义一致，PermissionEvaluator 会回源 DB）
+        result.Should().BeNull(
+            "malformed cached JSON must surface as a cache miss, not bubble a JsonException to the caller");
+        // 坏缓存必须被清除，否则下次查询仍会命中同一个坏值
+        cacheMock.Verify(
+            c => c.RemoveAsync("perm-role:v0:admin", It.IsAny<CancellationToken>()),
+            Times.Once,
+            "a malformed cache entry must be evicted so the next read does not re-throw the same JsonException");
+    }
+
+    [Fact]
+    public async Task GetRolePermissionsAsync_ReturnsNullAndEvictsBadJson_WhenStoredJsonIsLegacySchema()
+    {
+        // Arrange — 缓存里是 JSON 但根类型错配：单 string 根（合法 JSON），
+        // 反序列化成 HashSet<string> 必然失败（root kind mismatch），
+        // 在 reflection / source-generator 路径下都抛 JsonException 或 NotSupportedException。
+        var cacheMock = new Mock<IDistributedCache>();
+        cacheMock.Setup(c => c.GetAsync("perm-role:v0:admin", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Encoding.UTF8.GetBytes("\"not-a-hashset\""));
+        var counter = CreateCounter(0);
+        var sut = new DistributedPermissionCache(cacheMock.Object, counter.Object, DefaultNamespace(), Options.Create(DefaultOptions));
+
+        // Act
+        var result = await sut.GetRolePermissionsAsync("admin");
+
+        // Assert — type mismatch 必须被吞掉，调用方拿到 null，让 evaluator 走 store 重读
+        result.Should().BeNull(
+            "deserialize failures on a legacy/foreign schema must be treated as a cache miss");
+        cacheMock.Verify(
+            c => c.RemoveAsync("perm-role:v0:admin", It.IsAny<CancellationToken>()),
+            Times.Once,
+            "the bad cache entry must be evicted on the same request so subsequent requests do not re-throw");
+    }
+
+    [Fact]
+    public async Task GetRolePermissionsAsync_ReturnsNull_WhenEvictionFails()
+    {
+        // Arrange — 反序列化失败 + 清缓存也失败（如 Redis 瞬断），
+        // GetRolePermissionsAsync 必须仍返回 null，不能把清理异常冒泡到 HasAsync。
+        var cacheMock = new Mock<IDistributedCache>();
+        cacheMock.Setup(c => c.GetAsync("perm-role:v0:admin", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Encoding.UTF8.GetBytes("{ malformed"));
+        cacheMock.Setup(c => c.RemoveAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("simulated Redis transient"));
+        var counter = CreateCounter(0);
+        var sut = new DistributedPermissionCache(cacheMock.Object, counter.Object, DefaultNamespace(), Options.Create(DefaultOptions));
+
+        // Act
+        var result = await sut.GetRolePermissionsAsync("admin");
+
+        // Assert — 清理失败不阻塞回退路径
+        result.Should().BeNull(
+            "eviction failure must not prevent the caller from falling back to the store");
+    }
+
     // ── #37: 多租户 namespace 隔离 ────────────────────────────────
 
     [Fact]
