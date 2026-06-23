@@ -1,12 +1,10 @@
+using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
-using TenE0.Core.Abstractions;
 using TenE0.Core.Auth.Jwt.Storage;
-using TenE0.Core.DynamicFilters;
 using TenE0.Core.DynamicFilters.Storage;
 using TenE0.Core.Events.Outbox;
 using TenE0.Core.Menus.Storage;
 using TenE0.Core.Organizations;
-using TenE0.Core.Permissions.DataFilter;
 using TenE0.Core.Permissions.Storage;
 using TenE0.Core.Files;
 using TenE0.Core.Files.Storage;
@@ -40,12 +38,9 @@ namespace TenE0.Core.DataContext;
 /// </summary>
 public abstract class TenE0SystemDbContext<TUser, TRole>(
     DbContextOptions options,
-    ICurrentUserContext currentUser,
-    IDataAccessPolicy accessPolicy,
-    IEnumerable<IEntityFilterContributor> filterContributors,
-    IDynamicFilterProvider dynamicFilterProvider,
-    ITenantContext tenantContext)
-    : BaseDataContext(options, currentUser, accessPolicy, filterContributors, dynamicFilterProvider, tenantContext)
+    IServiceProvider serviceProvider,
+    IHttpContextAccessor httpContextAccessor)
+    : BaseDataContext(options, serviceProvider, httpContextAccessor)
     where TUser : TenE0User
     where TRole : TenE0Role
 {
@@ -86,9 +81,6 @@ public abstract class TenE0SystemDbContext<TUser, TRole>(
 /// </summary>
 public abstract class TenE0SystemDbContext(
     DbContextOptions options,
-    ICurrentUserContext currentUser,
-    IDataAccessPolicy accessPolicy,
-    IEnumerable<IEntityFilterContributor> filterContributors,
-    IDynamicFilterProvider dynamicFilterProvider,
-    ITenantContext tenantContext)
-    : TenE0SystemDbContext<TenE0User, TenE0Role>(options, currentUser, accessPolicy, filterContributors, dynamicFilterProvider, tenantContext);
+    IServiceProvider serviceProvider,
+    IHttpContextAccessor httpContextAccessor)
+    : TenE0SystemDbContext<TenE0User, TenE0Role>(options, serviceProvider, httpContextAccessor);

@@ -50,7 +50,7 @@ public sealed class CentralizedExceptionHandlingAcceptanceTests
         using var factory = new IsolatedFactory(aliceRoles: new[] { "viewer" });
         await factory.ResetAliceRolesAsync();
         var client = factory.CreateClient();
-        var aliceAuth = await LoginAsAsync(client, "alice", "111111");
+        var aliceAuth = await LoginAsAsync(client, "alice", "dev-default-password-change-me");
         client.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", aliceAuth.AccessToken);
 
@@ -87,7 +87,7 @@ public sealed class CentralizedExceptionHandlingAcceptanceTests
         using var factory = new IsolatedFactory(aliceRoles: new[] { "viewer" });
         await factory.ResetAliceRolesAsync();
         var client = factory.CreateClient();
-        var aliceAuth = await LoginAsAsync(client, "alice", "111111");
+        var aliceAuth = await LoginAsAsync(client, "alice", "dev-default-password-change-me");
         client.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", aliceAuth.AccessToken);
 
@@ -117,7 +117,7 @@ public sealed class CentralizedExceptionHandlingAcceptanceTests
         using var factory = new IsolatedFactory(aliceRoles: new[] { "viewer", "editor" });
         await factory.ResetAliceRolesAsync();
         var client = factory.CreateClient();
-        var aliceAuth = await LoginAsAsync(client, "alice", "111111");
+        var aliceAuth = await LoginAsAsync(client, "alice", "dev-default-password-change-me");
         client.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", aliceAuth.AccessToken);
 
@@ -140,7 +140,7 @@ public sealed class CentralizedExceptionHandlingAcceptanceTests
         using var factory = new IsolatedFactory(aliceRoles: Array.Empty<string>());
         await factory.ResetAliceRolesAsync();
         var client = factory.CreateClient();
-        var aliceAuth = await LoginAsAsync(client, "alice", "111111");
+        var aliceAuth = await LoginAsAsync(client, "alice", "dev-default-password-change-me");
         client.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", aliceAuth.AccessToken);
 
@@ -163,7 +163,7 @@ public sealed class CentralizedExceptionHandlingAcceptanceTests
         using var factory = new IsolatedFactory(aliceRoles: new[] { "viewer", "editor" });
         await factory.ResetAliceRolesAsync();
         var client = factory.CreateClient();
-        var aliceAuth = await LoginAsAsync(client, "alice", "111111");
+        var aliceAuth = await LoginAsAsync(client, "alice", "dev-default-password-change-me");
         client.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", aliceAuth.AccessToken);
 
@@ -201,7 +201,7 @@ public sealed class CentralizedExceptionHandlingAcceptanceTests
         using var factory = new IsolatedFactory(aliceRoles: new[] { "viewer", "editor" });
         await factory.ResetAliceRolesAsync();
         var client = factory.CreateClient();
-        var aliceAuth = await LoginAsAsync(client, "alice", "111111");
+        var aliceAuth = await LoginAsAsync(client, "alice", "dev-default-password-change-me");
         client.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", aliceAuth.AccessToken);
 

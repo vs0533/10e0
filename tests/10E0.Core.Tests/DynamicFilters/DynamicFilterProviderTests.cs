@@ -1,6 +1,8 @@
 using System.Data.Common;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using TenE0.Core.Abstractions;
 using TenE0.Core.DataContext;
@@ -29,12 +31,9 @@ public sealed class DynamicFilterProviderTests
 
     private sealed class TestDbContext(
         DbContextOptions<TestDbContext> options,
-        ICurrentUserContext currentUser,
-        IDataAccessPolicy accessPolicy,
-        IEnumerable<TenE0.Core.Permissions.DataFilter.IEntityFilterContributor> filterContributors,
-        IDynamicFilterProvider dynamicFilterProvider,
-        ITenantContext tenantContext)
-        : BaseDataContext(options, currentUser, accessPolicy, filterContributors, dynamicFilterProvider, tenantContext)
+        IServiceProvider serviceProvider,
+        IHttpContextAccessor httpContextAccessor)
+        : BaseDataContext(options, serviceProvider, httpContextAccessor)
     {
         public DbSet<OrderEntity> Orders => Set<OrderEntity>();
         public DbSet<ProductEntity> Products => Set<ProductEntity>();
@@ -56,7 +55,19 @@ public sealed class DynamicFilterProviderTests
         var user = new Mock<ICurrentUserContext>();
         user.SetupGet(c => c.RoleIds).Returns(Array.Empty<string>());
         var policy = new Mock<IDataAccessPolicy>();
-        return new TestDbContext(options, user.Object, policy.Object, [], provider, Mock.Of<ITenantContext>());
+        var tenant = new Mock<ITenantContext>();
+
+        // #95 captive-dependency 修复后 BaseDataContext ctor 改为 (options, IServiceProvider, IHttpContextAccessor)，
+        // 这里组装一个最小的 fake SP 把依赖塞进去。
+        var services = new ServiceCollection();
+        services.AddSingleton(user.Object);
+        services.AddSingleton(policy.Object);
+        services.AddSingleton(tenant.Object);
+        services.AddSingleton(provider);
+        services.AddHttpContextAccessor();
+        var sp = services.BuildServiceProvider();
+        var accessor = sp.GetRequiredService<IHttpContextAccessor>();
+        return new TestDbContext(options, sp, accessor);
     }
 
     // ── CreateDbConnection / ResolveFactory ────────────────────────────

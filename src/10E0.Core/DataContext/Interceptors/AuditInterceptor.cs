@@ -1,5 +1,7 @@
+using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.Extensions.DependencyInjection;
 using TenE0.Core.Abstractions;
 
 namespace TenE0.Core.DataContext.Interceptors;
@@ -12,11 +14,35 @@ namespace TenE0.Core.DataContext.Interceptors;
 /// 2. Delete 操作没有自动转软删除，需要手动处理
 ///
 /// TimeProvider 注入：测试可用 FakeTimeProvider 完全控制时间。
+///
+/// #95 captive-dependency 修复：注入 <see cref="IServiceProvider"/> +
+/// <see cref="IHttpContextAccessor"/>（都是 Singleton）+ <see cref="TimeProvider"/>，
+/// 在 SavingChanges 时通过 <c>HttpContext.RequestServices.GetService&lt;ICurrentUserContext&gt;()</c>
+/// 按需解析当前请求 scope 的 ICurrentUserContext —— 避免 Singleton 拦截器钉死
+/// Scoped 的 HttpCurrentUserContext。
 /// </summary>
-public sealed class AuditInterceptor(
-    ICurrentUserContext currentUser,
-    TimeProvider timeProvider) : SaveChangesInterceptor
+public sealed class AuditInterceptor : SaveChangesInterceptor
 {
+    private readonly IServiceProvider _serviceProvider;
+    private readonly IHttpContextAccessor _accessor;
+    private readonly TimeProvider _timeProvider;
+
+    /// <summary>
+    /// DI 构造（Singleton）：<see cref="IServiceProvider"/> 是所有 DI 容器都注册的内建服务，
+    /// <see cref="IHttpContextAccessor"/> 由 AddHttpContextAccessor() 注册为 Singleton，
+    /// <see cref="TimeProvider"/> 由 AddTenE0Core() 注册为 Singleton。
+    /// 三个都是 Singleton，拦截器作为 Singleton 注入它们不构成 captive dependency。
+    /// </summary>
+    public AuditInterceptor(
+        IServiceProvider serviceProvider,
+        IHttpContextAccessor httpContextAccessor,
+        TimeProvider timeProvider)
+    {
+        _serviceProvider = serviceProvider;
+        _accessor = httpContextAccessor;
+        _timeProvider = timeProvider;
+    }
+
     public override InterceptionResult<int> SavingChanges(
         DbContextEventData eventData,
         InterceptionResult<int> result)
@@ -36,10 +62,28 @@ public sealed class AuditInterceptor(
         return ValueTask.FromResult(result);
     }
 
+    /// <summary>
+    /// 解析当前 actor：从当前请求 scope 的 HttpContext.RequestServices 取 ICurrentUserContext。
+    /// 无 HTTP 上下文（启动期 Seeder / OutboxRelay 后台 Worker）→ actor = null（系统上下文）。
+    /// 注意：不要回退到 _serviceProvider（root scope）拿 ICurrentUserContext，那会触发
+    /// "Cannot resolve scoped service from root provider"。
+    /// </summary>
+    private string? ResolveActor()
+    {
+        var http = _accessor.HttpContext;
+        if (http is null)
+        {
+            // 启动期 Seeder / 后台 Worker：无 HTTP 上下文，actor 留 null。
+            return null;
+        }
+        var user = http.RequestServices.GetService<ICurrentUserContext>();
+        return user is { IsAuthenticated: true } ? user.UserCode : null;
+    }
+
     private void ApplyAudit(DbContext context)
     {
-        var now = timeProvider.GetUtcNow();
-        var actor = currentUser.IsAuthenticated ? currentUser.UserCode : null;
+        var now = _timeProvider.GetUtcNow();
+        var actor = ResolveActor();
 
         foreach (var entry in context.ChangeTracker.Entries())
         {
