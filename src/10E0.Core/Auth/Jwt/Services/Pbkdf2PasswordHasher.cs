@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Text;
 
 namespace TenE0.Core.Auth.Jwt.Services;
 
@@ -79,11 +80,33 @@ public sealed class Pbkdf2PasswordHasher : IPasswordHasher
         if (buffer.Length != 1 + SaltSize + KeySize || buffer[0] != 1)
             return false;
 
-        var salt = buffer.AsSpan(1, SaltSize).ToArray();
-        var storedKey = buffer.AsSpan(1 + SaltSize, KeySize).ToArray();
-        var computed = Rfc2898DeriveBytes.Pbkdf2(password, salt, Iterations, Algorithm, KeySize);
+        // #103: 避免 .ToArray() 复制 salt/storedKey —— 直接用 ReadOnlySpan 切片。
+        // PBKDF2 的纯 span 重载需要 ReadOnlySpan<byte> password，password 转 UTF8 字节
+        // 走 ArrayPool 租借避免每次堆分配（password 通常 <128 字节，租借开销极低）。
+        var salt = buffer.AsSpan(1, SaltSize);
+        var storedKey = buffer.AsSpan(1 + SaltSize, KeySize);
 
-        // 固定时间比较，避免 timing attack
+        var passwordBytes = System.Buffers.ArrayPool<byte>.Shared.Rent(Encoding.UTF8.GetMaxByteCount(password.Length));
+        Span<byte> computed = stackalloc byte[KeySize];
+        int passwordByteCount;
+        try
+        {
+            passwordByteCount = Encoding.UTF8.GetBytes(password, passwordBytes);
+            // void 重载签名：Pbkdf2(ReadOnlySpan password, ReadOnlySpan salt, Span destination, int iterations, HashAlgorithmName)
+            Rfc2898DeriveBytes.Pbkdf2(
+                passwordBytes.AsSpan(0, passwordByteCount),
+                salt,
+                computed,
+                Iterations,
+                Algorithm);
+        }
+        finally
+        {
+            System.Buffers.ArrayPool<byte>.Shared.Return(passwordBytes);
+        }
+
+        // 固定时间比较，避免 timing attack。FixedTimeEquals 接受 ReadOnlySpan<byte>，
+        // 与 computed (Span) 和 storedKey (ReadOnlySpan) 都兼容，无需 .ToArray()。
         return CryptographicOperations.FixedTimeEquals(computed, storedKey);
     }
 }
