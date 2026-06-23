@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using SixLabors.Fonts;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.Drawing.Processing;
@@ -92,12 +93,21 @@ public class ImageProcessor : IImageProcessor
 /// </summary>
 internal static class ImageProcessingExtensions
 {
+    // #104: SystemFonts.CreateFont 每次扫描系统字体目录 + 解析字体文件，单次 5-50ms。
+    // 用 ConcurrentDictionary 缓存 name+size+style → Font 实例；同进程所有请求共享。
+    // static 字段跨 ImageProcessor 实例共享，与 CLAUDE.md "MultiLevelCache._setnxGate 必须 static" 原则一致。
+    private static readonly ConcurrentDictionary<string, Font> _fontCache = new();
+
     public static IImageProcessingContext ApplyWatermark(this IImageProcessingContext context, string text)
     {
         const int fontSize = 24;
         const int padding = 10;
+        const string fontName = "Arial";
+        const FontStyle fontStyle = FontStyle.Regular;
 
-        var font = SystemFonts.CreateFont("Arial", fontSize, FontStyle.Regular);
+        // cache key = "Arial|24|Regular" —— 三个维度都决定 Font 是否可复用
+        var cacheKey = $"{fontName}|{fontSize}|{fontStyle}";
+        var font = _fontCache.GetOrAdd(cacheKey, _ => SystemFonts.CreateFont(fontName, fontSize, fontStyle));
 
         // 获取处理上下文的尺寸（通过绘制测量）
         var textSize = TextMeasurer.MeasureSize(text, new TextOptions(font));

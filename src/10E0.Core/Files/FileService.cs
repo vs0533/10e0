@@ -77,8 +77,9 @@ public class FileService<TContext>(
     {
         if (options != null)
         {
-            // 处理图片
-            var processResult = await imageProcessor.ProcessAsync(stream, options, ct);
+            // #104: ImageProcessResult 实现 IDisposable，必须 using 包裹让 ProcessedStream 自动释放，
+            // 否则 MemoryStream 没人持有 → LOH 碎片。
+            using var processResult = await imageProcessor.ProcessAsync(stream, options, ct);
             if (!processResult.Success)
             {
                 throw new InvalidOperationException($"图片处理失败: {processResult.ErrorMessage}");
@@ -91,7 +92,8 @@ public class FileService<TContext>(
             if (options.GenerateThumbnail)
             {
                 stream.Position = 0;
-                var thumbnailStream = await imageProcessor.GenerateThumbnailAsync(stream, options.ThumbnailWidth, options.ThumbnailHeight, ct);
+                // #104: GenerateThumbnailAsync 返回的 Stream 由调用方 Dispose（用 using 包裹）
+                using var thumbnailStream = await imageProcessor.GenerateThumbnailAsync(stream, options.ThumbnailWidth, options.ThumbnailHeight, ct);
                 // 缩略图文件名：原名 + "_thumb" 后缀（避免 thumb.jpg → thumb_thumb.jpg 的前缀重复，
                 // 也让缩略图与原图在文件列表中相邻排序）。
                 var thumbnailName = $"{Path.GetFileNameWithoutExtension(fileName)}_thumb{Path.GetExtension(fileName)}";
