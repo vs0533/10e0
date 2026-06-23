@@ -560,4 +560,114 @@ public sealed class EntityServiceUpdateTests
         saved.Should().NotBeNull();
         saved!.Code.Should().Be("NEW_CODE");
     }
+
+    // ══════════════════════════════════════════════════════════════
+    //  #110: UpdateAsync 只 Include PostedNavigations 中 opt-in 的 M:N
+    // ══════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// #110 回归守护：UpdateAsync 加载实体时只 Include 客户端 opt-in 的 skip navigation，
+    /// 而非全部 M:N 集合。旧实现 Include 所有 skip nav → 每个 M:N 生成 JOIN → 隐藏 N+1。
+    /// 验证方式：实体有两个 skip nav（Tags、Categories），只 opt-in Tags，
+    /// 断言 Categories 集合未被加载（Collection.IsLoaded == false）。
+    /// </summary>
+    [Fact]
+    public async Task UpdateAsync_PostedNavigations_OnlyIncludesOptInNav()
+    {
+        // SQLite 关系型 provider 才能准确反映 Include 加载语义（InMemory 会贪婪加载全部）
+        var connection = new Microsoft.Data.Sqlite.SqliteConnection("DataSource=:memory:");
+        await connection.OpenAsync();
+        try
+        {
+            var options = new DbContextOptionsBuilder<MultiNavDbContext>()
+                .UseSqlite(connection)
+                .Options;
+
+            await using (var seedCtx = new MultiNavDbContext(options))
+            {
+                await seedCtx.Database.EnsureCreatedAsync();
+                seedCtx.Items.Add(new MultiNavItem
+                {
+                    Id = "1",
+                    Name = "Original",
+                    Tags = [new NavTag { Id = "t1", Name = "tag1" }],
+                    Sections = [new NavSection { Id = "s1", Name = "sec1" }],
+                });
+                await seedCtx.SaveChangesAsync();
+            }
+
+            await using var context = new MultiNavDbContext(options);
+            var errs = new Errs();
+            var permissionMock = CreatePermissionMock();
+            var sut = new EntitySvc(errs, permissionMock.Object);
+
+            // 只 opt-in Tags，不 opt-in Sections
+            var updated = new MultiNavItem { Id = "1", Name = "Updated" };
+            var opts = new EntityWriteOptions
+            {
+                PostedNavigations = new HashSet<string> { nameof(MultiNavItem.Tags) },
+            };
+
+            var result = await sut.UpdateAsync(context, updated, opts);
+
+            result.Should().BeTrue();
+
+            // 验证 Tags 被加载（opt-in 的），Sections 未被加载（未 opt-in）
+            // EntityService.UpdateAsync 内部已加载 dbEntity（tracked），从 context 取回它检查导航加载状态
+            var tracked = context.Items.First(e => e.Id == "1");
+            var tagsEntry = context.Entry(tracked).Collection(e => e.Tags);
+            var sectionsEntry = context.Entry(tracked).Collection(e => e.Sections);
+
+            tagsEntry.IsLoaded.Should().BeTrue("Tags 在 PostedNavigations 中，应被 Include 加载");
+            sectionsEntry.IsLoaded.Should().BeFalse(
+                "Sections 不在 PostedNavigations 中，不应 Include 加载（#110：避免对未 opt-in 的 M:N 生成 JOIN）");
+        }
+        finally
+        {
+            await connection.CloseAsync();
+            await connection.DisposeAsync();
+        }
+    }
+
+    // #110: 带两个 skip navigation 的测试实体
+    private sealed class NavTag : IBaseEntity
+    {
+        public string Id { get; set; } = "";
+        public string Name { get; set; } = "";
+        public ICollection<MultiNavItem> Items { get; set; } = [];
+    }
+
+    private sealed class NavSection : IBaseEntity
+    {
+        public string Id { get; set; } = "";
+        public string Name { get; set; } = "";
+        public ICollection<MultiNavItem> Items { get; set; } = [];
+    }
+
+    private sealed class MultiNavItem : IBaseEntity
+    {
+        public string Id { get; set; } = "";
+        public string Name { get; set; } = "";
+        public ICollection<NavTag> Tags { get; set; } = [];
+        public ICollection<NavSection> Sections { get; set; } = [];
+    }
+
+    private sealed class MultiNavDbContext(DbContextOptions<MultiNavDbContext> options) : DbContext(options)
+    {
+        public DbSet<MultiNavItem> Items => Set<MultiNavItem>();
+        public DbSet<NavTag> Tags => Set<NavTag>();
+        public DbSet<NavSection> Sections => Set<NavSection>();
+
+        protected override void OnModelCreating(ModelBuilder modelBuilder)
+        {
+            modelBuilder.Entity<MultiNavItem>(entity =>
+            {
+                entity.HasKey(e => e.Id);
+                entity.HasMany(e => e.Tags).WithMany(e => e.Items);
+                entity.HasMany(e => e.Sections).WithMany(e => e.Items);
+            });
+            modelBuilder.Entity<NavTag>(e => e.HasKey(x => x.Id));
+            modelBuilder.Entity<NavSection>(e => e.HasKey(x => x.Id));
+        }
+    }
 }
