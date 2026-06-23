@@ -282,3 +282,15 @@ jobs:
               body: body + warning
             });
             core.info('Posted comment fallback (verdict=' + verdict + ', counts_as_approval=false)');
+
+      # 让 job 状态反映 verdict：REQUEST_CHANGES 时 job 失败，
+      # 这样 branch protection（required status check）才能真正拦住合并。
+      #
+      # 之前 Parse verdict step 正确解析了 VERDICT=REQUEST_CHANGES 并写入 GITHUB_OUTPUT，
+      # 但没有任何 step 据此让 job 失败 → 无论 verdict 如何，job 永远 success（pass），
+      # REQUEST_CHANGES 形同虚设（PR #166 review 给出 REQUEST_CHANGES + 🔴Critical 却被标 pass）。
+      - name: Enforce verdict
+        if: always() && steps.parse.outputs.verdict == 'REQUEST_CHANGES'
+        run: |
+          echo "::error::Code Review verdict: REQUEST_CHANGES（存在 🔴 Critical 必须修复）。详见 PR 评论。"
+          exit 1

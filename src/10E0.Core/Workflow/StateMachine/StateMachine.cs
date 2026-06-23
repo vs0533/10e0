@@ -70,19 +70,20 @@ public sealed class StateMachine<TState, TAction>
         return (target, transition);
     }
 
-    /// <summary>查询 (state, action) 是否是合法转换（不实际触发）。</summary>
+    /// <summary>查询 (state, action) 是否是合法转换（不实际触发）。精确转换优先，FromAny 兜底。</summary>
     public bool CanFire(TState currentState, TAction action)
         => _definition.ActionTransitions.ContainsKey((currentState, action))
-           || _definition.ActionTransitions.ContainsKey((default!, action)); // FromAny 注册
+           || _definition.ActionTransitionsFromAny.ContainsKey(action);
 
     private TState ResolveTarget(TState from, TAction action)
     {
+        // 🟡 review 修复：精确转换优先，FromAny 兜底，两者独立存储互不覆盖
         // 1. 精确 (from, action) 命中
         if (_definition.ActionTransitions.TryGetValue((from, action), out var target))
             return target;
 
-        // 2. FromAny 注册（key 的 from 为 default!）
-        if (_definition.ActionTransitions.TryGetValue((default!, action), out var anyTarget))
+        // 2. FromAny 注册（任意状态可触发）
+        if (_definition.ActionTransitionsFromAny.TryGetValue(action, out var anyTarget))
             return anyTarget;
 
         throw new InvalidTransitionException<TState, TAction>(from, action);
@@ -90,14 +91,14 @@ public sealed class StateMachine<TState, TAction>
 
     private async Task EvaluateGuardsAsync(TState from, TAction action, object? entity, CancellationToken ct)
     {
-        // Guard 按 (From, Action) 查找；FromAny 注册的 Guard 键为 (default!, action)，
-        // 命中条件是精确键缺失且该 action 是 FromAny 注册的。
+        // 🟡 review 修复：Guard 查找与 ResolveTarget 一致 —— 精确转换走精确 Guard，
+        // FromAny 转换走 FromAny Guard，独立字典。
+        // 精确转换存在时只评估精确 Guard；否则若是 FromAny 注册则评估 FromAny Guard。
         IReadOnlyList<IGuard>? guards = null;
-        var isFromAny = _definition.FromAnyRegistered.Contains(action);
-        if (isFromAny)
-            _definition.Guards.TryGetValue((default!, action), out guards);
-        else
+        if (_definition.ActionTransitions.ContainsKey((from, action)))
             _definition.Guards.TryGetValue((from, action), out guards);
+        else if (_definition.ActionTransitionsFromAny.ContainsKey(action))
+            _definition.GuardsFromAny.TryGetValue(action, out guards);
 
         if (guards is null || guards.Count == 0)
             return;

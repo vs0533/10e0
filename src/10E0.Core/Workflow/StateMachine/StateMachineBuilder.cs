@@ -25,9 +25,11 @@ public sealed class StateMachineBuilder<TState, TAction>
 {
     private readonly StateMachineDefinition<TState, TAction> _def = new();
     private readonly Dictionary<(TState From, TAction Action), TState> _actionTransitions = [];
+    // 🟡 review 修复：FromAny 转换独立存储，避免与精确转换的 (default!, action) 键冲突
+    private readonly Dictionary<TAction, TState> _actionTransitionsFromAny = [];
     private readonly Dictionary<TState, HashSet<TState>> _allowed = [];
     private readonly Dictionary<(TState From, TAction Action), List<IGuard>> _guards = [];
-    private readonly HashSet<TAction> _fromAnyActions = [];
+    private readonly Dictionary<TAction, List<IGuard>> _guardsFromAny = [];
     private bool _built;
 
     internal StateMachineBuilder(TState initialState)
@@ -43,6 +45,11 @@ public sealed class StateMachineBuilder<TState, TAction>
     {
         _actionTransitions[(from, action)] = to;
         AddAllowed(from, to);
+    }
+
+    internal void AddActionTransitionFromAny(TAction action, TState to)
+    {
+        _actionTransitionsFromAny[action] = to;
     }
 
     internal void AddAllowed(TState from, params TState[] targets)
@@ -65,7 +72,15 @@ public sealed class StateMachineBuilder<TState, TAction>
         list.Add(guard);
     }
 
-    internal void MarkFromAny(TAction action) => _fromAnyActions.Add(action);
+    internal void AddGuardFromAny(TAction action, IGuard guard)
+    {
+        if (!_guardsFromAny.TryGetValue(action, out var list))
+        {
+            list = [];
+            _guardsFromAny[action] = list;
+        }
+        list.Add(guard);
+    }
 
     /// <summary>冻结定义并返回。重复调用返回同一实例。</summary>
     public StateMachineDefinition<TState, TAction> Build()
@@ -73,11 +88,13 @@ public sealed class StateMachineBuilder<TState, TAction>
         if (_built) return _def;
 
         _def.ActionTransitions = _actionTransitions.ToFrozenDictionary();
+        _def.ActionTransitionsFromAny = _actionTransitionsFromAny.ToFrozenDictionary();
         _def.AllowedTransitions = _allowed.ToFrozenDictionary(
             kv => kv.Key, kv => kv.Value.ToFrozenSet());
         _def.Guards = _guards.ToFrozenDictionary(
             kv => kv.Key, kv => (IReadOnlyList<IGuard>)kv.Value.ToList());
-        _def.FromAnyRegistered = _fromAnyActions.ToFrozenSet();
+        _def.GuardsFromAny = _guardsFromAny.ToFrozenDictionary(
+            kv => kv.Key, kv => (IReadOnlyList<IGuard>)kv.Value.ToList());
         _def.Freeze();
         _built = true;
         return _def;
@@ -123,12 +140,8 @@ public sealed class StateMachineBuilder<TState, TAction>
             _to = to;
             if (_fromAny)
             {
-                // FromAny 无法枚举所有状态（泛型 TState 无"全集"概念），
-                // 故只记录动作转换 + Allowed 白名单（运行时按 (anyState, action) 解析 → to）。
-                // Guard 用 (default!, action) 键，运行时回退查找。
-                _owner.AddActionTransition(default!, _action, to);
-                _owner.AddAllowed(default!, to);
-                _owner.MarkFromAny(_action);
+                // 🟡 review 修复：FromAny 转换存独立字典，不与精确转换混淆
+                _owner.AddActionTransitionFromAny(_action, to);
             }
             else if (_from is not null)
             {
@@ -139,7 +152,7 @@ public sealed class StateMachineBuilder<TState, TAction>
                 throw new InvalidOperationException(
                     "转换未声明起始状态：先调用 Transit(from) 或 FromAny()，再调用 To(to)。");
             }
-            return new GuardBuilder(_owner, _fromAny ? default! : _from!, _action);
+            return new GuardBuilder(_owner, _fromAny, _fromAny ? default! : _from!, _action);
         }
     }
 
@@ -147,12 +160,14 @@ public sealed class StateMachineBuilder<TState, TAction>
     public sealed class GuardBuilder
     {
         private readonly StateMachineBuilder<TState, TAction> _owner;
+        private readonly bool _isFromAny;
         private readonly TState _from;
         private readonly TAction _action;
 
-        internal GuardBuilder(StateMachineBuilder<TState, TAction> owner, TState from, TAction action)
+        internal GuardBuilder(StateMachineBuilder<TState, TAction> owner, bool isFromAny, TState from, TAction action)
         {
             _owner = owner;
+            _isFromAny = isFromAny;
             _from = from;
             _action = action;
         }
@@ -161,7 +176,9 @@ public sealed class StateMachineBuilder<TState, TAction>
         public GuardBuilder Guard<TEntity>(GuardDelegate<TEntity> predicate, string reason)
         {
             ArgumentNullException.ThrowIfNull(predicate);
-            _owner.AddGuard(_from, _action, new SyncGuard<TEntity>(predicate, reason));
+            var guard = new SyncGuard<TEntity>(predicate, reason);
+            if (_isFromAny) _owner.AddGuardFromAny(_action, guard);
+            else _owner.AddGuard(_from, _action, guard);
             return this;
         }
 
@@ -169,7 +186,9 @@ public sealed class StateMachineBuilder<TState, TAction>
         public GuardBuilder GuardAsync<TEntity>(GuardAsyncDelegate<TEntity> predicate, string reason)
         {
             ArgumentNullException.ThrowIfNull(predicate);
-            _owner.AddGuard(_from, _action, new AsyncGuard<TEntity>(predicate, reason));
+            var guard = new AsyncGuard<TEntity>(predicate, reason);
+            if (_isFromAny) _owner.AddGuardFromAny(_action, guard);
+            else _owner.AddGuard(_from, _action, guard);
             return this;
         }
 

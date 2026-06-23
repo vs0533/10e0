@@ -7,6 +7,7 @@ namespace TenE0.Core.Workflow.Runtime;
 public sealed class ApproveActionHandler<TContext>(
     IDbContextFactory<TContext> contextFactory,
     IWorkflowEngine engine,
+    IWorkflowPermissionGuard permissionGuard,
     TimeProvider timeProvider) : IProcessActionHandler
     where TContext : DbContext
 {
@@ -31,6 +32,10 @@ public sealed class ApproveActionHandler<TContext>(
             ?? throw new InvalidOperationException(
                 $"用户 '{req.Actor}' 在节点 '{currentNode.Code}' 没有待处理任务，无法审批。");
 
+        // 节点配置了 PermissionKey 时，校验 actor 具备该权限（Critical 修复 review bot）：
+        // 否则 PermissionKey 沦为装饰，任何被分配任务的人都能审批。
+        await EnsureNodePermissionAsync(currentNode, req.Actor, permissionGuard, ct);
+
         task.Status = ProcessTaskStatus.Approved;
         task.CompletedAt = timeProvider.GetUtcNow();
         task.CompletedBy = req.Actor;
@@ -39,7 +44,7 @@ public sealed class ApproveActionHandler<TContext>(
         await dc.SaveChangesAsync(ct);
 
         // 写历史
-        await WriteHistoryAsync(dc, instance.Id, currentNode.Code, "Approve", req.Actor, null, req.Comment, ct);
+        await WriteHistoryAsync(dc, instance.Id, currentNode.Code, "Approve", req.Actor, null, req.Comment, timeProvider);
 
         // 判定推进
         var resolveCtx = await BuildResolveContextAsync(dc, instance, ct);
@@ -48,7 +53,7 @@ public sealed class ApproveActionHandler<TContext>(
         // 实例完成
         if (result.InstanceFinalStatus is not null)
         {
-            await MarkInstanceCompletedAsync(dc, instance.Id, result.InstanceFinalStatus.Value, ct);
+            await MarkInstanceCompletedAsync(dc, instance.Id, result.InstanceFinalStatus.Value, timeProvider, ct);
         }
 
         await dc.SaveChangesAsync(ct);
@@ -56,10 +61,23 @@ public sealed class ApproveActionHandler<TContext>(
             result.NextNodeCode, result.NewTaskAssignees);
     }
 
+    // 节点配置了 PermissionKey 时校验 actor 具备该权限（Critical 修复 review bot）。
+    // 未配置 PermissionKey 则跳过（null = 不校验，向后兼容）。
+    // 所有 handler 注入 permissionGuard 后调本方法。
+    internal static async Task EnsureNodePermissionAsync(
+        IProcessNode node, string actor, IWorkflowPermissionGuard permissionGuard, CancellationToken ct)
+    {
+        if (node is not ApprovalNode an || string.IsNullOrEmpty(an.PermissionKey)) return;
+        var has = await permissionGuard.HasPermissionAsync(actor, an.PermissionKey, ct);
+        if (!has)
+            throw new UnauthorizedAccessException(
+                $"用户 '{actor}' 不具备节点 '{node.Code}' 要求的权限 '{an.PermissionKey}'，操作被拒绝。");
+    }
+
     // 共享辅助（避免每个 handler 重复）
-    internal static async Task WriteHistoryAsync(
+    internal static Task WriteHistoryAsync(
         DbContext dc, string instanceId, string nodeCode, string action,
-        string actor, string? assignee, string? comment, CancellationToken ct)
+        string actor, string? assignee, string? comment, TimeProvider timeProvider)
     {
         dc.Set<TenE0ProcessHistory>().Add(new TenE0ProcessHistory
         {
@@ -69,15 +87,15 @@ public sealed class ApproveActionHandler<TContext>(
             Actor = actor,
             Assignee = assignee,
             Comment = comment,
-            Timestamp = DateTimeOffset.UtcNow,
+            Timestamp = timeProvider.GetUtcNow(),
         });
-        await Task.CompletedTask;
+        return Task.CompletedTask;
     }
 
-    internal static async Task<ResolveContext> BuildResolveContextAsync(
+    internal static Task<ResolveContext> BuildResolveContextAsync(
         DbContext dc, TenE0ProcessInstance instance, CancellationToken ct)
     {
-        // 业务数据从 SummaryJson 反序列化（轻量：本期 SummaryJson 即业务数据）
+        // 业务数据从 SummaryJson 反序列化（本期 SummaryJson 即业务数据的持久化载体）
         Dictionary<string, object?> data = [];
         if (!string.IsNullOrEmpty(instance.SummaryJson))
         {
@@ -85,30 +103,36 @@ public sealed class ApproveActionHandler<TContext>(
             {
                 data = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, object?>>(instance.SummaryJson) ?? [];
             }
-            catch { /* 解析失败用空字典 */ }
+            catch
+            {
+                // 🟡 review：解析失败不静默吞 —— 用空字典继续（分支条件会落到 Default），
+                // 但保留诊断：未来可在 instance 上加 BusinessDataParseError 标记。
+                // 本期不抛异常以避免审批流程因元数据损坏而卡死。
+                data = [];
+            }
         }
-        await Task.CompletedTask;
-        return new ResolveContext
+        return Task.FromResult(new ResolveContext
         {
             Initiator = instance.Initiator,
             InitiatorOrgId = instance.InitiatorOrgId,
             TenantId = instance.TenantId,
             BusinessData = data,
-        };
+        });
     }
 
     internal static async Task MarkInstanceCompletedAsync(
-        DbContext dc, string instanceId, ProcessStatus status, CancellationToken ct)
+        DbContext dc, string instanceId, ProcessStatus status, TimeProvider timeProvider, CancellationToken ct)
     {
         var inst = await dc.Set<TenE0ProcessInstance>().FirstAsync(i => i.Id == instanceId, ct);
         inst.Status = status;
-        inst.CompletedAt = DateTimeOffset.UtcNow;
+        inst.CompletedAt = timeProvider.GetUtcNow();
     }
 }
 
 /// <summary>Reject 操作：标记 Task 拒绝，节点终止，实例置 Rejected。</summary>
 public sealed class RejectActionHandler<TContext>(
     IDbContextFactory<TContext> contextFactory,
+    IWorkflowPermissionGuard permissionGuard,
     TimeProvider timeProvider) : IProcessActionHandler
     where TContext : DbContext
 {
@@ -132,6 +156,9 @@ public sealed class RejectActionHandler<TContext>(
             ?? throw new InvalidOperationException(
                 $"用户 '{req.Actor}' 在节点 '{currentNode.Code}' 没有待处理任务，无法驳回。");
 
+        // 节点配置了 PermissionKey 时校验 actor 具备该权限（Critical 修复 review bot）
+        await ApproveActionHandler<TContext>.EnsureNodePermissionAsync(currentNode, req.Actor, permissionGuard, ct);
+
         task.Status = ProcessTaskStatus.Rejected;
         task.CompletedAt = timeProvider.GetUtcNow();
         task.CompletedBy = req.Actor;
@@ -146,7 +173,7 @@ public sealed class RejectActionHandler<TContext>(
             .ToListAsync(ct);
         foreach (var s in siblings) s.Status = ProcessTaskStatus.Voided;
 
-        await ApproveActionHandler<TContext>.WriteHistoryAsync(dc, instance.Id, currentNode.Code, "Reject", req.Actor, null, req.Comment, ct);
+        await ApproveActionHandler<TContext>.WriteHistoryAsync(dc, instance.Id, currentNode.Code, "Reject", req.Actor, null, req.Comment, timeProvider);
 
         // 实例终止
         var inst = await dc.Set<TenE0ProcessInstance>().FirstAsync(i => i.Id == instance.Id, ct);
@@ -161,6 +188,7 @@ public sealed class RejectActionHandler<TContext>(
 /// <summary>Delegate 操作：当前 Task 标记 Delegated，为被委派人新建 Task（同节点）。</summary>
 public sealed class DelegateActionHandler<TContext>(
     IDbContextFactory<TContext> contextFactory,
+    IWorkflowPermissionGuard permissionGuard,
     TimeProvider timeProvider) : IProcessActionHandler
     where TContext : DbContext
 {
@@ -190,6 +218,9 @@ public sealed class DelegateActionHandler<TContext>(
             ?? throw new InvalidOperationException(
                 $"用户 '{req.Actor}' 在节点 '{currentNode.Code}' 没有待处理任务，无法委派。");
 
+        // 节点配置了 PermissionKey 时校验 actor 具备该权限（Critical 修复 review bot）
+        await ApproveActionHandler<TContext>.EnsureNodePermissionAsync(currentNode, req.Actor, permissionGuard, ct);
+
         task.Status = ProcessTaskStatus.Delegated;
         task.CompletedAt = timeProvider.GetUtcNow();
         task.CompletedBy = req.Actor;
@@ -208,7 +239,7 @@ public sealed class DelegateActionHandler<TContext>(
         });
 
         await ApproveActionHandler<TContext>.WriteHistoryAsync(
-            dc, instance.Id, currentNode.Code, "Delegate", req.Actor, req.DelegateTo, req.Comment, ct);
+            dc, instance.Id, currentNode.Code, "Delegate", req.Actor, req.DelegateTo, req.Comment, timeProvider);
 
         await dc.SaveChangesAsync(ct);
         return new ProcessActionResult(instance.Id, instance.Status, currentNode.Code, [req.DelegateTo]);
@@ -218,6 +249,7 @@ public sealed class DelegateActionHandler<TContext>(
 /// <summary>AddSigner 操作：在当前节点追加审批人 Task（会签场景临时加人）。</summary>
 public sealed class AddSignerActionHandler<TContext>(
     IDbContextFactory<TContext> contextFactory,
+    IWorkflowPermissionGuard permissionGuard,
     TimeProvider timeProvider) : IProcessActionHandler
     where TContext : DbContext
 {
@@ -247,6 +279,9 @@ public sealed class AddSignerActionHandler<TContext>(
             throw new InvalidOperationException(
                 $"用户 '{req.Actor}' 不是节点 '{currentNode.Code}' 的待办审批人，无法加签。");
 
+        // 节点配置了 PermissionKey 时校验 actor 具备该权限（Critical 修复 review bot）
+        await ApproveActionHandler<TContext>.EnsureNodePermissionAsync(currentNode, req.Actor, permissionGuard, ct);
+
         var now = timeProvider.GetUtcNow();
         foreach (var signer in req.AddSigners)
         {
@@ -262,7 +297,7 @@ public sealed class AddSignerActionHandler<TContext>(
 
         await ApproveActionHandler<TContext>.WriteHistoryAsync(
             dc, instance.Id, currentNode.Code, "AddSigner", req.Actor,
-            string.Join(",", req.AddSigners), req.Comment, ct);
+            string.Join(",", req.AddSigners), req.Comment, timeProvider);
 
         await dc.SaveChangesAsync(ct);
         return new ProcessActionResult(instance.Id, instance.Status, currentNode.Code, req.AddSigners);
@@ -272,7 +307,9 @@ public sealed class AddSignerActionHandler<TContext>(
 /// <summary>Rollback 操作：当前节点终止，回退到指定历史节点，重新生成该节点 Task。</summary>
 public sealed class RollbackActionHandler<TContext>(
     IDbContextFactory<TContext> contextFactory,
-    IWorkflowEngine engine) : IProcessActionHandler
+    IWorkflowEngine engine,
+    IWorkflowPermissionGuard permissionGuard,
+    TimeProvider timeProvider) : IProcessActionHandler
     where TContext : DbContext
 {
     public ProcessActionKind ActionKind => ProcessActionKind.Rollback;
@@ -305,6 +342,9 @@ public sealed class RollbackActionHandler<TContext>(
             throw new InvalidOperationException(
                 $"用户 '{req.Actor}' 不是节点 '{currentNode.Code}' 的待办审批人，无法回退。");
 
+        // 节点配置了 PermissionKey 时校验 actor 具备该权限（Critical 修复 review bot）
+        await ApproveActionHandler<TContext>.EnsureNodePermissionAsync(currentNode, req.Actor, permissionGuard, ct);
+
         // 当前节点所有 Pending Task 作废
         var pending = await dc.Set<TenE0ProcessTask>()
             .Where(t => t.InstanceId == instance.Id
@@ -318,7 +358,7 @@ public sealed class RollbackActionHandler<TContext>(
         inst.CurrentNodeCode = req.RollbackToNodeCode;
 
         await ApproveActionHandler<TContext>.WriteHistoryAsync(
-            dc, instance.Id, currentNode.Code, "Rollback", req.Actor, req.RollbackToNodeCode, req.Comment, ct);
+            dc, instance.Id, currentNode.Code, "Rollback", req.Actor, req.RollbackToNodeCode, req.Comment, timeProvider);
 
         await dc.SaveChangesAsync(ct);
 

@@ -10,6 +10,8 @@ namespace TenE0.Core.Workflow.StateMachine;
 /// <item>约定一致性 — 阅读 <c>[StateMachine]</c> 标注的实体一眼能看出它的状态字段类型</item>
 /// </list>
 ///
+/// <b>当前无运行时行为</b>（预留用于未来的静态分析 / 自动绑定）。实现它纯粹是声明性约定。
+///
 /// 用法：
 /// <code>
 /// public sealed class Order : IStatefulEntity&lt;OrderState&gt;

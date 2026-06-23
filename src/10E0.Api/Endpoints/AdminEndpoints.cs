@@ -262,13 +262,31 @@ internal static class AdminEndpoints
         });
 
         // 发布新版本（接收完整定义 JSON）
+        // Critical 修复（review bot）：反序列化 + 调 ProcessDefinitionValidator 校验后再落库，
+        // 否则 admin 能发布畸形流程（缺 Start / 悬空 NextNodeCode / 环路 / 缺 AssigneePolicy），
+        // 运行时引擎反序列化/路由时才崩溃。
         app.MapPost("/admin/workflow/definitions", [RequireAdmin] async (
             PublishDefinitionDto dto,
             IProcessDefinitionStore store,
+            IProcessDefinitionValidator validator,
             CancellationToken ct) =>
         {
             try
             {
+                // 1. 反序列化节点图（校验 JSON 结构合法）
+                IReadOnlyList<IProcessNode> nodes;
+                try
+                {
+                    nodes = ProcessNodeSerializer.DeserializeNodes(dto.NodesJson);
+                }
+                catch (Exception ex)
+                {
+                    return Results.BadRequest(new { error = "NodesJson 反序列化失败", detail = ex.Message });
+                }
+
+                // 2. 校验流程图合法性（唯一 Start / 至少 End / 无悬空 / 无环 / 审批节点必有 AssigneePolicy）
+                validator.ValidateOrThrow(nodes, dto.StartNodeCode);
+
                 var def = new TenE0ProcessDefinition
                 {
                     Code = dto.Code,
@@ -279,6 +297,8 @@ internal static class AdminEndpoints
                     NodesJson = dto.NodesJson,
                     EdgesJson = dto.EdgesJson ?? "[]",
                     TenantId = dto.TenantId ?? "",
+                    // 新发布默认启用（review 🟡7：IsEnabled 不应信任调用方传入）
+                    IsEnabled = true,
                 };
                 var published = await store.PublishAsync(def, ct);
                 return Results.Ok(new { published.Id, published.Code, published.Version });

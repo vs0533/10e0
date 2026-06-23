@@ -38,9 +38,19 @@ public sealed class StateMachineDefinition<TState, TAction>
     /// <summary>
     /// 动作驱动转换：(From, Action) → To。
     /// 例如 (Draft, Submit) → Submitted。
+    /// 仅含<b>精确状态</b>声明的转换（不含 FromAny，后者见 <see cref="ActionTransitionsFromAny"/>）。
     /// </summary>
     public FrozenDictionary<(TState From, TAction Action), TState> ActionTransitions { get; internal set; }
         = FrozenDictionary<(TState, TAction), TState>.Empty;
+
+    /// <summary>
+    /// FromAny 转换：Action → To（独立存储，避免与精确转换的 (default!, action) 键冲突）。
+    /// 🟡 review 修复：之前 FromAny 用 (default!, action) 混入 ActionTransitions，
+    /// 当 TState 是 enum 时 default == 第一个枚举值（如 Draft=0），与显式 .Transit(Draft)
+    /// 声明的转换键冲突 → 后注册者静默覆盖前者。独立字典彻底隔离两条查找路径。
+    /// </summary>
+    public FrozenDictionary<TAction, TState> ActionTransitionsFromAny { get; internal set; }
+        = FrozenDictionary<TAction, TState>.Empty;
 
     /// <summary>
     /// 白名单直转：From → 允许的目标状态集合（FromAny 注册的目标归入此表对应 From 行）。
@@ -51,13 +61,14 @@ public sealed class StateMachineDefinition<TState, TAction>
 
     /// <summary>
     /// 守卫条件：(From, Action) → 该转换上声明的所有 Guard（同步 + 异步混合）。
-    /// <see cref="FromAnyRegistered"/> 记录哪些 Action 是 FromAny 注册（其 Guard 键的 From 为 default）。
+    /// 仅含精确状态声明的转换的 Guard。
     /// </summary>
     internal FrozenDictionary<(TState From, TAction Action), IReadOnlyList<IGuard>> Guards { get; set; }
         = FrozenDictionary<(TState, TAction), IReadOnlyList<IGuard>>.Empty;
 
-    /// <summary>FromAny 注册的 Action 集合（Guard 查找时用于区分精确 FromAny）。</summary>
-    internal FrozenSet<TAction> FromAnyRegistered { get; set; } = FrozenSet<TAction>.Empty;
+    /// <summary>FromAny 转换的 Guard：Action → Guard 列表（独立存储，同 ActionTransitionsFromAny 理由）。</summary>
+    internal FrozenDictionary<TAction, IReadOnlyList<IGuard>> GuardsFromAny { get; set; }
+        = FrozenDictionary<TAction, IReadOnlyList<IGuard>>.Empty;
 
     /// <summary>是否已冻结（freeze 后 <see cref="Freeze"/> 再调无效）。</summary>
     public bool IsFrozen { get; private set; }

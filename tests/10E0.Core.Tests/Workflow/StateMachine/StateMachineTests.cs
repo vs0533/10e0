@@ -149,6 +149,50 @@ public sealed class StateMachineTests
         newState.Should().Be(OrderState.Cancelled);
     }
 
+    /// <summary>
+    /// 🟡 review 修复回归测试：FromAny 转换与精确转换（From 是 enum 的 default 值）共存时，
+    /// 精确转换应胜出，FromAny 不被静默覆盖。
+    ///
+    /// 之前 FromAny 用 (default!, action) 混入 ActionTransitions，enum 的 default == Draft，
+    /// 若再声明 .Transit(Draft).To(X)，两者键冲突 → 后注册者覆盖。
+    /// </summary>
+    [Fact]
+    public async Task FireAsync_ExactTransitionWinsOverFromAny_WhenBothRegistered()
+    {
+        // Cancel 既 FromAny→Cancelled，又在 Draft 上精确声明→Approved
+        // （语义不真实，仅用于验证精确优先 + 不互相覆盖）
+        var def = Sm.Create<OrderState, OrderAction>(OrderState.Draft)
+            .On(OrderAction.Cancel).FromAny().To(OrderState.Cancelled).And()
+            .On(OrderAction.Cancel).Transit(OrderState.Draft).To(OrderState.Approved).And()
+            .Build();
+        var sm = Sm.Create(def);
+
+        // Draft 上精确声明胜出 → Approved（而非 FromAny 的 Cancelled）
+        var (fromDraft, _) = await sm.FireAsync(OrderState.Draft, OrderAction.Cancel, entity: null, "u");
+        fromDraft.Should().Be(OrderState.Approved, "精确转换应优先于 FromAny");
+
+        // 其他状态无精确声明 → 走 FromAny → Cancelled
+        var (fromSubmitted, _) = await sm.FireAsync(OrderState.Submitted, OrderAction.Cancel, entity: null, "u");
+        fromSubmitted.Should().Be(OrderState.Cancelled);
+    }
+
+    /// <summary>FromAny 的 Guard 在精确转换未命中时正确评估。</summary>
+    [Fact]
+    public async Task FireAsync_FromAnyGuardEvaluated_WhenNoExactTransition()
+    {
+        var def = Sm.Create<OrderState, OrderAction>(OrderState.Draft)
+            .On(OrderAction.Cancel).FromAny().To(OrderState.Cancelled)
+                .Guard<Order>(o => o.Items.Count > 0, "EMPTY").And()
+            .Build();
+        var sm = Sm.Create(def);
+
+        // Guard 失败（空 Items）
+        var order = new Order { State = OrderState.Submitted, Items = [] };
+        await sm.Invoking(s => s.FireAsync(OrderState.Submitted, OrderAction.Cancel, order, "u"))
+            .Should().ThrowAsync<GuardFailedException>()
+            .WithMessage("*EMPTY*");
+    }
+
     [Fact]
     public async Task FireAsync_FromAnyGuardBlocksCompleted()
     {

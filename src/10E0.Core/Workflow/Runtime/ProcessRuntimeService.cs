@@ -108,6 +108,43 @@ public sealed class ProcessRuntimeService<TContext>(
         if (!_handlers.TryGetValue(req.Action, out var handler))
             throw new InvalidOperationException($"未注册操作种类 '{req.Action}' 的处理器");
 
+        // 🟡 review：乐观并发重试（对齐 #100 序列号模式）。
+        // 两个并发审批同一 Task 时，RowVersion 冲突抛 DbUpdateConcurrencyException → 重试 →
+        // 第二次重读发现 Task 状态已变（Approved/Rejected/Voided）→ handler 抛"没有待处理任务"。
+        const int maxRetries = 3;
+        Exception? lastError = null;
+        for (var attempt = 0; attempt < maxRetries; attempt++)
+        {
+            try
+            {
+                return await ExecuteActionCoreAsync(handler, req, ct);
+            }
+            catch (DbUpdateConcurrencyException ex)
+            {
+                lastError = ex;
+                if (attempt < maxRetries - 1)
+                    await Task.Delay(Random.Shared.Next(5, 30), ct);
+            }
+        }
+
+        // 重试耗尽：Task 可能已被另一并发审批处理，给出明确错误而非裸 500
+        await using var dcFinal = await contextFactory.CreateDbContextAsync(ct);
+        var task = await dcFinal.Set<TenE0ProcessTask>()
+            .Where(t => t.InstanceId == req.InstanceId
+                && t.Assignee == req.Actor
+                && t.Status == ProcessTaskStatus.Pending)
+            .FirstOrDefaultAsync(ct);
+        if (task is null)
+            throw new InvalidOperationException(
+                $"操作冲突重试 {maxRetries} 次仍失败：用户 '{req.Actor}' 的待处理任务可能已被另一并发操作处理，请刷新后重试。",
+                lastError);
+        throw new InvalidOperationException(
+            $"操作冲突重试 {maxRetries} 次仍失败，请稍后重试。", lastError);
+    }
+
+    private async Task<ProcessActionResult> ExecuteActionCoreAsync(
+        IProcessActionHandler handler, ExecuteActionRequest req, CancellationToken ct)
+    {
         await using var dc = await contextFactory.CreateDbContextAsync(ct);
         var instance = await dc.Set<TenE0ProcessInstance>()
             .FirstOrDefaultAsync(i => i.Id == req.InstanceId && !i.IsSoftDelete, ct)

@@ -3,7 +3,7 @@ namespace TenE0.Core.Workflow.StateMachine;
 /// <summary>
 /// 标注实体使用状态机（约定驱动）。
 ///
-/// 此 attribute 仅作<b>声明性标记</b>，本身不触发任何运行时行为 — 状态机的转换规则
+/// 此 attribute 仅作<b>声明性标记，当前无运行时行为</b> — 状态机的转换规则
 /// 仍由 <see cref="IStateMachineDefinition{TState,TAction}"/> 在启动时注册。
 /// 它的价值在于：
 /// <list type="bullet">

@@ -85,6 +85,9 @@ public static class WorkflowExtensions
         services.TryAddScoped<IProcessRuntimeService, ProcessRuntimeService<TContext>>();
         services.TryAddScoped<ITaskService, TaskService<TContext>>();
 
+        // 节点权限守卫：默认放行（Null 实现），生产部署在 Api 层 Replace 为真实实现
+        services.TryAddScoped<IWorkflowPermissionGuard, NullWorkflowPermissionGuard>();
+
         // Action handlers（Scoped，ProcessRuntimeService 注入 IEnumerable 解析）
         services.TryAddEnumerable(ServiceDescriptor.Scoped<IProcessActionHandler, ApproveActionHandler<TContext>>());
         services.TryAddEnumerable(ServiceDescriptor.Scoped<IProcessActionHandler, RejectActionHandler<TContext>>());

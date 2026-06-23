@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using TenE0.Core.Abstractions;
 using TenE0.Core.DynamicFilters;
 using TenE0.Core.Workflow.Definitions;
 using TenE0.Core.Workflow.Runtime;
@@ -68,7 +69,9 @@ public sealed class ProcessRuntimeTests
         public FakeDirectory Directory { get; }
         public string DbName { get; }
 
-        public Stack(string dbName, List<string>? roleUsers = null)
+        public Stack(string dbName, List<string>? roleUsers = null,
+            IWorkflowPermissionGuard? permissionGuard = null,
+            ITenantContext? tenantContext = null)
         {
             DbName = dbName;
             var options = new DbContextOptionsBuilder<TestDbContext>()
@@ -86,16 +89,18 @@ public sealed class ProcessRuntimeTests
                 new ExpressionAssigneeResolver(Directory),
             };
             Engine = new WorkflowEngine<TestDbContext>(Factory, resolvers, eventDispatcher: null, TimeProvider.System);
+            // 权限守卫：默认放行；权限校验测试传入 DenyAll / 自定义实现
+            permissionGuard ??= new NullWorkflowPermissionGuard();
             var handlers = new IProcessActionHandler[]
             {
-                new ApproveActionHandler<TestDbContext>(Factory, Engine, TimeProvider.System),
-                new RejectActionHandler<TestDbContext>(Factory, TimeProvider.System),
-                new DelegateActionHandler<TestDbContext>(Factory, TimeProvider.System),
-                new AddSignerActionHandler<TestDbContext>(Factory, TimeProvider.System),
-                new RollbackActionHandler<TestDbContext>(Factory, Engine),
+                new ApproveActionHandler<TestDbContext>(Factory, Engine, permissionGuard, TimeProvider.System),
+                new RejectActionHandler<TestDbContext>(Factory, permissionGuard, TimeProvider.System),
+                new DelegateActionHandler<TestDbContext>(Factory, permissionGuard, TimeProvider.System),
+                new AddSignerActionHandler<TestDbContext>(Factory, permissionGuard, TimeProvider.System),
+                new RollbackActionHandler<TestDbContext>(Factory, Engine, permissionGuard, TimeProvider.System),
             };
             Runtime = new ProcessRuntimeService<TestDbContext>(Factory, Store, Engine, handlers, eventDispatcher: null, TimeProvider.System);
-            Tasks = new TaskService<TestDbContext>(Factory);
+            Tasks = new TaskService<TestDbContext>(Factory, tenantContext);
         }
 
         public async Task<string> SeedDefinitionAsync(IProcessNode[] nodes, string startCode)
@@ -621,5 +626,213 @@ public sealed class ProcessRuntimeTests
             Actor = "u1",
         });
         r2.InstanceStatus.Should().Be(ProcessStatus.Approved);
+    }
+
+    // ================================================================
+    // 权限校验（🔴 Critical 2 修复回归）
+    // ================================================================
+
+    /// <summary>拒绝所有权限的 guard（测试 PermissionKey 强制校验）。</summary>
+    private sealed class DenyAllPermissionGuard : IWorkflowPermissionGuard
+    {
+        public Task<bool> HasPermissionAsync(string actor, string permissionKey, CancellationToken ct = default)
+            => Task.FromResult(false);
+    }
+
+    [Fact]
+    public async Task Approve_NodeWithPermissionKey_ActorLacksPermission_Throws()
+    {
+        var stack = new Stack(Guid.NewGuid().ToString("N"),
+            roleUsers: ["u1"],
+            permissionGuard: new DenyAllPermissionGuard());
+        var nodes = new IProcessNode[]
+        {
+            Start("a"),
+            new ApprovalNode
+            {
+                Code = "a", Name = "审批",
+                AssigneePolicy = AssigneePolicy.Role("r1"),
+                Mode = ApprovalMode.Single,
+                PermissionKey = "expense.approve",  // 节点要求该权限
+                NextNodeCode = "end",
+            },
+            End(),
+        };
+        await stack.SeedDefinitionAsync(nodes, "start");
+
+        await stack.Runtime.StartAsync(new StartProcessRequest
+        {
+            DefinitionCode = "test-flow",
+            BusinessKey = "B",
+            EntityType = "T",
+            EntityId = "e",
+            Initiator = "u0",
+        });
+        var instanceId = (await stack.Tasks.GetMyPendingTasksAsync("u1", new WorkflowPagedQuery())).Items[0].InstanceId;
+
+        // u1 被分配任务但 DenyAll → 无 expense.approve 权限 → 操作被拒
+        var act = () => stack.Runtime.ExecuteActionAsync(new ExecuteActionRequest
+        {
+            InstanceId = instanceId,
+            Action = ProcessActionKind.Approve,
+            Actor = "u1",
+        });
+
+        await act.Should().ThrowAsync<UnauthorizedAccessException>()
+            .WithMessage("*expense.approve*");
+    }
+
+    [Fact]
+    public async Task Approve_NodeWithoutPermissionKey_NoGuardCheck()
+    {
+        // 节点未配置 PermissionKey → 不校验权限（NullWorkflowPermissionGuard 放行）
+        var stack = new Stack(Guid.NewGuid().ToString("N"),
+            roleUsers: ["u1"],
+            permissionGuard: new DenyAllPermissionGuard());
+        var nodes = new IProcessNode[]
+        {
+            Start("a"),
+            new ApprovalNode
+            {
+                Code = "a", Name = "审批",
+                AssigneePolicy = AssigneePolicy.Role("r1"),
+                Mode = ApprovalMode.Single,
+                PermissionKey = null,  // 无权限要求
+                NextNodeCode = "end",
+            },
+            End(),
+        };
+        await stack.SeedDefinitionAsync(nodes, "start");
+
+        await stack.Runtime.StartAsync(new StartProcessRequest
+        {
+            DefinitionCode = "test-flow",
+            BusinessKey = "B",
+            EntityType = "T",
+            EntityId = "e",
+            Initiator = "u0",
+        });
+        var instanceId = (await stack.Tasks.GetMyPendingTasksAsync("u1", new WorkflowPagedQuery())).Items[0].InstanceId;
+
+        // 即使 DenyAll，未配 PermissionKey 也能审批
+        var result = await stack.Runtime.ExecuteActionAsync(new ExecuteActionRequest
+        {
+            InstanceId = instanceId,
+            Action = ProcessActionKind.Approve,
+            Actor = "u1",
+        });
+        result.InstanceStatus.Should().Be(ProcessStatus.Approved);
+    }
+
+    // ================================================================
+    // 跨租户隔离（🔴 Critical 3 修复回归）
+    // ================================================================
+
+    /// <summary>固定租户 ID 的测试 tenant context。</summary>
+    private sealed class FakeTenantContext(string tenantId) : ITenantContext
+    {
+        public string? TenantId => tenantId;
+    }
+
+    [Fact]
+    public async Task GetMyPendingTasks_FiltersByTenant()
+    {
+        var dbName = Guid.NewGuid().ToString("N");
+        // 用同一 InMemory DB 模拟多租户共存
+        var options = new DbContextOptionsBuilder<TestDbContext>()
+            .UseInMemoryDatabase(dbName)
+            .ConfigureWarnings(w => w.Ignore(InMemoryEventId.TransactionIgnoredWarning))
+            .Options;
+        var factory = new TestFactory(options);
+        var store = new ProcessDefinitionStore<TestDbContext>(factory);
+        var dir = new FakeDirectory { RoleUsers = ["u1"] };
+
+        // 种子：租户 tA 和 tB 各一个实例，assignee 都是 u1
+        await using (var dc = factory.CreateDbContext())
+        {
+            dc.Set<TenE0ProcessDefinition>().Add(new TenE0ProcessDefinition
+            {
+                Code = "f",
+                Name = "f",
+                StartNodeCode = "s",
+                NodesJson = "[]",
+                TenantId = "",
+            });
+            await dc.SaveChangesAsync(default);
+            var defId = dc.Set<TenE0ProcessDefinition>().First().Id;
+
+            dc.Set<TenE0ProcessInstance>().Add(new TenE0ProcessInstance
+            {
+                DefinitionId = defId,
+                DefinitionCode = "f",
+                BusinessKey = "BIZ-A",
+                EntityType = "T",
+                EntityId = "e",
+                Initiator = "u0",
+                CurrentNodeCode = "a",
+                TenantId = "tA",
+            });
+            dc.Set<TenE0ProcessInstance>().Add(new TenE0ProcessInstance
+            {
+                DefinitionId = defId,
+                DefinitionCode = "f",
+                BusinessKey = "BIZ-B",
+                EntityType = "T",
+                EntityId = "e2",
+                Initiator = "u0",
+                CurrentNodeCode = "a",
+                TenantId = "tB",
+            });
+            await dc.SaveChangesAsync(default);
+
+            // 两个实例都给 u1 分配待办
+            dc.Set<TenE0ProcessTask>().AddRange(
+                new TenE0ProcessTask { InstanceId = dc.Set<TenE0ProcessInstance>().First(i => i.TenantId == "tA").Id, NodeCode = "a", Assignee = "u1" },
+                new TenE0ProcessTask { InstanceId = dc.Set<TenE0ProcessInstance>().First(i => i.TenantId == "tB").Id, NodeCode = "a", Assignee = "u1" });
+            await dc.SaveChangesAsync(default);
+        }
+
+        // tA 租户上下文 → 只看到 tA 的待办，不能看到 tB 的
+        var tasksTA = new TaskService<TestDbContext>(factory, new FakeTenantContext("tA"));
+        var pending = await tasksTA.GetMyPendingTasksAsync("u1", new WorkflowPagedQuery());
+
+        pending.Total.Should().Be(1, "租户 tA 的用户不应看到 tB 的任务");
+        pending.Items[0].BusinessKey.Should().Be("BIZ-A");
+    }
+
+    [Fact]
+    public async Task GetInstance_FiltersByTenant_CrossTenantReturnsNull()
+    {
+        var dbName = Guid.NewGuid().ToString("N");
+        var options = new DbContextOptionsBuilder<TestDbContext>()
+            .UseInMemoryDatabase(dbName)
+            .ConfigureWarnings(w => w.Ignore(InMemoryEventId.TransactionIgnoredWarning))
+            .Options;
+        var factory = new TestFactory(options);
+
+        string otherTenantInstanceId;
+        await using (var dc = factory.CreateDbContext())
+        {
+            var inst = new TenE0ProcessInstance
+            {
+                DefinitionId = "d",
+                DefinitionCode = "f",
+                BusinessKey = "B",
+                EntityType = "T",
+                EntityId = "e",
+                Initiator = "u0",
+                CurrentNodeCode = "a",
+                TenantId = "tB",
+            };
+            dc.Set<TenE0ProcessInstance>().Add(inst);
+            await dc.SaveChangesAsync(default);
+            otherTenantInstanceId = inst.Id;
+        }
+
+        // tA 租户上下文查询 tB 的实例 → 返回 null（不存在于本租户）
+        var tasks = new TaskService<TestDbContext>(factory, new FakeTenantContext("tA"));
+        var result = await tasks.GetInstanceAsync(otherTenantInstanceId);
+
+        result.Should().BeNull("跨租户查询应返回 null 而非泄露数据");
     }
 }
