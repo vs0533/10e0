@@ -166,7 +166,17 @@ public sealed class DynamicFilterProvider : IDynamicFilterProvider
     /// <summary>
     /// 解析 DbProviderFactory：注册表 → DI 注入的 descriptor 集合。
     /// 公开为 <c>internal</c> 便于测试覆盖。
+    ///
+    /// #124: <b>契约</b> —— 未注册的 provider（含 InMemory / Cosmos 等非关系型后端）
+    /// 抛 <see cref="NotSupportedException"/>。生产路径已由 <see cref="LoadRulesAsync"/>
+    /// 的 try/catch 兜底降级为空规则集，且 <c>DynamicFilterBootstrap</c> 在 InMemory
+    /// 时直接跳过加载；本方法仅供测试或自建引导逻辑直接调用。调用方若不走
+    /// <see cref="LoadRulesAsync"/>，应优先用 <see cref="TryResolveFactory"/> 或自行 catch。
     /// </summary>
+    /// <exception cref="NotSupportedException">
+    /// <paramref name="providerName"/> 既不在 <see cref="DbProviderFactories"/> 注册表，
+    /// 也不在 DI 注入的 <see cref="IDbProviderFactoryDescriptor"/> 集合中。
+    /// </exception>
     internal DbProviderFactory ResolveFactory(string providerName)
     {
         // 1. 尝试 DbProviderFactories 注册表（调用方可在启动时 RegisterFactory）
@@ -190,5 +200,22 @@ public sealed class DynamicFilterProvider : IDynamicFilterProvider
             $"数据库提供程序 '{providerName}' 未注册。" +
             "请在应用启动时调用 DbProviderFactories.RegisterFactory() 注册对应工厂，" +
             $"或注入自定义 IDbProviderFactoryDescriptor（当前已知: {string.Join(", ", _descriptorsByName.Keys)}）。");
+    }
+
+    /// <summary>
+    /// #124: <see cref="ResolveFactory"/> 的可空变体。未注册时返回 <see langword="null"/>
+    /// 而非抛异常，便于自建引导逻辑在调用前探测 provider 是否受支持（如非关系型
+    /// InMemory / Cosmos 后端应跳过动态过滤规则加载）。
+    /// </summary>
+    internal DbProviderFactory? TryResolveFactory(string providerName)
+    {
+        try
+        {
+            return ResolveFactory(providerName);
+        }
+        catch (NotSupportedException)
+        {
+            return null;
+        }
     }
 }

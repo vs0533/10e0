@@ -187,6 +187,32 @@ public sealed class BaseDataContextTests
         ctx.CurrentRoleIds.Should().BeEquivalentTo(roleIds);
     }
 
+    /// <summary>
+    /// #120 回归守护：CurrentRoleIds 必须实时从 ICurrentUserContext 求值，
+    /// 而非在构造函数固化。验证请求中途切身份（如 admin 临时提权）能立即反映到 Query Filter。
+    /// 若有人改回 ctor 缓存（旧 bug 形态），本测试立即 fail。
+    /// </summary>
+    [Fact]
+    public void CurrentRoleIds_ReflectsMidRequestRoleChange_NotCachedInCtor()
+    {
+        // 用可变 holder 模拟"身份在请求中途变更"
+        var currentRoles = new List<string> { "r1" };
+        var user = new Mock<ICurrentUserContext>();
+        user.SetupGet(c => c.IsAuthenticated).Returns(true);
+        user.SetupGet(c => c.RoleIds).Returns(() => currentRoles);
+
+        var (sp, accessor) = BuildServices(user, CreatePolicy(), [], new Mock<IDynamicFilterProvider>(), new Mock<ITenantContext>());
+        using var ctx = new EmptyContext(NewInMemoryOptions<EmptyContext>(), sp, accessor);
+
+        // 构造后读到初始角色
+        ctx.CurrentRoleIds.Should().BeEquivalentTo(["r1"], "初次读取应反映构造时的角色");
+
+        // 中途提权：身份变更后，同一 ctx 实例应读到新角色（证明未固化）
+        currentRoles.Add("r2-admin-elevated");
+        ctx.CurrentRoleIds.Should().BeEquivalentTo(["r1", "r2-admin-elevated"],
+            "CurrentRoleIds 必须每次查询实时求值，不能在 ctor 固化（#120 旧 bug 形态）");
+    }
+
     [Fact]
     public void CurrentOrgIds_DefaultsToEmpty_AndIsMutable()
     {
@@ -343,5 +369,54 @@ public sealed class BaseDataContextTests
         mockProvider.Verify(
             p => p.ApplyDynamicFilters(It.IsAny<ModelBuilder>(), It.IsAny<BaseDataContext>()),
             Times.AtLeastOnce);
+    }
+
+    // ── #121: TenantFilterActive 诊断信号 ──────────────────────────────
+
+    /// <summary>
+    /// #121: TenantFilterActive 暴露"当前是否处于 Tenant 过滤器隐藏所有多租户行"的状态，
+    /// 让业务方/中间件可在 EF Query Filter 无法 log 的前提下主动检测"列表突然为空"。
+    /// DbContext 受 #95 captive-dependency 约束不持有 ILogger，故走诊断属性而非内嵌日志。
+    /// </summary>
+    [Fact]
+    public void TenantFilterActive_TrueWhenTenantIdNullAndNotBypass()
+    {
+        var tenant = new Mock<ITenantContext>();
+        tenant.SetupGet(t => t.TenantId).Returns((string?)null);
+
+        var (sp, accessor) = BuildServices(
+            CreateUser(), CreatePolicy(bypass: false), [], new Mock<IDynamicFilterProvider>(), tenant);
+        using var ctx = new EmptyContext(NewInMemoryOptions<EmptyContext>(), sp, accessor);
+
+        ctx.TenantFilterActive.Should().BeTrue(
+            "null tenant + 非 bypass = 多租户查询将返回空集，诊断信号应为 true");
+    }
+
+    [Fact]
+    public void TenantFilterActive_FalseWhenTenantIdSet()
+    {
+        var tenant = new Mock<ITenantContext>();
+        tenant.SetupGet(t => t.TenantId).Returns("t-a");
+
+        var (sp, accessor) = BuildServices(
+            CreateUser(), CreatePolicy(bypass: false), [], new Mock<IDynamicFilterProvider>(), tenant);
+        using var ctx = new EmptyContext(NewInMemoryOptions<EmptyContext>(), sp, accessor);
+
+        ctx.TenantFilterActive.Should().BeFalse(
+            "tenant 已设置时过滤器正常工作，不会隐藏所有行");
+    }
+
+    [Fact]
+    public void TenantFilterActive_FalseWhenBypassEvenIfTenantNull()
+    {
+        var tenant = new Mock<ITenantContext>();
+        tenant.SetupGet(t => t.TenantId).Returns((string?)null);
+
+        var (sp, accessor) = BuildServices(
+            CreateUser(), CreatePolicy(bypass: true), [], new Mock<IDynamicFilterProvider>(), tenant);
+        using var ctx = new EmptyContext(NewInMemoryOptions<EmptyContext>(), sp, accessor);
+
+        ctx.TenantFilterActive.Should().BeFalse(
+            "超管 bypass 即使 tenant 为 null 也能看见所有行，诊断信号应为 false");
     }
 }
