@@ -266,7 +266,7 @@ public sealed class OutboxLockAcceptanceTests
     // ================================================================
 
     [Fact]
-    public void GivenOutboxModel_WhenBuilt_ThenLegacySentTimeOccurredOnIndexStillExists()
+    public void GivenOutboxModel_WhenBuilt_ThenSentTimeLeadingIndexExists()
     {
         // Arrange
         var options = new DbContextOptionsBuilder<TestDbContext>()
@@ -278,10 +278,11 @@ public sealed class OutboxLockAcceptanceTests
         var entityType = ctx.Model.FindEntityType(typeof(OutboxMessage))!;
         var indexNames = entityType.GetIndexes().Select(i => i.Properties.Select(p => p.Name).ToArray()).ToList();
 
-        // Then — 不破坏现有 Admin 查询路径
+        // Then — #107: 索引升级为 (SentTime, AttemptCount, OccurredOn) 超集，
+        // SentTime 仍是前导列，OutboxAdmin 查询（WHERE SentTime IS NULL）仍能复用此索引。
         indexNames.Should().Contain(
-            p => p.SequenceEqual(new[] { nameof(OutboxMessage.SentTime), nameof(OutboxMessage.OccurredOn) }),
-            "旧索引 (SentTime, OccurredOn) 被 OutboxAdmin 查询复用，不能因为重构删除");
+            p => p.SequenceEqual(new[] { nameof(OutboxMessage.SentTime), nameof(OutboxMessage.AttemptCount), nameof(OutboxMessage.OccurredOn) }),
+            "#107 索引 (SentTime, AttemptCount, OccurredOn) 覆盖 Relay pick + Admin 查询，SentTime 前导列保留");
     }
 
     // ================================================================
