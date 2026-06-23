@@ -68,6 +68,10 @@ public sealed class RefreshTokenCommandHandler<TUser, TContext>(
             foreach (var t in active) t.RevokedAt = now;
             // 重放事件比轮换事件更严重：覆盖原 reason 为 token_reuse_detected
             record.RevokedReason = RevokedReasonReuseDetected;
+            // 清空 ReplacedByTokenHash：重放事件不应再指向"被强制作废的新 token"。
+            // 攻击者拿到 401 后可能顺 hash 撞库（DB 已撤销新 token，但攻击信号没被运营系统识别），
+            // 也避免重放事件污染审计/取证系统的 token 链上下游视图（issue #117）。
+            record.ReplacedByTokenHash = null;
             await dc.SaveChangesAsync(ct);
 
             errs.Add("refresh token 已撤销，请重新登录", code: ErrorCodes.TokenRevoked);
