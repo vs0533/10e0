@@ -39,21 +39,25 @@ internal sealed class InProcessDomainEventDispatcher(
 
     private sealed class EventDispatchInvokerImpl<TEvent> : EventDispatchInvoker where TEvent : IDomainEvent
     {
+        // #109: 缓存 handler 解析器，避免每次 dispatch 都走 GetServices 的开放泛型解析。
+        // handler 是 Scoped 生命周期，每次 dispatch 创建新 scope，实例不可缓存；
+        // 但"如何从 sp 解析 handler"（解析器 delegate）按事件类型稳定，可缓存。
+        // delegate 闭包捕获的 sp 由调用方传入，每次用新 scope 的 sp 解析出 scoped 实例。
+        private static readonly Func<IServiceProvider, IEnumerable<IDomainEventHandler<TEvent>>> HandlerResolver =
+            static sp => sp.GetServices<IDomainEventHandler<TEvent>>();
+
         public override async Task InvokeAsync(IDomainEvent evt, IServiceProvider sp, ILogger logger, CancellationToken ct)
         {
             var typedEvent = (TEvent)evt;
-            var handlers = sp.GetServices<IDomainEventHandler<TEvent>>().ToList();
 
-            if (handlers.Count == 0)
-            {
-                logger.LogDebug("No handler subscribed for {EventType}", typeof(TEvent).Name);
-                return;
-            }
-
-            // fan-out：一个 Handler 失败不应阻断其他 Handler
+            // #109: 不再 .ToList() 物化 —— 直接遍历 IEnumerable，避免每次分配 List。
+            // 首先枚举一次判断是否为空（避免无 handler 时进入 fan-out 循环的空开销）。
             List<Exception>? failures = null;
-            foreach (var handler in handlers)
+            var hasHandler = false;
+
+            foreach (var handler in HandlerResolver(sp))
             {
+                hasHandler = true;
                 try
                 {
                     await handler.HandleAsync(typedEvent, ct);
@@ -64,6 +68,12 @@ internal sealed class InProcessDomainEventDispatcher(
                         handler.GetType().Name, typeof(TEvent).Name);
                     (failures ??= []).Add(ex);
                 }
+            }
+
+            if (!hasHandler)
+            {
+                logger.LogDebug("No handler subscribed for {EventType}", typeof(TEvent).Name);
+                return;
             }
 
             if (failures is { Count: > 0 })

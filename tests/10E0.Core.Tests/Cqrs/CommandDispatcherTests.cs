@@ -437,4 +437,67 @@ public sealed class CommandDispatcherTests
     }
 
     #endregion
+
+    #region #105: BehaviorPipeline 数组索引推进替代链式闭包 — 多层嵌套顺序
+
+    /// <summary>
+    /// #105 回归守护：BehaviorPipeline 用数组索引推进替代链式闭包后，必须验证多层嵌套
+    /// （5 个 behavior）的进入/退出顺序仍正确。数组索引推进易在边界搞反方向（逆序变正序），
+    /// 本测试用 5 层嵌套强化覆盖。
+    ///
+    /// 预期：Order 大的先进入最后退出（外→内→外），与 ASP.NET Core 中间件洋葱模型一致。
+    /// </summary>
+    [Fact]
+    public async Task SendAsync_FiveBehaviors_OrderedNestingCorrect()
+    {
+        var trace = new List<string>();
+        var handler = new HandlerA();
+
+        // Order 500 > 400 > 300 > 200 > 100，500 最外层
+        var behaviors = new[]
+        {
+            new OrderTracingBehavior<TestCmd, string>(500, "B500", trace),
+            new OrderTracingBehavior<TestCmd, string>(400, "B400", trace),
+            new OrderTracingBehavior<TestCmd, string>(300, "B300", trace),
+            new OrderTracingBehavior<TestCmd, string>(200, "B200", trace),
+            new OrderTracingBehavior<TestCmd, string>(100, "B100", trace),
+        };
+
+        var services = new ServiceCollection();
+        services.AddSingleton<ICommandHandler<TestCmd, string>>(handler);
+        foreach (var b in behaviors)
+            services.AddSingleton<IPipelineBehavior<TestCmd, string>>(b);
+
+        var dispatcher = new CommandDispatcher(services.BuildServiceProvider());
+        _ = await dispatcher.SendAsync(new TestCmd("deep"));
+
+        trace.Should().Equal(
+            ["B500-enter", "B400-enter", "B300-enter", "B200-enter", "B100-enter",
+             "B100-exit", "B200-exit", "B300-exit", "B400-exit", "B500-exit"],
+            "5 层 behavior 必须严格按 Order 降序进入、升序退出（洋葱模型）");
+    }
+
+    // Order-configurable tracing behavior for #105 nesting test
+    private sealed class OrderTracingBehavior<TCommand, TResult> : IPipelineBehavior<TCommand, TResult>
+        where TCommand : ICommand<TResult>
+    {
+        private readonly int _order;
+        private readonly string _tag;
+        private readonly List<string> _trace;
+        public int Order => _order;
+
+        public OrderTracingBehavior(int order, string tag, List<string> trace)
+        {
+            _order = order; _tag = tag; _trace = trace;
+        }
+
+        public async Task<TResult> HandleAsync(TCommand command, CommandHandlerDelegate<TResult> next, CancellationToken cancellationToken)
+        {
+            _trace.Add($"{_tag}-enter");
+            try { return await next(cancellationToken); }
+            finally { _trace.Add($"{_tag}-exit"); }
+        }
+    }
+
+    #endregion
 }
