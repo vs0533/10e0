@@ -149,8 +149,6 @@ internal sealed class MultiLevelCache : IMultiLevelCache
         }
     }
 
-    // SETNX 锁已移到 class 字段区（见上方 _setnxGate 声明）
-
     /// <summary>
     /// 覆盖写入：用于锁续约或主动改值。L1+L2 都覆盖。
     /// </summary>
@@ -191,14 +189,26 @@ internal sealed class MultiLevelCache : IMultiLevelCache
 /// <summary>
 /// <see cref="IAtomicCounter"/> 基于 <see cref="IDistributedCache"/> 的默认实现。
 ///
-/// 原子性保证：使用 <c>GetString → 解析 → SetString</c> 三步。生产 Redis 实现
-/// 应替换为 <c>INCR</c> 原生命令（通过 IDistributedCache 的 Redis 扩展或自建接口）。
-/// 当前实现适用于单进程 MemoryDistributedCache；多副本部署需要业务项目替换实现。
+/// ⚠️ <b>#98: 多副本并发 race 警告</b>：当前实现使用 <c>Get → Parse → Set</c> 三步非原子操作。
+/// 单进程 MemoryDistributedCache 场景无 race；但多副本 Redis 后端并发 Increment 会丢增。
+/// 生产部署必须 <c>services.Replace(ServiceDescriptor.Singleton&lt;IAtomicCounter, RedisAtomicCounter&gt;())</c>
+/// 走 Redis <c>INCR</c> 原生命令。
 ///
-/// 注：不抛 Redis Lua 脚本依赖是为了保持与 <see cref="IDistributedCache"/> 抽象的兼容性。
+/// 警告关键字（测试断言必须命中）：<see cref="MultiReplicaRaceWarningKeywords"/>。
 /// </summary>
 internal sealed class DistributedAtomicCounter : IAtomicCounter
 {
+    /// <summary>
+    /// #98: xmldoc 中必须出现的关键字常量。xUnit 测试断言这些关键字命中，阻止有人重构时
+    /// 静默删除多副本并发警告。
+    /// </summary>
+    internal static readonly string[] MultiReplicaRaceWarningKeywords =
+    {
+        "race",       // 多副本并发竞态
+        "INCR",       // Redis 原生命令指引
+        "Replace",    // DI 替换指引
+    };
+
     private readonly IDistributedCache _cache;
 
     public DistributedAtomicCounter(IDistributedCache cache)

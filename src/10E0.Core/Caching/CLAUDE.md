@@ -50,6 +50,12 @@ GetOrSetAsync<T>(key, factory, opts)
 1. **不要在分布式锁 ownership 检查路径用 `GetOrSetAsync`**（PR #88 真 bug）：见设计决策"GetAsync 纯读契约"。
 2. **`TrySetAsync` 的 `static` 锁不是银弹**：仅保护同进程多线程 SETNX；跨进程要靠 L2 真值源（Redis SETNX 原子）。
 3. **`DistributedAtomicCounter` 不是真原子**：多副本部署必须替换；生产 Redis 实现走 `INCR` 命令。
+   - **#98 修复（2026-06-23）**：框架 default 仍为 best-effort `Get → Parse → Set` 实现（避免引入 StackExchange.Redis 依赖），但 xmldoc + 警告明确告知业务方：**Redis 后端部署必须**：
+     ```csharp
+     services.Replace(ServiceDescriptor.Singleton<IAtomicCounter, RedisAtomicCounter>());
+     // 其中 RedisAtomicCounter 内部走 IConnectionMultiplexer.StringIncrementAsync("INCR")
+     ```
+     **否则 `IPermissionCache.InvalidateAllAsync` 的版本号会丢增，权限更新最多延迟 5min TTL 过期**。
 4. **`L1Duration = 0` / `L2Duration = 0` 短路**：`MultiLevelCache.TrySetAsync` 在 `L2Duration <= 0` 时直接返回 `false`（避免空 set 占用内存）；同样 `SetL1` / `SetL2Async` 也会跳过对应层。
 
 ## 测试覆盖
