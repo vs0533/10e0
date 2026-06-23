@@ -113,6 +113,45 @@ public sealed class RefreshTokenCommandHandlerTests
         newToken.RevokedAt.Should().BeNull();
     }
 
+    /// <summary>
+    /// #102 回归守护：合并 user + roles 为 left join 查询后，必须验证"用户无任何角色"
+    /// 场景仍能正常 refresh —— left join 在无匹配 role 时应保留 user 行（RoleCode=null），
+    /// 不能因无角色而查不到 user 导致 AuthDisabled 误报。
+    /// </summary>
+    [Fact]
+    public async Task HandleAsync_ValidToken_UserWithNoRoles_StillRefreshesSuccessfully()
+    {
+        var dbName = Guid.NewGuid().ToString("N");
+        var factory = CreateFactory(dbName);
+        var now = DateTimeOffset.UtcNow;
+        await using (var ctx = factory.CreateDbContext())
+        {
+            ctx.Users.Add(new TestUser { UserCode = "u-norole", DisplayName = "无角色用户", PasswordHash = "x", IsActive = true, UserType = UserType.Person });
+            // 注意：不添加任何 TenE0UserRole 行
+            ctx.RefreshTokens.Add(new TenE0RefreshToken { TokenHash = "hash-norole", UserCode = "u-norole", ExpiresAt = now.AddDays(7), CreatedByIp = "1.2.3.4" });
+            await ctx.SaveChangesAsync();
+        }
+
+        var timeProvider = new FakeTimeProvider { AutoAdvanceAmount = TimeSpan.Zero };
+        timeProvider.SetUtcNow(now.AddHours(1));
+
+        var tokenMock = new Mock<IJwtTokenService>();
+        tokenMock.Setup(t => t.HashRefreshToken("ref-norole")).Returns("hash-norole");
+        var expiresAt = now.AddHours(2);
+        tokenMock.Setup(t => t.Issue("u-norole", "无角色用户", UserType.Person, It.IsAny<IReadOnlyList<string>>(), It.IsAny<IReadOnlyDictionary<string, long>>()))
+            .Returns(new IssuedTokens("acc-norole", expiresAt, "ref-new", "hash-new", expiresAt.AddDays(7)));
+
+        var errs = new Errs();
+        var logger = NullLogger<RefreshTokenCommandHandler<TestUser, TestDbContext>>.Instance;
+        var handler = new RefreshTokenCommandHandler<TestUser, TestDbContext>(factory, tokenMock.Object, timeProvider, CreateJwtOptions(), errs, logger);
+
+        var result = await handler.HandleAsync(new RefreshTokenCommand("ref-norole"), CancellationToken.None);
+
+        result.Should().NotBeNull("无角色用户的 left join 应保留 user 行，不应误报账号不可用");
+        result!.AccessToken.Should().Be("acc-norole");
+        errs.IsValid.Should().BeTrue();
+    }
+
     [Fact]
     public async Task HandleAsync_TokenNotFound_ReturnsNullWithError()
     {
