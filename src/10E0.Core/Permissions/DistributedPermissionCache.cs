@@ -30,9 +30,32 @@ internal sealed class DistributedPermissionCache(
     {
         var key = await BuildKeyAsync(roleCode, cancellationToken);
         var json = await cache.GetStringAsync(key, cancellationToken);
-        return json is null
-            ? null
-            : JsonSerializer.Deserialize<HashSet<string>>(json);
+        if (json is null)
+        {
+            return null;
+        }
+        try
+        {
+            return JsonSerializer.Deserialize<HashSet<string>>(json);
+        }
+        catch (Exception ex) when (ex is JsonException or NotSupportedException or InvalidOperationException)
+        {
+            // #114: 缓存里的旧版/损坏 JSON（升级部署、半截写入、并发 race）不能让反序列化异常
+            // 一直冒泡，否则 PermissionEvaluator 的每次 HasAsync 都会吃掉一次异常，权限更新最多延迟
+            // 到 TTL 过期。把坏值当 cache miss 处理：删掉坏缓存 → 返回 null → evaluator 走 store 重读。
+            // NotSupportedException/InvalidOperationException 是 STJ source-generator 在 AOT/trimming
+            // 路径下对 type mismatch 抛的；OperationCanceledException 不在名单里，必须向上传。
+            // 清缓存用 CancellationToken.None：caller 取消时不应阻止 fallback，否则权限判断会炸出去。
+            try
+            {
+                await cache.RemoveAsync(key, CancellationToken.None);
+            }
+            catch
+            {
+                // 清缓存失败不影响回退路径——下次读还会再试。
+            }
+            return null;
+        }
     }
 
     public async Task SetRolePermissionsAsync(string roleCode, IReadOnlySet<string> permissions, CancellationToken cancellationToken = default)
