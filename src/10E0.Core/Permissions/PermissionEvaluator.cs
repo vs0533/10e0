@@ -29,6 +29,10 @@ internal sealed class PermissionEvaluator(
 {
     private readonly PermissionsOptions _options = options.Value;
 
+    /// <summary>#106: 静态空集合，避免 store 违约 null 时每次分配新 HashSet 兜底。</summary>
+    private static readonly IReadOnlySet<string> EmptySet =
+        new HashSet<string>(0, StringComparer.Ordinal);
+
     public async Task<bool> HasAsync(string permissionKey, CancellationToken cancellationToken = default)
     {
         if (!currentUser.IsAuthenticated) return false;
@@ -120,8 +124,10 @@ internal sealed class PermissionEvaluator(
                     await cache.SetRolePermissionsAsync(roleCode, rolePerms, cancellationToken);
                 }
             }
-            // Store mock 或 NaN 实现可能返 null — 降级为空集（对 revoke 路径很关键：让 union 不含该 key）
-            union.UnionWith(rolePerms ?? (IReadOnlySet<string>)new HashSet<string>(StringComparer.Ordinal));
+            // Store 契约保证 non-null（IPermissionStore.GetGrantedPermissionsAsync 文档明确）。
+            // #106: 旧代码每次分配 new HashSet 兜底；改用静态空集合避免热路径分配。
+            // 若 store 实现意外返回 null（契约违反），降级为空集 —— revoke 路径仍正确（union 不含该 key）。
+            union.UnionWith(rolePerms ?? EmptySet);
         }
 
         return union;
