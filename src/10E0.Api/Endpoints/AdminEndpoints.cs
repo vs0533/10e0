@@ -7,6 +7,7 @@ using TenE0.Core.Menus;
 using TenE0.Core.Organizations;
 using TenE0.Core.Permissions;
 using TenE0.Core.Permissions.Management;
+using TenE0.Core.Workflow.Definitions;
 
 namespace TenE0.Api.Endpoints;
 
@@ -218,6 +219,112 @@ internal static class AdminEndpoints
             return Results.Ok(new { ok = true });
         });
 
+        // ----------------- 工作流定义管理端点（#158） -----------------
+
+        // 列出所有流程定义的最新版本
+        app.MapGet("/admin/workflow/definitions", [RequireAdmin] async (
+            IProcessDefinitionStore store,
+            int skip = 0,
+            int take = 50,
+            CancellationToken ct = default) =>
+        {
+            var list = await store.ListLatestAsync(skip, take, ct);
+            return Results.Ok(list.Select(d => new
+            {
+                d.Id, d.Code, d.Name, d.Version, d.CategoryCode,
+                d.IsEnabled, d.IsLatest, d.Description, d.CreateTime,
+            }));
+        });
+
+        // 查某 Code 的所有版本
+        app.MapGet("/admin/workflow/definitions/{code}/versions", [RequireAdmin] async (
+            string code,
+            IProcessDefinitionStore store,
+            CancellationToken ct) =>
+        {
+            var versions = await store.ListVersionsAsync(code, ct);
+            return Results.Ok(versions.Select(d => new
+            {
+                d.Id, d.Code, d.Version, d.IsEnabled, d.IsLatest, d.CreateTime,
+            }));
+        });
+
+        // 发布新版本（接收完整定义 JSON）
+        app.MapPost("/admin/workflow/definitions", [RequireAdmin] async (
+            PublishDefinitionDto dto,
+            IProcessDefinitionStore store,
+            CancellationToken ct) =>
+        {
+            try
+            {
+                var def = new TenE0ProcessDefinition
+                {
+                    Code = dto.Code,
+                    Name = dto.Name,
+                    CategoryCode = dto.CategoryCode,
+                    Description = dto.Description,
+                    StartNodeCode = dto.StartNodeCode,
+                    NodesJson = dto.NodesJson,
+                    EdgesJson = dto.EdgesJson ?? "[]",
+                    TenantId = dto.TenantId ?? "",
+                };
+                var published = await store.PublishAsync(def, ct);
+                return Results.Ok(new { published.Id, published.Code, published.Version });
+            }
+            catch (ProcessDefinitionInvalidException ex)
+            {
+                return Results.BadRequest(new { error = "流程定义校验失败", errors = ex.Errors });
+            }
+        });
+
+        // 发布预置流程（如 ExpenseClaimProcess）
+        app.MapPost("/admin/workflow/definitions/built-in/{builtin}", [RequireAdmin] async (
+            string builtin,
+            IProcessDefinitionStore store,
+            CancellationToken ct) =>
+        {
+            TenE0ProcessDefinition def = builtin switch
+            {
+                "expense-claim" => ExpenseClaimProcess.Build(),
+                _ => throw new InvalidOperationException($"未知预置流程 '{builtin}'"),
+            };
+            var published = await store.PublishAsync(def, ct);
+            return Results.Ok(new { published.Id, published.Code, published.Version });
+        });
+
+        // 取某 Code 的最新版本详情（含节点图 JSON）
+        app.MapGet("/admin/workflow/definitions/{code}/latest", [RequireAdmin] async (
+            string code,
+            IProcessDefinitionStore store,
+            CancellationToken ct) =>
+        {
+            var latest = await store.GetLatestAsync(code, ct);
+            return latest is null ? Results.NotFound() : Results.Ok(latest);
+        });
+
+        // 禁用某版本（不物理删除）
+        app.MapDelete("/admin/workflow/definitions/{id}", [RequireAdmin] async (
+            string id,
+            IProcessDefinitionStore store,
+            CancellationToken ct) =>
+        {
+            await store.DisableAsync(id, ct);
+            return Results.Ok(new { ok = true });
+        });
+
         return app;
     }
+}
+
+// 工作流定义管理 DTO
+internal sealed class PublishDefinitionDto
+{
+    public required string Code { get; set; }
+    public required string Name { get; set; }
+    public string? CategoryCode { get; set; }
+    public string? Description { get; set; }
+    public required string StartNodeCode { get; set; }
+    public required string NodesJson { get; set; }
+    public string? EdgesJson { get; set; }
+    public string? TenantId { get; set; }
 }

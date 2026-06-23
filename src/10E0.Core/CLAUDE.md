@@ -28,6 +28,7 @@
 | `Permissions/` | 权限评估 + 缓存 + 行级过滤 + 角色版本号 | `IPermissionEvaluator`, `PermissionCatalog` (sealed class), `IRoleVersionStore` (#7), `IEntityFilterContributor` |
 | `Queries/` | 动态查询 + 分页 | `DynamicQueryExtensions`, `PagedQuery<T>` |
 | `Sequences/` | 序列号生成器（支持日期重置） | `ISequenceGenerator`, `EfSequenceGenerator` |
+| `Workflow/` | 轻量审批流引擎（状态机 + 流程定义 + 运行时，#156 epic） | `StateMachine<TState,TAction>`, `ProcessBuilder`, `IProcessRuntimeService`, `WorkflowEngine`, `TimeoutProcessor` |
 
 ## 设计原则
 
@@ -43,4 +44,4 @@
 
 所有 `TenE0` 前缀的实体是框架自有表，业务项目不应直接修改：
 
-`TenE0User`, `TenE0Role`, `TenE0UserRole`, `TenE0RefreshToken`, `TenE0RolePermission`, `TenE0Org`, `TenE0Sequence`, `TenE0Menu`, `TenE0RoleMenu`, `TenE0DataFilterRule`, `TenE0FileAttachment`, `OutboxMessage`（含 `LockedUntil` / `LockedByInstance` 列，PR #85）
+`TenE0User`, `TenE0Role`, `TenE0UserRole`, `TenE0RefreshToken`, `TenE0RolePermission`, `TenE0Org`, `TenE0Sequence`, `TenE0Menu`, `TenE0RoleMenu`, `TenE0DataFilterRule`, `TenE0FileAttachment`, `TenE0ProcessDefinition`, `TenE0ProcessInstance`, `TenE0ProcessTask`, `TenE0ProcessHistory`, `OutboxMessage`（含 `LockedUntil` / `LockedByInstance` 列，PR #85）
