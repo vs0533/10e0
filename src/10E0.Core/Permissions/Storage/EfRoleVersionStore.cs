@@ -51,14 +51,16 @@ public sealed class EfRoleVersionStore<TContext>(
             .Select(r => new { r.Code, r.Version })
             .ToListAsync(cancellationToken);
 
-        // L1 写入（即使 version=0 也缓存，避免每个请求都查不存在的角色）
+        // L1 写入（即使 version=0 也缓存，避免每个请求都查不存在的角色）。
+        // #101: 当 MemoryCacheOptions.SizeLimit 已设时，ICacheEntry.Size 必须显式赋值，
+        // 否则 .NET MemoryCache 抛 InvalidOperationException。这里 1 entry = 1 unit（粗算）。
         var now = _time.GetUtcNow();
         foreach (var row in rows)
         {
-            cache.Set(CacheKey(row.Code), row.Version, new MemoryCacheEntryOptions
-            {
-                AbsoluteExpiration = now.Add(L1Ttl),
-            });
+            using var entry = cache.CreateEntry(CacheKey(row.Code));
+            entry.AbsoluteExpiration = now.Add(L1Ttl);
+            entry.Size = 1L;
+            entry.Value = row.Version;
             result[row.Code] = row.Version;
         }
         // 任何 missing 但 DB 也没有的角色 — version=0
@@ -66,10 +68,10 @@ public sealed class EfRoleVersionStore<TContext>(
         {
             if (!result.ContainsKey(code))
             {
-                cache.Set(CacheKey(code), 0L, new MemoryCacheEntryOptions
-                {
-                    AbsoluteExpiration = now.Add(L1Ttl),
-                });
+                using var entry = cache.CreateEntry(CacheKey(code));
+                entry.AbsoluteExpiration = now.Add(L1Ttl);
+                entry.Size = 1L;
+                entry.Value = 0L;
                 result[code] = 0L;
             }
         }
