@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Runtime.CompilerServices;
 using TenE0.Core.ImportExport.Mapping;
 
@@ -42,11 +43,12 @@ public sealed class CsvImporter : ICsvImporter
             }
         }
 
-        var columnIndexes = new Dictionary<ColumnMap, int>();
+        // 用 PropertyInfo 作 key（fluent mapping 重建 ColumnMap 时引用相等会失效）
+        var columnIndexes = new Dictionary<PropertyInfo, int>();
         foreach (var column in columns)
         {
             if (headerByName.TryGetValue(column.ColumnName, out var idx))
-                columnIndexes[column] = idx;
+                columnIndexes[column.Property] = idx;
         }
 
         var rowNumber = options.DataStartRow;
@@ -73,7 +75,7 @@ public sealed class CsvImporter : ICsvImporter
         int rowNumber,
         string[] fields,
         IReadOnlyList<ColumnMap> columns,
-        IReadOnlyDictionary<ColumnMap, int> columnIndexes)
+        IReadOnlyDictionary<PropertyInfo, int> columnIndexes)
         where T : class, new()
     {
         var errors = new List<string>();
@@ -81,7 +83,7 @@ public sealed class CsvImporter : ICsvImporter
 
         foreach (var column in columns)
         {
-            if (!columnIndexes.TryGetValue(column, out var idx))
+            if (!columnIndexes.TryGetValue(column.Property, out var idx))
             {
                 if (column.Required)
                     errors.Add($"第 {rowNumber} 行：列「{column.ColumnName}」在文件中未找到（必填）");

@@ -154,6 +154,48 @@ public sealed class ImportExecutorTests
         result.Total.Should().Be(3);
     }
 
+    /// <summary>
+    /// 真实事务回滚验收（SQLite，支持事务）：InMemory 忽略事务，本测试验证 DB 层面真的回滚了。
+    /// 用 SQLite in-memory（共享连接串）保证每行写入在同一连接内可见、回滚有效。
+    /// </summary>
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task ExecuteAsync_Transactional_Failure_ActuallyRollsBackInDatabase()
+    {
+        var connectionString = $"DataSource=file:test{Guid.NewGuid():N}?mode=memory&cache=shared";
+        await using var keepAlive = new Microsoft.Data.Sqlite.SqliteConnection(connectionString);
+        await keepAlive.OpenAsync();
+
+        var options = new DbContextOptionsBuilder<TestDbContext>()
+            .UseSqlite(connectionString)
+            .Options;
+        // 建表
+        await using (var init = new TestDbContext(options))
+            await init.Database.EnsureCreatedAsync();
+
+        var errs = new Errs();
+        var permissionMock = new Mock<IPermissionEvaluator>();
+        var entityService = new EntitySvc(errs, permissionMock.Object);
+        var factory = new TestFactory(options);
+        var executor = new ImportExecutor(
+            new ClosedXmlExcelImporter(), new CsvImporter(), entityService, errs);
+
+        // 第 2 行必填缺失 → 触发回滚；T1 已成功但因回滚不应持久化
+        var csv = BuildCsv("编码,名称", "T1,甲", ",乙");
+        var importOpts = new ImportOptions { TransactionMode = TransactionMode.Transactional };
+
+        var result = await executor.ExecuteAsync<TestDbContext, ImportProduct>(
+            factory, csv, ExportFormat.Csv, options: importOpts);
+
+        result.TransactionRolledBack.Should().BeTrue();
+        result.Success.Should().Be(0);
+
+        // 真实验证：DB 中应 0 条（回滚生效，而非 InMemory 的"假回滚"）
+        await using var verify = factory.CreateDbContext();
+        verify.Products.Should().HaveCount(0, "事务模式下任一失败必须回滚已写入的 T1");
+    }
+
+
     [Fact]
     public async Task ExecuteAsync_XlsxFormat_RoutesToExcelImporter()
     {
