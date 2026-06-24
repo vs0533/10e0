@@ -23,6 +23,7 @@
 - **多级缓存抽象** — `IMultiLevelCache` L1 (进程内) + L2 (分布式) + `IAtomicCounter` (Redis `INCR` / 内存 `Interlocked.Increment` / EF `UPDATE OUTPUT`)；纯读 `GetAsync` API + SETNX 进程内锁防 exactly-once 失败
 - **动态数据过滤** — 运行时 JSON 规则引擎，无需改代码即可实现复杂数据隔离
 - **文件服务** — 统一抽象，支持本地存储、Aliyun OSS、AWS S3，开箱即用的图片处理
+- **导入导出** — 通用 Excel(ClosedXML)/CSV(RFC 4180) 导入导出 + 声明式列映射 + `ImportExecutor` 走 `EntityService` 校验链 + 大文件流式/降级
 - **组织架构与菜单管理** — 物化路径树实现组织树和菜单树，支持角色分配
 - **动态查询与分页** — 参数化查询，防 SQL 注入，支持排序、过滤、字段选择
 

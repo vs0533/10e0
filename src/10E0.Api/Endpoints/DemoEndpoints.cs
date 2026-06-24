@@ -7,6 +7,7 @@ using TenE0.Core.Abstractions;
 using TenE0.Core.Common;
 using TenE0.Core.EntityService;
 using TenE0.Core.Errors;
+using TenE0.Core.ImportExport;
 using TenE0.Core.Json;
 using TenE0.Core.Queries;
 
@@ -81,6 +82,85 @@ internal static class DemoEndpoints
             var items = await q.Page(query.Page, query.PageSize).ToListAsync(ct);
 
             return Results.Ok(PagedResult<DemoEntity>.Create(items, total, query.Page, query.PageSize));
+        });
+
+        // ─── 导入导出（issue #154）演示 ───────────────────────
+        // 导出：接 DynamicWhere/OrderBy，走 IExcelExporter；超阈值自动降级 CSV。
+        app.MapGet("/demo/export", async (
+            IDbContextFactory<DemoDbContext> f,
+            IExcelExporter exporter,
+            [AsParameters] PagedQuery query,
+            CancellationToken ct) =>
+        {
+            using var ctx = await f.CreateDbContextAsync(ct);
+            var q = ctx.Set<DemoEntity>().AsNoTracking().AsQueryable();
+
+            if (!string.IsNullOrWhiteSpace(query.Where))
+                q = q.DynamicWhere(query.Where);
+            q = q.DynamicOrderBy(query.OrderBy ?? "CreateTime desc");
+
+            // 导出不限分页，但受 ImportExportOptions.MaxExportRows 兜底
+            var export = await exporter.ExportAsync(q, new ExportOptions { SheetName = "Demo列表" }, ct);
+
+            return export.Format == ExportFormat.Csv
+                ? Results.File(export.Content, "text/csv", "demo.csv")
+                : Results.File(export.Content,
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    "demo.xlsx");
+        });
+
+        // CSV 导出演示
+        app.MapGet("/demo/export-csv", async (
+            IDbContextFactory<DemoDbContext> f,
+            ICsvExporter exporter,
+            [AsParameters] PagedQuery query,
+            CancellationToken ct) =>
+        {
+            using var ctx = await f.CreateDbContextAsync(ct);
+            var q = ctx.Set<DemoEntity>().AsNoTracking().AsQueryable();
+
+            if (!string.IsNullOrWhiteSpace(query.Where))
+                q = q.DynamicWhere(query.Where);
+            q = q.DynamicOrderBy(query.OrderBy ?? "CreateTime desc");
+
+            var export = await exporter.ExportAsync(q, new ExportOptions(), ct);
+            return Results.File(export.Content, "text/csv", "demo.csv");
+        });
+
+        // 导入：IFormFile → ImportExecutor（走 EntityService.CreateAsync 校验链）
+        app.MapPost("/demo/import", async (
+            HttpContext http,
+            IDbContextFactory<DemoDbContext> f,
+            ImportExecutor executor,
+            CancellationToken ct) =>
+        {
+            var form = await http.Request.ReadFormAsync(ct);
+            var file = form.Files.FirstOrDefault();
+            if (file is null || file.Length == 0)
+                return Results.BadRequest(ApiResult<object>.Fail("未上传文件"));
+
+            var format = file.FileName.EndsWith(".csv", StringComparison.OrdinalIgnoreCase)
+                ? ExportFormat.Csv
+                : ExportFormat.Xlsx;
+
+            await using var stream = file.OpenReadStream();
+            var result = await executor.ExecuteAsync<DemoDbContext, DemoEntity>(
+                f, stream, format, ct: ct);
+
+            return ApiResultResult.Api(ApiResult<ImportResult>.Ok(result));
+        });
+
+        // 导入模板下载
+        app.MapGet("/demo/import-template", async (
+            IImportTemplateGenerator generator,
+            CancellationToken ct) =>
+        {
+            var ms = new MemoryStream();
+            await generator.GenerateAsync<DemoEntity>(ms, ct);
+            ms.Position = 0;
+            return Results.File(ms,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                "demo-import-template.xlsx");
         });
 
         // PostedBodyConvert 演示

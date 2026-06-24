@@ -41,6 +41,8 @@
 | [18-sync-pr-strategy](18-sync-pr-strategy.md) | dev → main 同步 PR 合并策略（为何禁 Squash） |
 | [19-sync-retrospective](19-sync-retrospective.md) | 2026-06 同步事故复盘：教训、安全底线、行业做法 |
 | [20-multi-tenancy](20-multi-tenancy.md) | 多租户隔离（`IMultiTenantEntity` + Named Query Filter + JWT tenant claim） |
+| [21-workflow](21-workflow.md) | 轻量审批流引擎（状态机 + 流程定义 + 流程运行时） |
+| [22-import-export](22-import-export.md) | 通用 Excel/CSV 导入导出（ClosedXML + RFC 4180 + ImportExecutor） |
 
 ---
 
