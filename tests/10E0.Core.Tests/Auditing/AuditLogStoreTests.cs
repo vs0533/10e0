@@ -41,14 +41,14 @@ public sealed class AuditLogStoreTests
 
     private static TenE0AuditLog Op(
         string actor, string type, string id, string action, DateTimeOffset time) => new()
-    {
-        ActorCode = actor,
-        EntityType = type,
-        EntityId = id,
-        Action = action,
-        ChangedFieldsJson = "[]",
-        CreateTime = time,
-    };
+        {
+            ActorCode = actor,
+            EntityType = type,
+            EntityId = id,
+            Action = action,
+            ChangedFieldsJson = "[]",
+            CreateTime = time,
+        };
 
     [Fact]
     public async Task QueryAsync_AppliesActorAndActionFilter()

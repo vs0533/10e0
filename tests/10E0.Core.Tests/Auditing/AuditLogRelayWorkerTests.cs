@@ -88,12 +88,18 @@ public sealed class AuditLogRelayWorkerTests
         var now = DateTimeOffset.UtcNow;
         channel.TryWrite(new AuditChannelItem.Op(new AuditLogEntry
         {
-            EntityType = "Order", EntityId = "1", Action = "Create",
-            ChangedFieldsJson = "[]", CreateTime = now,
+            EntityType = "Order",
+            EntityId = "1",
+            Action = "Create",
+            ChangedFieldsJson = "[]",
+            CreateTime = now,
         }));
         channel.TryWrite(new AuditChannelItem.Login(new LoginLogEntry
         {
-            UserCode = "alice", EventType = "Login", Success = true, CreateTime = now,
+            UserCode = "alice",
+            EventType = "Login",
+            Success = true,
+            CreateTime = now,
         }));
 
         var processed = await worker.ProcessBatchAsync(CancellationToken.None);
@@ -114,8 +120,11 @@ public sealed class AuditLogRelayWorkerTests
         {
             channel.TryWrite(new AuditChannelItem.Op(new AuditLogEntry
             {
-                EntityType = "T", EntityId = i.ToString(), Action = "Create",
-                ChangedFieldsJson = "[]", CreateTime = now,
+                EntityType = "T",
+                EntityId = i.ToString(),
+                Action = "Create",
+                ChangedFieldsJson = "[]",
+                CreateTime = now,
             }));
         }
 
@@ -134,8 +143,11 @@ public sealed class AuditLogRelayWorkerTests
         var (worker, channel, _, dbName) = Create();
         channel.TryWrite(new AuditChannelItem.Login(new LoginLogEntry
         {
-            UserCode = "bob", EventType = "Failed", Success = false,
-            FailureReason = "bad password", CreateTime = DateTimeOffset.UtcNow,
+            UserCode = "bob",
+            EventType = "Failed",
+            Success = false,
+            FailureReason = "bad password",
+            CreateTime = DateTimeOffset.UtcNow,
         }));
 
         await worker.ProcessBatchAsync(CancellationToken.None);
@@ -156,8 +168,11 @@ public sealed class AuditLogRelayWorkerTests
         {
             channel.TryWrite(new AuditChannelItem.Op(new AuditLogEntry
             {
-                EntityType = "T", EntityId = i.ToString(), Action = "Create",
-                ChangedFieldsJson = "[]", CreateTime = now,
+                EntityType = "T",
+                EntityId = i.ToString(),
+                Action = "Create",
+                ChangedFieldsJson = "[]",
+                CreateTime = now,
             }));
         }
 
@@ -182,8 +197,11 @@ public sealed class AuditLogRelayWorkerTests
         var channel = sp.GetRequiredService<AuditLogChannel>();
         channel.TryWrite(new AuditChannelItem.Op(new AuditLogEntry
         {
-            EntityType = "T", EntityId = "1", Action = "Create",
-            ChangedFieldsJson = "[]", CreateTime = DateTimeOffset.UtcNow,
+            EntityType = "T",
+            EntityId = "1",
+            Action = "Create",
+            ChangedFieldsJson = "[]",
+            CreateTime = DateTimeOffset.UtcNow,
         }));
 
         var worker = new AuditLogRelayWorker<TestDbContext>(
