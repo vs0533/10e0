@@ -9,16 +9,20 @@ internal sealed class DemoEntity : AggregateRoot
 {
     // 流水号自动生成：每天重置，4 位补零，前缀 "DEMO-"
     [Sequence("demo", "DEMO-{yyyyMMdd}-{0000}")]
-    [ImportColumn("编码")] [ExportColumn("编码", Order = 1)]
+    [ImportColumn("编码")]
+    [ExportColumn("编码", Order = 1)]
     public string Code { get; set; } = "";
 
-    [ImportColumn("名称", Required = true)] [ExportColumn("名称", Order = 2)]
+    [ImportColumn("名称", Required = true)]
+    [ExportColumn("名称", Order = 2)]
     public string Name { get; set; } = "";
 
-    [ImportColumn("组织ID")] [ExportColumn("组织ID", Order = 3)]
+    [ImportColumn("组织ID")]
+    [ExportColumn("组织ID", Order = 3)]
     public string? OrgId { get; set; }
 
-    [ImportColumn("薪资")] [ExportColumn("薪资", Order = 4, Format = "N2")]
+    [ImportColumn("薪资")]
+    [ExportColumn("薪资", Order = 4, Format = "N2")]
     public decimal? Salary { get; set; }
 
     /// <summary>

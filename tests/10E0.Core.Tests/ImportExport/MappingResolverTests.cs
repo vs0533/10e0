@@ -8,16 +8,19 @@ public sealed class MappingResolverTests
     // 测试实体：覆盖 attribute 各种组合
     private sealed class Sample
     {
-        [ImportColumn("编码", Required = true)] [ExportColumn("编码", Order = 1)]
+        [ImportColumn("编码", Required = true)]
+        [ExportColumn("编码", Order = 1)]
         public string Code { get; set; } = "";
 
-        [ImportColumn("名称")] [ExportColumn("名称", Order = 2)]
+        [ImportColumn("名称")]
+        [ExportColumn("名称", Order = 2)]
         public string Name { get; set; } = "";
 
         [ExportColumn("创建时间", Order = 3, Format = "yyyy-MM-dd")]
         public DateTimeOffset CreateTime { get; set; }
 
-        [ImportIgnore] [ExportIgnore]
+        [ImportIgnore]
+        [ExportIgnore]
         public string Password { get; set; } = "";
 
         // 无任何标记 → 不参与映射

@@ -10,13 +10,16 @@ public sealed class CsvImporterTests
 {
     private sealed class CsvImportSample
     {
-        [ImportColumn("编码", Required = true)] [ExportColumn("编码", Order = 1)]
+        [ImportColumn("编码", Required = true)]
+        [ExportColumn("编码", Order = 1)]
         public string Code { get; set; } = "";
 
-        [ImportColumn("数量")] [ExportColumn("数量", Order = 2)]
+        [ImportColumn("数量")]
+        [ExportColumn("数量", Order = 2)]
         public int Quantity { get; set; }
 
-        [ImportColumn("备注")] [ExportColumn("备注", Order = 3)]
+        [ImportColumn("备注")]
+        [ExportColumn("备注", Order = 3)]
         public string? Note { get; set; }
     }
 
