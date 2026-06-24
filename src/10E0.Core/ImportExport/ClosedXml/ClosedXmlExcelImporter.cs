@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Reflection;
 using System.Runtime.CompilerServices;
 using ClosedXML.Excel;
 using TenE0.Core.ImportExport.Mapping;
@@ -46,7 +47,7 @@ public sealed class ClosedXmlExcelImporter : IExcelImporter
         }
     }
 
-    private static bool IsBlankRow(IXLRow row, IReadOnlyDictionary<ColumnMap, int> columnIndexes)
+    private static bool IsBlankRow(IXLRow row, IReadOnlyDictionary<PropertyInfo, int> columnIndexes)
     {
         foreach (var (_, colIdx) in columnIndexes)
         {
@@ -57,13 +58,14 @@ public sealed class ClosedXmlExcelImporter : IExcelImporter
 
     /// <summary>
     /// 按列名匹配源列索引。未匹配到的列在导入时跳过（不报错，兼容模板多列场景）。
+    /// 用 PropertyInfo 作 key（而非 ColumnMap 引用）—— fluent mapping 重建 ColumnMap 时引用相等会失效。
     /// </summary>
-    private static Dictionary<ColumnMap, int> ResolveColumnIndexes(
+    private static Dictionary<PropertyInfo, int> ResolveColumnIndexes(
         IXLWorksheet ws,
         IReadOnlyList<ColumnMap> columns,
         int headerRow)
     {
-        var result = new Dictionary<ColumnMap, int>();
+        var result = new Dictionary<PropertyInfo, int>();
         if (columns.Count == 0) return result;
 
         // 建立表头名 → 列索引 的反查表
@@ -79,7 +81,7 @@ public sealed class ClosedXmlExcelImporter : IExcelImporter
         foreach (var column in columns)
         {
             if (headerByName.TryGetValue(column.ColumnName, out var idx))
-                result[column] = idx;
+                result[column.Property] = idx;
             // 未找到表头：必填列后续会在 ParseRow 报"必填缺失"，非必填则静默跳过
         }
 
@@ -90,7 +92,7 @@ public sealed class ClosedXmlExcelImporter : IExcelImporter
         int rowNumber,
         IXLRow xlRow,
         IReadOnlyList<ColumnMap> columns,
-        IReadOnlyDictionary<ColumnMap, int> columnIndexes)
+        IReadOnlyDictionary<PropertyInfo, int> columnIndexes)
         where T : class, new()
     {
         var errors = new List<string>();
@@ -99,7 +101,7 @@ public sealed class ClosedXmlExcelImporter : IExcelImporter
         foreach (var column in columns)
         {
             // 表头未匹配：必填则报错，非必填跳过
-            if (!columnIndexes.TryGetValue(column, out var colIdx))
+            if (!columnIndexes.TryGetValue(column.Property, out var colIdx))
             {
                 if (column.Required)
                     errors.Add($"第 {rowNumber} 行：列「{column.ColumnName}」在文件中未找到（必填）");

@@ -73,6 +73,10 @@ public sealed class ImportExecutor(
                 if (ok && errs.IsValid)
                 {
                     success++;
+                    // 已 SaveChanges 的实体仍被 ChangeTracker 持有（Unchanged 状态）。
+                    // 事务模式下跨行复用同一 context，10w+ 行导入会让 ChangeTracker 累积海量引用
+                    // （GC 压力 + 长事务锁 + 事务日志暴涨）。每行清理释放已持久化实体的追踪。
+                    context.ChangeTracker.Clear();
                 }
                 else
                 {
