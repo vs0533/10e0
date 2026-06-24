@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using TenE0.Core.Abstractions;
+using TenE0.Core.Auditing;
 using TenE0.Core.Auth.Jwt.Commands;
 using TenE0.Core.Auth.Jwt.Services;
 using TenE0.Core.Auth.Jwt.Storage;
@@ -62,7 +63,7 @@ public sealed class LogoutCommandHandlerTests
         var tokenMock = new Mock<IJwtTokenService>();
         tokenMock.Setup(t => t.HashRefreshToken("mytoken")).Returns("hash1");
 
-        var handler = new LogoutCommandHandler<TestDbContext>(factory, tokenMock.Object, timeProvider);
+        var handler = new LogoutCommandHandler<TestDbContext>(factory, tokenMock.Object, timeProvider, new NullAuditLogSink());
 
         var result = await handler.HandleAsync(new LogoutCommand("mytoken"), CancellationToken.None);
 
@@ -93,7 +94,7 @@ public sealed class LogoutCommandHandlerTests
         var tokenMock = new Mock<IJwtTokenService>();
         tokenMock.Setup(t => t.HashRefreshToken("mytoken")).Returns("hash1");
 
-        var handler = new LogoutCommandHandler<TestDbContext>(factory, tokenMock.Object, TimeProvider.System);
+        var handler = new LogoutCommandHandler<TestDbContext>(factory, tokenMock.Object, TimeProvider.System, new NullAuditLogSink());
 
         var result = await handler.HandleAsync(new LogoutCommand("mytoken"), CancellationToken.None);
 
@@ -107,7 +108,7 @@ public sealed class LogoutCommandHandlerTests
         var tokenMock = new Mock<IJwtTokenService>();
         tokenMock.Setup(t => t.HashRefreshToken("ghost")).Returns("nohash");
 
-        var handler = new LogoutCommandHandler<TestDbContext>(factory, tokenMock.Object, TimeProvider.System);
+        var handler = new LogoutCommandHandler<TestDbContext>(factory, tokenMock.Object, TimeProvider.System, new NullAuditLogSink());
 
         var result = await handler.HandleAsync(new LogoutCommand("ghost"), CancellationToken.None);
 

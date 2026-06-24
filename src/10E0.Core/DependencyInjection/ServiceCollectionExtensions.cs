@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using TenE0.Core.Abstractions;
+using TenE0.Core.Auditing;
 using TenE0.Core.Auth;
 using TenE0.Core.DataContext.Interceptors;
 using TenE0.Core.Errors;
@@ -59,6 +60,11 @@ public static class ServiceCollectionExtensions
         // 在 SavingChanges 时按需解析当前请求 scope 的 ICurrentUserContext，避免共享状态。
         services.AddSingleton<AuditInterceptor>();
 
+        // #152 审计日志 Sink 默认空实现 —— 保证未调用 AddTenE0Auditing 时，
+        // auth command handlers 仍能解析到 IAuditLogSink（变 No-op）。
+        // 调用 AddTenE0Auditing 后用 services.Replace(...) 覆盖为真实实现。
+        services.TryAddScoped<TenE0.Core.Auditing.IAuditLogSink, TenE0.Core.Auditing.NullAuditLogSink>();
+
         return services;
     }
 
@@ -103,6 +109,11 @@ public static class ServiceCollectionExtensions
             // 用 GetService 避免依赖缺失时崩溃
             var outbox = sp.GetService<TenE0.Core.Events.Outbox.OutboxInterceptor>();
             if (outbox is not null) options.AddInterceptors(outbox);
+
+            // AuditLogInterceptor 是可选的（仅当用户调用 AddTenE0Auditing 才注册）
+            // 用 GetService 避免依赖缺失时崩溃 —— 对齐 OutboxInterceptor 的可选注入模式
+            var auditLog = sp.GetService<AuditLogInterceptor>();
+            if (auditLog is not null) options.AddInterceptors(auditLog);
         });
 
         // 启动时初始化（IHostedLifecycleService.StartingAsync 在端口监听前完成）

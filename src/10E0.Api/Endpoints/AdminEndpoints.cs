@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.EntityFrameworkCore;
 using TenE0.Api.Domain;
 using TenE0.Api.Handlers;
+using TenE0.Core.Auditing;
 using TenE0.Core.DynamicFilters;
 using TenE0.Core.Menus;
 using TenE0.Core.Organizations;
@@ -343,6 +344,60 @@ internal static class AdminEndpoints
             await store.DisableAsync(id, ct);
             return Results.Ok(new { ok = true });
         });
+
+        // ----------------- 审计日志查询 API（#152）-----------------
+        // 与 /admin/outbox 同样的 [RequireAdmin] + WithMetadata 双保险授权。
+        // 参数注入 IAuditLogStore（Scoped），由 Minimal API 每请求建 scope 解析。
+
+        // 操作审计日志分页查询
+        app.MapGet("/admin/audit-logs", [RequireAdmin] async (
+            IAuditLogStore store,
+            string? actorCode,
+            string? entityType,
+            string? entityId,
+            string? action,
+            DateTimeOffset? from,
+            DateTimeOffset? to,
+            int page = 1,
+            int size = 20,
+            CancellationToken ct = default) =>
+        {
+            var result = await store.QueryAsync(new AuditLogQuery
+            {
+                ActorCode = actorCode,
+                EntityType = entityType,
+                EntityId = entityId,
+                Action = action,
+                From = from,
+                To = to,
+                Page = page,
+                Size = size,
+            }, ct);
+            return Results.Ok(result);
+        }).WithMetadata(new RequireAdminAttribute());
+
+        // 登录审计日志分页查询
+        app.MapGet("/admin/login-logs", [RequireAdmin] async (
+            IAuditLogStore store,
+            string? userCode,
+            bool? success,
+            DateTimeOffset? from,
+            DateTimeOffset? to,
+            int page = 1,
+            int size = 20,
+            CancellationToken ct = default) =>
+        {
+            var result = await store.QueryLoginsAsync(new LoginLogQuery
+            {
+                UserCode = userCode,
+                Success = success,
+                From = from,
+                To = to,
+                Page = page,
+                Size = size,
+            }, ct);
+            return Results.Ok(result);
+        }).WithMetadata(new RequireAdminAttribute());
 
         return app;
     }

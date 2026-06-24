@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using TenE0.Core.Abstractions;
+using TenE0.Core.Auditing;
 using TenE0.Core.Auth.Jwt.Commands;
 using TenE0.Core.Auth.Jwt.Services;
 using TenE0.Core.Auth.Jwt.Storage;
@@ -73,7 +74,7 @@ public sealed class LoginTimingAttackPreventionAcceptanceTests
     {
         var tokenMock = new Mock<IJwtTokenService>();
         var errs = new Errs();
-        var handler = new LoginCommandHandler<TestUser, TestDbContext>(factory, pwMock.Object, tokenMock.Object, errs);
+        var handler = new LoginCommandHandler<TestUser, TestDbContext>(factory, pwMock.Object, tokenMock.Object, errs, new NullAuditLogSink());
         return new HandlerBundle(handler, pwMock, tokenMock, errs);
     }
 

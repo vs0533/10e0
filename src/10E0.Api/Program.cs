@@ -46,6 +46,10 @@ builder.Services.AddTenE0DomainEvents<DemoDbContext>(opt =>
 });
 builder.Services.AddTenE0DomainEventHandlersFromAssembly(typeof(Program).Assembly);
 
+// 审计日志（#152）：独立 AuditLog/LoginLog 表 + 操作日志字段级 diff + 登录日志埋点。
+// 默认异步落库（Channel + 后台 Worker），best-effort 失败不阻断业务。
+builder.Services.AddTenE0Auditing<DemoDbContext>();
+
 // 动态数据过滤
 builder.Services.AddTenE0DynamicFilters<DemoDbContext>();
 

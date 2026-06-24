@@ -123,7 +123,8 @@ public sealed class RefreshTokenReuseDetectionIssue117Tests
         var errs = new Errs();
         var handler = new RefreshTokenCommandHandler<TestUser, TestDbContext>(
             factory, tokenMock.Object, timeProvider, CreateJwtOptions(), errs,
-            NullLogger<RefreshTokenCommandHandler<TestUser, TestDbContext>>.Instance);
+            NullLogger<RefreshTokenCommandHandler<TestUser, TestDbContext>>.Instance,
+            new TenE0.Core.Auditing.NullAuditLogSink());
 
         // Act
         var result = await handler.HandleAsync(new RefreshTokenCommand("opaque-replay"), CancellationToken.None);
@@ -184,7 +185,8 @@ public sealed class RefreshTokenReuseDetectionIssue117Tests
         var errs = new Errs();
         var handler = new RefreshTokenCommandHandler<TestUser, TestDbContext>(
             factory, tokenMock.Object, timeProvider, CreateJwtOptions(), errs,
-            NullLogger<RefreshTokenCommandHandler<TestUser, TestDbContext>>.Instance);
+            NullLogger<RefreshTokenCommandHandler<TestUser, TestDbContext>>.Instance,
+            new TenE0.Core.Auditing.NullAuditLogSink());
 
         // Act：连续重放两次
         await handler.HandleAsync(new RefreshTokenCommand("opaque"), CancellationToken.None);
@@ -249,7 +251,8 @@ public sealed class RefreshTokenReuseDetectionIssue117Tests
         var errs = new Errs();
         var handler = new RefreshTokenCommandHandler<TestUser, TestDbContext>(
             factory, tokenMock.Object, timeProvider, CreateJwtOptions(), errs,
-            NullLogger<RefreshTokenCommandHandler<TestUser, TestDbContext>>.Instance);
+            NullLogger<RefreshTokenCommandHandler<TestUser, TestDbContext>>.Instance,
+            new TenE0.Core.Auditing.NullAuditLogSink());
 
         // Act
         var result = await handler.HandleAsync(new RefreshTokenCommand("old-opaque"), CancellationToken.None);

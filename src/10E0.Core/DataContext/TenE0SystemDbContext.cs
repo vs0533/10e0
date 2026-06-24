@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
+using TenE0.Core.Auditing;
 using TenE0.Core.Auth.Jwt.Storage;
 using TenE0.Core.DynamicFilters.Storage;
 using TenE0.Core.Events.Outbox;
@@ -65,6 +66,8 @@ public abstract class TenE0SystemDbContext<TUser, TRole>(
     public DbSet<TenE0ProcessInstance> ProcessInstances => Set<TenE0ProcessInstance>();
     public DbSet<TenE0ProcessTask> ProcessTasks => Set<TenE0ProcessTask>();
     public DbSet<TenE0ProcessHistory> ProcessHistories => Set<TenE0ProcessHistory>();
+    public DbSet<TenE0AuditLog> AuditLogs => Set<TenE0AuditLog>();
+    public DbSet<TenE0LoginLog> LoginLogs => Set<TenE0LoginLog>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -80,6 +83,7 @@ public abstract class TenE0SystemDbContext<TUser, TRole>(
         modelBuilder.ConfigureTenE0FileAttachmentTables();
         modelBuilder.ConfigureTenE0WorkflowDefinitionTables();
         modelBuilder.ConfigureTenE0WorkflowRuntimeTables();
+        modelBuilder.ConfigureTenE0AuditTables();
     }
 }
 

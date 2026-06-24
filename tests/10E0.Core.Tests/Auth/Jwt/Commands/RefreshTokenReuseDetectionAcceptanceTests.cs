@@ -95,7 +95,8 @@ public sealed class RefreshTokenReuseDetectionAcceptanceTests
         TimeProvider timeProvider,
         IErrs errs) =>
         new(factory, tokenMock.Object, timeProvider, CreateJwtOptions(), errs,
-            NullLogger<RefreshTokenCommandHandler<TestUser, TestDbContext>>.Instance);
+            NullLogger<RefreshTokenCommandHandler<TestUser, TestDbContext>>.Instance,
+            new TenE0.Core.Auditing.NullAuditLogSink());
 
     /// <summary>
     /// 给定一个已 revoked 的 refresh token（其 <c>ReplacedByTokenHash</c> 指向某新 token），
