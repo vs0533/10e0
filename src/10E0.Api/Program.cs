@@ -7,6 +7,7 @@ using TenE0.Api.Seeders;
 using TenE0.Core.DependencyInjection;
 using TenE0.Core.Errors;
 using TenE0.Core.Hosting;
+using TenE0.Core.Workflow.DependencyInjection;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -47,6 +48,13 @@ builder.Services.AddTenE0DomainEventHandlersFromAssembly(typeof(Program).Assembl
 
 // 动态数据过滤
 builder.Services.AddTenE0DynamicFilters<DemoDbContext>();
+
+// 工作流（#156 epic：状态机 + 流程定义 + 流程运行）
+builder.Services.AddTenE0WorkflowStateMachine(typeof(Program).Assembly);
+builder.Services.AddTenE0WorkflowDefinitions<DemoDbContext>();
+builder.Services.AddTenE0WorkflowRuntime<DemoDbContext>();
+// AssigneeDirectory：把"角色/组织 → 用户"查询从 Core 解耦到 Api 层
+builder.Services.AddScoped<TenE0.Core.Workflow.Definitions.IAssigneeDirectory, TenE0.Api.Hosting.AssigneeDirectory<DemoDbContext>>();
 
 // 文件上传
 builder.Services.AddTenE0Files<DemoDbContext>(options =>
@@ -116,6 +124,7 @@ app.MapHealthEndpoints()
    .MapAuthEndpoints()
    .MapDemoEndpoints()
    .MapAdminEndpoints()
-   .MapFileEndpoints();
+   .MapFileEndpoints()
+   .MapWorkflowEndpoints();
 
 app.Run();

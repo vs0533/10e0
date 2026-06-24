@@ -9,6 +9,8 @@ using TenE0.Core.Permissions.Storage;
 using TenE0.Core.Files;
 using TenE0.Core.Files.Storage;
 using TenE0.Core.Sequences.Storage;
+using TenE0.Core.Workflow.Definitions;
+using TenE0.Core.Workflow.Runtime;
 
 namespace TenE0.Core.DataContext;
 
@@ -59,6 +61,10 @@ public abstract class TenE0SystemDbContext<TUser, TRole>(
     public DbSet<TenE0RoleMenu> RoleMenus => Set<TenE0RoleMenu>();
     public DbSet<TenE0DataFilterRule> DataFilterRules => Set<TenE0DataFilterRule>();
     public DbSet<TenE0FileAttachment> FileAttachments => Set<TenE0FileAttachment>();
+    public DbSet<TenE0ProcessDefinition> ProcessDefinitions => Set<TenE0ProcessDefinition>();
+    public DbSet<TenE0ProcessInstance> ProcessInstances => Set<TenE0ProcessInstance>();
+    public DbSet<TenE0ProcessTask> ProcessTasks => Set<TenE0ProcessTask>();
+    public DbSet<TenE0ProcessHistory> ProcessHistories => Set<TenE0ProcessHistory>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -72,6 +78,8 @@ public abstract class TenE0SystemDbContext<TUser, TRole>(
         modelBuilder.ConfigureTenE0MenuTables();
         modelBuilder.ConfigureTenE0DataFilterTables();
         modelBuilder.ConfigureTenE0FileAttachmentTables();
+        modelBuilder.ConfigureTenE0WorkflowDefinitionTables();
+        modelBuilder.ConfigureTenE0WorkflowRuntimeTables();
     }
 }
 
