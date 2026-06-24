@@ -71,6 +71,10 @@ builder.Services.AddTenE0Files<DemoDbContext>(options =>
     options.BaseUrl = "/uploads";
 });
 
+// 导入导出（#154）：Excel(ClosedXML) / CSV(RFC 4180) + 通用 ImportExecutor + 模板生成。
+// 纯流处理，不绑 DbContext；ImportExecutor 在端点接收 IDbContextFactory<DemoDbContext>。
+builder.Services.AddTenE0ImportExport();
+
 // #39: 集中异常映射 (PermissionDenied → 403, Validation → 400, DbUpdate → 409, 其余 → 500)
 builder.Services.AddTenE0ExceptionHandler();
 

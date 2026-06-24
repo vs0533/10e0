@@ -57,4 +57,11 @@ public static class ErrorCodes
     /// <summary>复合唯一索引冲突（多字段组合）。默认 "UNIQUE_GROUP"。
     /// 散落源：<c>UniqueValidators.cs:115</c>（<c>GroupUniqueValidator</c>）。</summary>
     public const string UniqueGroup = "UNIQUE_GROUP";
+
+    /// <summary>导入行级错误（类型转换失败 / 必填缺失 / 校验失败）。默认 "IMPORT_ROW"。
+    /// 散落源：<c>ImportExecutor</c> / <c>ClosedXmlExcelImporter</c> / <c>CsvImporter</c>。</summary>
+    public const string ImportRowError = "IMPORT_ROW";
+
+    /// <summary>导入事务模式整体回滚（任一行失败已触发回滚全量）。默认 "IMPORT_ROLLBACK"。</summary>
+    public const string ImportTransactionRolledback = "IMPORT_ROLLBACK";
 }

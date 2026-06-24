@@ -9,6 +9,17 @@
 
 ### Added
 
+- **通用 Excel/CSV 导入导出** (#154)：`TenE0.Core.ImportExport` 模块，企业应用 90% 业务模块需要的"列表导出 Excel" + "批量导入数据"开箱即用
+  - 统一抽象 `IExcelExporter` / `IExcelImporter` / `ICsvExporter` / `ICsvImporter` / `IImportTemplateGenerator`
+  - Excel 走 ClosedXML 0.105.0（MIT 许可，区别于 EPPlus 社区版的非商业条款），CSV 手写 RFC 4180 状态机（不引入 CsvHelper）
+  - 声明式映射：attribute（`[ImportColumn]` / `[ExportColumn]` / `[ImportIgnore]` / `[ExportIgnore]`）+ fluent API（`ImportMapping<T>`），`MappingResolver` 合并 + 反射缓存
+  - 框架协同：导入走 `IEntityService.CreateAsync`（复用唯一性 / 权限 / 流水号校验），导出接 `DynamicWhere` 查询
+  - `ImportExecutor` 事务（全成功或全回滚）/ 非事务（部分失败收集错误继续）双模式 + `IProgress<ImportProgress>` 进度回调
+  - 大文件：`IQueryable<T>` 流式分批加载（默认 5000/批）+ 超 `LargeExportThreshold`（默认 10w）自动降级 CSV（`ExportStream.Format` 标记）
+  - 敏感字段脱敏：独立 `IExportFieldFilter`（默认包装 `IAuditFieldFilter`，审计未启用时直通），与审计脱敏解耦
+  - DI 一行注册 `AddTenE0ImportExport()`（无 `<TContext>`，纯流处理）；Demo 端点 `GET /demo/export` / `POST /demo/import` / `GET /demo/import-template`
+  - 新增错误码 `ImportRowError`（`IMPORT_ROW`）/ `ImportTransactionRolledback`（`IMPORT_ROLLBACK`）
+  - 新增文档 `docs/22-import-export.md`
 - **多租户（Multi-Tenancy）** (#11)：业务实体实现 `IMultiTenantEntity` 后自动启用租户隔离
   - `IMultiTenantEntity` 接口（`TenantId` string 属性）
   - `ITenantContext` 抽象 + `HttpTenantContext` HTTP 实现（从 JWT `tenant_id` claim 读取）
