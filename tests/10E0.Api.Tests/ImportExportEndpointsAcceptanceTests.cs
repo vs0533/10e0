@@ -75,11 +75,13 @@ public sealed class ImportExportEndpointsAcceptanceTests
         using var wb = new XLWorkbook(ms);
         var ws = wb.Worksheets.First();
 
-        // 模板表头应含 DemoEntity 声明的列
+        // 模板表头应含 DemoEntity 声明的导入列。
+        // 注意：Code 是 [ImportIgnore]（序列字段，导入时由 ISequenceGenerator 自动生成），
+        // 故导入模板不含「编码」列 —— 仅含「名称」等用户可填列。
         var headers = Enumerable.Range(1, ws.LastColumnUsed()!.ColumnNumber())
             .Select(i => ws.Cell(1, i).GetValue<string>())
             .ToList();
-        headers.Should().Contain("编码");
+        headers.Should().NotContain("编码", "Code 是序列字段，导入时由序列生成器填充，不应出现在导入模板");
         headers.Should().Contain("名称");
     }
 
@@ -89,15 +91,16 @@ public sealed class ImportExportEndpointsAcceptanceTests
         using var factory = new ImportExportFactory();
         var client = factory.CreateClient();
 
-        // 构造一个 xlsx：表头 + 2 行（第 1 行有效，第 2 行缺必填"名称"）
+        // 构造一个 xlsx：表头 + 2 行（第 1 行有效，第 2 行薪资非数字 → 类型转换失败）
+        // Code 是 [ImportIgnore]（序列字段），不出现在表头；导入列：名称 / 组织ID / 薪资。
         using var wb = new XLWorkbook();
         var ws = wb.AddWorksheet("Sheet1");
-        ws.Cell(1, 1).Value = "编码";
-        ws.Cell(1, 2).Value = "名称";
-        ws.Cell(2, 1).Value = "IMP-1";
-        ws.Cell(2, 2).Value = "有效行";
-        ws.Cell(3, 1).Value = "IMP-2";
-        ws.Cell(3, 2).Value = "";          // 名称必填 → 该行失败
+        ws.Cell(1, 1).Value = "名称";
+        ws.Cell(1, 2).Value = "薪资";
+        ws.Cell(2, 1).Value = "有效行";
+        ws.Cell(2, 2).Value = 100;
+        ws.Cell(3, 1).Value = "坏行";
+        ws.Cell(3, 2).Value = "不是数字";   // 薪资(decimal)类型转换失败 → 该行失败
 
         using var contentStream = new MemoryStream();
         wb.SaveAs(contentStream);

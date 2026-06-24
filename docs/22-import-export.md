@@ -122,7 +122,16 @@ Task<ExportStream> ExportAsync<T>(IQueryable<T> query, ExportOptions?, Cancellat
 `ExportStream`（而非裸 `Stream`）—— 降级时调用方据 `Format` 设置正确 Content-Type：
 
 ```csharp
-public sealed record ExportStream(Stream Content, ExportFormat Format, string? DowngradedReason = null);
+// ExportStream 持有 Content（MemoryStream / 临时文件流）所有权，实现 IDisposable。
+public sealed record ExportStream(Stream Content, ExportFormat Format, string? DowngradedReason = null) : IDisposable;
+```
+
+**⚠ 资源释放**：`ExportStream.Content` 由调用方负责释放。`Results.File(Stream)` 只读取不 dispose 传入的 Stream，直接传 `export.Content` 会泄漏。ASP.NET Core 端点应注册到请求生命周期：
+
+```csharp
+var export = await exporter.ExportAsync(query, options, ct);
+http.Response.RegisterForDispose(export);   // ← 响应结束后自动释放 export.Content
+return Results.File(export.Content, contentType, fileName);
 ```
 
 ### 敏感字段脱敏
@@ -170,6 +179,8 @@ Task<ImportResult> ExecuteAsync<TContext, TEntity>(
 |----------|------|
 | **非事务**（默认） | 每行用**新建** DbContext 独立写入，失败行收集错误后继续；每行处理后清空 `IErrs` 避免错误累积。适合批量导入 |
 | **事务** | 所有行共享同一 DbContext + 事务，任一行失败回滚全量；`ImportResult.TransactionRolledBack` 标记 |
+
+**⚠ 事务回滚的一致性边界**：回滚仅撤销**实体表数据**。`EntityService.CreateAsync` 在每次 `SaveChanges` 时触发的副作用 —— 领域事件（Outbox）与审计日志（异步 Channel 落库）—— 已在各自的 SaveChanges 点发生，**不随实体事务回滚**。若业务要求这些副作用也原子撤销，需在更外层处理。
 
 不绑定 DbContext 类型 —— `IDbContextFactory` 由调用方传入。
 

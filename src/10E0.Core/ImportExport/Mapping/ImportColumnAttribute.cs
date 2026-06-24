@@ -52,7 +52,6 @@ public sealed class ExportIgnoreAttribute : Attribute
 {
 }
 
-#pragma warning disable CA1051 // 公开字段 — record PositionalPattern 契约，按框架惯例保留可读性
 /// <summary>
 /// 单列映射的解析后描述（attribute / fluent 合并产物）。
 /// </summary>
@@ -79,4 +78,3 @@ public sealed class ColumnMap
     /// <summary>是否必填（导入校验 / 模板校验）。</summary>
     public bool Required { get; init; }
 }
-#pragma warning restore CA1051

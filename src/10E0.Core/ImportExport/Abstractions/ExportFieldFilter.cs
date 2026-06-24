@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using TenE0.Core.Auditing;
 
 namespace TenE0.Core.ImportExport;
@@ -15,6 +16,12 @@ public sealed class ExportFieldFilter : IExportFieldFilter
 {
     private readonly IAuditFieldFilter? _auditFilter;
 
+    /// <summary>
+    /// <see cref="ShouldMask"/> 结果缓存：同一 propertyName 的判定是常量（仅依赖属性名），
+    /// 大文件导出时每单元格调用（N 列 × 10w 行可达百万次）应避免重复求值。线程安全。
+    /// </summary>
+    private readonly ConcurrentDictionary<string, bool> _shouldMaskCache = new();
+
     /// <param name="auditFilter">审计脱敏过滤器（可选；审计模块未启用时为 null）。</param>
     public ExportFieldFilter(IAuditFieldFilter? auditFilter = null)
     {
@@ -23,7 +30,8 @@ public sealed class ExportFieldFilter : IExportFieldFilter
 
     /// <inheritdoc/>
     public bool ShouldMask(string propertyName)
-        => _auditFilter is not null && _auditFilter.IsSensitive(propertyName);
+        => _auditFilter is not null
+            && _shouldMaskCache.GetOrAdd(propertyName, _auditFilter.IsSensitive);
 
     /// <inheritdoc/>
     public object? Mask(string propertyName, object? value)
