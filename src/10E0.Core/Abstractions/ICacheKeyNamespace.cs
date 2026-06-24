@@ -54,6 +54,18 @@ public interface ICacheKeyNamespace
     string UserInfoPrefix { get; }
 
     /// <summary>
+    /// 数据字典选项列表缓存 key 前缀。
+    /// 例：默认 "dict-items"（<c>DataDictionaryService</c> 用 "dict-items:{dictTypeCode}"）。
+    /// </summary>
+    string DictItemsPrefix { get; }
+
+    /// <summary>
+    /// 系统参数值缓存 key 前缀。
+    /// 例：默认 "sys-param"（<c>SystemParameterStore</c> 用 "sys-param:{key}"）。
+    /// </summary>
+    string SystemParameterPrefix { get; }
+
+    /// <summary>
     /// 构造权限版本号原子计数器的完整 cache key。
     /// </summary>
     /// <returns>无 tenantId 时 = <c>PermissionVersionPrefix</c>；
@@ -84,6 +96,22 @@ public interface ICacheKeyNamespace
     /// <returns>无 tenantId 时 = <c>"user_info:{userCode}"</c>；
     /// 有 tenantId 时 = <c>"{tenantId}:user_info:{userCode}"</c>。</returns>
     string UserInfoKey(string userCode);
+
+    /// <summary>
+    /// 构造某字典类型选项列表的完整 cache key。
+    /// </summary>
+    /// <param name="dictTypeCode">字典类型 Code。</param>
+    /// <returns>无 tenantId 时 = <c>"dict-items:{dictTypeCode}"</c>；
+    /// 有 tenantId 时 = <c>"{tenantId}:dict-items:{dictTypeCode}"</c>。</returns>
+    string DictItemsKey(string dictTypeCode);
+
+    /// <summary>
+    /// 构造某系统参数值的完整 cache key。
+    /// </summary>
+    /// <param name="key">系统参数 Key。</param>
+    /// <returns>无 tenantId 时 = <c>"sys-param:{key}"</c>；
+    /// 有 tenantId 时 = <c>"{tenantId}:sys-param:{key}"</c>。</returns>
+    string SystemParameterKey(string key);
 }
 
 /// <summary>
@@ -138,6 +166,12 @@ public sealed class DefaultCacheKeyNamespace : ICacheKeyNamespace
     public string UserInfoPrefix => "user_info";
 
     /// <inheritdoc />
+    public string DictItemsPrefix => "dict-items";
+
+    /// <inheritdoc />
+    public string SystemParameterPrefix => "sys-param";
+
+    /// <inheritdoc />
     public string PermissionVersionKey() => WithTenant(PermissionVersionPrefix);
 
     /// <inheritdoc />
@@ -151,6 +185,14 @@ public sealed class DefaultCacheKeyNamespace : ICacheKeyNamespace
     /// <inheritdoc />
     public string UserInfoKey(string userCode) =>
         WithTenant($"{UserInfoPrefix}:{userCode}");
+
+    /// <inheritdoc />
+    public string DictItemsKey(string dictTypeCode) =>
+        WithTenant($"{DictItemsPrefix}:{dictTypeCode}");
+
+    /// <inheritdoc />
+    public string SystemParameterKey(string key) =>
+        WithTenant($"{SystemParameterPrefix}:{key}");
 
     private string WithTenant(string keyWithoutTenant) =>
         _tenantId is null ? keyWithoutTenant : $"{_tenantId}:{keyWithoutTenant}";
