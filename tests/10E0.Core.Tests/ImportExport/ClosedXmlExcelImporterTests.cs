@@ -10,13 +10,16 @@ public sealed class ClosedXmlExcelImporterTests
 {
     private sealed class ImportSample
     {
-        [ImportColumn("编码", Required = true)] [ExportColumn("编码", Order = 1)]
+        [ImportColumn("编码", Required = true)]
+        [ExportColumn("编码", Order = 1)]
         public string Code { get; set; } = "";
 
-        [ImportColumn("数量")] [ExportColumn("数量", Order = 2)]
+        [ImportColumn("数量")]
+        [ExportColumn("数量", Order = 2)]
         public int Quantity { get; set; }
 
-        [ImportColumn("启用")] [ExportColumn("启用", Order = 3)]
+        [ImportColumn("启用")]
+        [ExportColumn("启用", Order = 3)]
         public bool Enabled { get; set; }
 
         [ImportIgnore]
