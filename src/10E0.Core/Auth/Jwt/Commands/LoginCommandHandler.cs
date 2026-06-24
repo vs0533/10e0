@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using TenE0.Core.Abstractions;
+using TenE0.Core.Auditing;
 using TenE0.Core.Auth.Jwt.Services;
 using TenE0.Core.Auth.Jwt.Storage;
 using TenE0.Core.Permissions.Storage;
@@ -16,7 +17,8 @@ public sealed class LoginCommandHandler<TUser, TContext>(
     IDbContextFactory<TContext> contextFactory,
     IPasswordHasher passwordHasher,
     IJwtTokenService tokenService,
-    IErrs errs)
+    IErrs errs,
+    IAuditLogSink auditSink)
     : ICommandHandler<LoginCommand, AuthResult>
     where TUser : TenE0User
     where TContext : DbContext
@@ -34,12 +36,30 @@ public sealed class LoginCommandHandler<TUser, TContext>(
 
         if (user is null || !verified)
         {
+            // #152 登录日志埋点：失败（凭据无效）
+            await auditSink.WriteLoginAsync(new LoginLogEntry
+            {
+                UserCode = cmd.UserCode,
+                EventType = "Failed",
+                Success = false,
+                IpAddress = cmd.ClientIp,
+                FailureReason = "用户名或密码错误",
+            }, ct);
             errs.Add("用户名或密码错误", code: ErrorCodes.AuthInvalid);
             return null!;
         }
 
         if (!user.IsActive)
         {
+            // #152 登录日志埋点：失败（账号禁用）
+            await auditSink.WriteLoginAsync(new LoginLogEntry
+            {
+                UserCode = cmd.UserCode,
+                EventType = "Failed",
+                Success = false,
+                IpAddress = cmd.ClientIp,
+                FailureReason = "账号已被禁用",
+            }, ct);
             errs.Add("账号已被禁用", code: ErrorCodes.AuthDisabled);
             return null!;
         }
@@ -68,6 +88,16 @@ public sealed class LoginCommandHandler<TUser, TContext>(
             CreatedByIp = cmd.ClientIp,
         });
         await dc.SaveChangesAsync(ct);
+
+        // #152 登录日志埋点：成功
+        await auditSink.WriteLoginAsync(new LoginLogEntry
+        {
+            UserCode = user.UserCode,
+            EventType = "Login",
+            Success = true,
+            IpAddress = cmd.ClientIp,
+            ExpiresAt = tokens.RefreshTokenExpiresAt,
+        }, ct);
 
         return new AuthResult(
             tokens.AccessToken,

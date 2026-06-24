@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using TenE0.Core.Abstractions;
+using TenE0.Core.Auditing;
 using TenE0.Core.Auth.Jwt.Services;
 using TenE0.Core.Auth.Jwt.Storage;
 using TenE0.Core.Permissions.Storage;
@@ -28,7 +29,8 @@ public sealed class RefreshTokenCommandHandler<TUser, TContext>(
     TimeProvider timeProvider,
     IOptions<JwtOptions> jwtOptions,
     IErrs errs,
-    ILogger<RefreshTokenCommandHandler<TUser, TContext>> logger)
+    ILogger<RefreshTokenCommandHandler<TUser, TContext>> logger,
+    IAuditLogSink auditSink)
     : ICommandHandler<RefreshTokenCommand, AuthResult>
     where TUser : TenE0User
     where TContext : DbContext
@@ -49,6 +51,15 @@ public sealed class RefreshTokenCommandHandler<TUser, TContext>(
 
         if (record is null)
         {
+            // #152 登录日志埋点：refresh 失败（token 无效）
+            await auditSink.WriteLoginAsync(new LoginLogEntry
+            {
+                UserCode = "",
+                EventType = "Failed",
+                Success = false,
+                IpAddress = cmd.ClientIp,
+                FailureReason = "refresh token 无效",
+            }, ct);
             errs.Add("refresh token 无效", code: ErrorCodes.TokenInvalid);
             return null!;
         }
@@ -74,12 +85,30 @@ public sealed class RefreshTokenCommandHandler<TUser, TContext>(
             record.ReplacedByTokenHash = null;
             await dc.SaveChangesAsync(ct);
 
+            // #152 登录日志埋点：refresh 失败（token 重放检测）
+            await auditSink.WriteLoginAsync(new LoginLogEntry
+            {
+                UserCode = record.UserCode,
+                EventType = "Failed",
+                Success = false,
+                IpAddress = cmd.ClientIp,
+                FailureReason = "refresh token 重放检测",
+            }, ct);
             errs.Add("refresh token 已撤销，请重新登录", code: ErrorCodes.TokenRevoked);
             return null!;
         }
 
         if (now >= record.ExpiresAt)
         {
+            // #152 登录日志埋点：refresh 失败（token 过期）
+            await auditSink.WriteLoginAsync(new LoginLogEntry
+            {
+                UserCode = record.UserCode,
+                EventType = "Failed",
+                Success = false,
+                IpAddress = cmd.ClientIp,
+                FailureReason = "refresh token 已过期",
+            }, ct);
             errs.Add("refresh token 已过期", code: ErrorCodes.TokenExpired);
             return null!;
         }
@@ -98,6 +127,15 @@ public sealed class RefreshTokenCommandHandler<TUser, TContext>(
         // 无 user 行 = 用户不存在；任一行 IsActive=false 即账号禁用
         if (userRows.Count == 0 || !userRows[0].IsActive)
         {
+            // #152 登录日志埋点：refresh 失败（账号不可用）
+            await auditSink.WriteLoginAsync(new LoginLogEntry
+            {
+                UserCode = record.UserCode,
+                EventType = "Failed",
+                Success = false,
+                IpAddress = cmd.ClientIp,
+                FailureReason = "账号不可用",
+            }, ct);
             errs.Add("账号不可用", code: ErrorCodes.AuthDisabled);
             return null!;
         }
@@ -185,6 +223,15 @@ public sealed class RefreshTokenCommandHandler<TUser, TContext>(
                 foreach (var t in active) t.RevokedAt = now;
                 await dc.SaveChangesAsync(ct);
 
+                // #152 登录日志埋点：refresh 失败（旋转竞争失败 → reuse-detection）
+                await auditSink.WriteLoginAsync(new LoginLogEntry
+                {
+                    UserCode = userRow.UserCode,
+                    EventType = "Failed",
+                    Success = false,
+                    IpAddress = cmd.ClientIp,
+                    FailureReason = "refresh token 旋转竞争失败",
+                }, ct);
                 errs.Add("refresh token 已撤销，请重新登录", code: ErrorCodes.TokenRevoked);
                 return null!;
             }
@@ -212,6 +259,16 @@ public sealed class RefreshTokenCommandHandler<TUser, TContext>(
         }
 
         await dc.SaveChangesAsync(ct);
+
+        // #152 登录日志埋点：refresh 成功
+        await auditSink.WriteLoginAsync(new LoginLogEntry
+        {
+            UserCode = userRow.UserCode,
+            EventType = "Refresh",
+            Success = true,
+            IpAddress = cmd.ClientIp,
+            ExpiresAt = newRefreshExpires,
+        }, ct);
 
         return new AuthResult(
             tokens.AccessToken,

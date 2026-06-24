@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using TenE0.Core.Abstractions;
+using TenE0.Core.Auditing;
 using TenE0.Core.Auth.Jwt;
 using TenE0.Core.Auth.Jwt.Commands;
 using TenE0.Core.Auth.Jwt.Services;
@@ -95,7 +96,7 @@ public sealed class RefreshTokenCommandHandlerTests
 
         var errs = new Errs();
         var logger = NullLogger<RefreshTokenCommandHandler<TestUser, TestDbContext>>.Instance;
-        var handler = new RefreshTokenCommandHandler<TestUser, TestDbContext>(factory, tokenMock.Object, timeProvider, CreateJwtOptions(), errs, logger);
+        var handler = new RefreshTokenCommandHandler<TestUser, TestDbContext>(factory, tokenMock.Object, timeProvider, CreateJwtOptions(), errs, logger, new NullAuditLogSink());
 
         var result = await handler.HandleAsync(new RefreshTokenCommand("valid-refresh"), CancellationToken.None);
 
@@ -143,7 +144,7 @@ public sealed class RefreshTokenCommandHandlerTests
 
         var errs = new Errs();
         var logger = NullLogger<RefreshTokenCommandHandler<TestUser, TestDbContext>>.Instance;
-        var handler = new RefreshTokenCommandHandler<TestUser, TestDbContext>(factory, tokenMock.Object, timeProvider, CreateJwtOptions(), errs, logger);
+        var handler = new RefreshTokenCommandHandler<TestUser, TestDbContext>(factory, tokenMock.Object, timeProvider, CreateJwtOptions(), errs, logger, new NullAuditLogSink());
 
         var result = await handler.HandleAsync(new RefreshTokenCommand("ref-norole"), CancellationToken.None);
 
@@ -160,7 +161,7 @@ public sealed class RefreshTokenCommandHandlerTests
         tokenMock.Setup(t => t.HashRefreshToken("bad")).Returns("nohash");
         var errs = new Errs();
         var logger = NullLogger<RefreshTokenCommandHandler<TestUser, TestDbContext>>.Instance;
-        var handler = new RefreshTokenCommandHandler<TestUser, TestDbContext>(factory, tokenMock.Object, TimeProvider.System, CreateJwtOptions(), errs, logger);
+        var handler = new RefreshTokenCommandHandler<TestUser, TestDbContext>(factory, tokenMock.Object, TimeProvider.System, CreateJwtOptions(), errs, logger, new NullAuditLogSink());
 
         var result = await handler.HandleAsync(new RefreshTokenCommand("bad"), CancellationToken.None);
 
@@ -189,7 +190,7 @@ public sealed class RefreshTokenCommandHandlerTests
         tokenMock.Setup(t => t.HashRefreshToken("replay")).Returns("revoked");
         var errs = new Errs();
         var logger = NullLogger<RefreshTokenCommandHandler<TestUser, TestDbContext>>.Instance;
-        var handler = new RefreshTokenCommandHandler<TestUser, TestDbContext>(factory, tokenMock.Object, timeProvider, CreateJwtOptions(), errs, logger);
+        var handler = new RefreshTokenCommandHandler<TestUser, TestDbContext>(factory, tokenMock.Object, timeProvider, CreateJwtOptions(), errs, logger, new NullAuditLogSink());
 
         var result = await handler.HandleAsync(new RefreshTokenCommand("replay"), CancellationToken.None);
 
@@ -220,7 +221,7 @@ public sealed class RefreshTokenCommandHandlerTests
         tokenMock.Setup(t => t.HashRefreshToken("old")).Returns("expired");
         var errs = new Errs();
         var logger = NullLogger<RefreshTokenCommandHandler<TestUser, TestDbContext>>.Instance;
-        var handler = new RefreshTokenCommandHandler<TestUser, TestDbContext>(factory, tokenMock.Object, timeProvider, CreateJwtOptions(), errs, logger);
+        var handler = new RefreshTokenCommandHandler<TestUser, TestDbContext>(factory, tokenMock.Object, timeProvider, CreateJwtOptions(), errs, logger, new NullAuditLogSink());
 
         var result = await handler.HandleAsync(new RefreshTokenCommand("old"), CancellationToken.None);
 
@@ -247,7 +248,7 @@ public sealed class RefreshTokenCommandHandlerTests
         tokenMock.Setup(t => t.HashRefreshToken("tok")).Returns("hash1");
         var errs = new Errs();
         var logger = NullLogger<RefreshTokenCommandHandler<TestUser, TestDbContext>>.Instance;
-        var handler = new RefreshTokenCommandHandler<TestUser, TestDbContext>(factory, tokenMock.Object, timeProvider, CreateJwtOptions(), errs, logger);
+        var handler = new RefreshTokenCommandHandler<TestUser, TestDbContext>(factory, tokenMock.Object, timeProvider, CreateJwtOptions(), errs, logger, new NullAuditLogSink());
 
         var result = await handler.HandleAsync(new RefreshTokenCommand("tok"), CancellationToken.None);
 
@@ -288,7 +289,7 @@ public sealed class RefreshTokenCommandHandlerTests
 
         var errs = new Errs();
         var logger = NullLogger<RefreshTokenCommandHandler<TestUser, TestDbContext>>.Instance;
-        var handler = new RefreshTokenCommandHandler<TestUser, TestDbContext>(factory, tokenMock.Object, timeProvider, CreateJwtOptions(), errs, logger);
+        var handler = new RefreshTokenCommandHandler<TestUser, TestDbContext>(factory, tokenMock.Object, timeProvider, CreateJwtOptions(), errs, logger, new NullAuditLogSink());
 
         var result = await handler.HandleAsync(new RefreshTokenCommand("old-token"), CancellationToken.None);
 
@@ -340,7 +341,7 @@ public sealed class RefreshTokenCommandHandlerTests
 
         var errs = new Errs();
         var logger = NullLogger<RefreshTokenCommandHandler<TestUser, TestDbContext>>.Instance;
-        var handler = new RefreshTokenCommandHandler<TestUser, TestDbContext>(factory, tokenMock.Object, timeProvider, CreateJwtOptions(), errs, logger);
+        var handler = new RefreshTokenCommandHandler<TestUser, TestDbContext>(factory, tokenMock.Object, timeProvider, CreateJwtOptions(), errs, logger, new NullAuditLogSink());
 
         var result = await handler.HandleAsync(new RefreshTokenCommand("replayed"), CancellationToken.None);
 
@@ -385,7 +386,7 @@ public sealed class RefreshTokenCommandHandlerTests
 
         var errs = new Errs();
         var logger = NullLogger<RefreshTokenCommandHandler<TestUser, TestDbContext>>.Instance;
-        var handler = new RefreshTokenCommandHandler<TestUser, TestDbContext>(factory, tokenMock.Object, timeProvider, CreateJwtOptions(), errs, logger);
+        var handler = new RefreshTokenCommandHandler<TestUser, TestDbContext>(factory, tokenMock.Object, timeProvider, CreateJwtOptions(), errs, logger, new NullAuditLogSink());
 
         var result = await handler.HandleAsync(new RefreshTokenCommand("replay-token"), CancellationToken.None);
 
@@ -437,7 +438,7 @@ public sealed class RefreshTokenCommandHandlerTests
         var handler = new RefreshTokenCommandHandler<TestUser, TestDbContext>(
             factory, tokenMock.Object, timeProvider,
             CreateJwtOptions(slidingEnabled: true, refreshLifetime: lifetime),
-            errs, logger);
+            errs, logger, new NullAuditLogSink());
 
         var result = await handler.HandleAsync(new RefreshTokenCommand("valid"), CancellationToken.None);
 
@@ -488,7 +489,7 @@ public sealed class RefreshTokenCommandHandlerTests
         var handler = new RefreshTokenCommandHandler<TestUser, TestDbContext>(
             factory, tokenMock.Object, timeProvider,
             CreateJwtOptions(slidingEnabled: false, refreshLifetime: lifetime),
-            errs, logger);
+            errs, logger, new NullAuditLogSink());
 
         var result = await handler.HandleAsync(new RefreshTokenCommand("valid"), CancellationToken.None);
 
@@ -535,7 +536,7 @@ public sealed class RefreshTokenCommandHandlerTests
         var handler = new RefreshTokenCommandHandler<TestUser, TestDbContext>(
             factory, tokenMock.Object, timeProvider,
             CreateJwtOptions(rotationEnabled: false),
-            errs, logger);
+            errs, logger, new NullAuditLogSink());
 
         var result = await handler.HandleAsync(new RefreshTokenCommand("valid"), CancellationToken.None);
 

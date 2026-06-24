@@ -192,7 +192,8 @@ public sealed class RefreshTokenRotationConcurrencyAcceptanceTests
             TimeProvider.System,
             CreateJwtOptions(),
             errs,
-            NullLogger<RefreshTokenCommandHandler<TestUser, TestDbContext>>.Instance);
+            NullLogger<RefreshTokenCommandHandler<TestUser, TestDbContext>>.Instance,
+            new TenE0.Core.Auditing.NullAuditLogSink());
         return (handler, errs);
     }
 

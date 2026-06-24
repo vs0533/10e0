@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using TenE0.Core.Abstractions;
+using TenE0.Core.Auditing;
 using TenE0.Core.Auth.Jwt.Commands;
 using TenE0.Core.Auth.Jwt.Services;
 using TenE0.Core.Auth.Jwt.Storage;
@@ -69,7 +70,7 @@ public sealed class LoginCommandHandlerTests
             .Returns(new IssuedTokens("acctok", expiresAt, "reftok", "refhash", expiresAt.AddDays(7)));
 
         var errs = new Errs();
-        var handler = new LoginCommandHandler<TestUser, TestDbContext>(factory, pwMock.Object, tokenMock.Object, errs);
+        var handler = new LoginCommandHandler<TestUser, TestDbContext>(factory, pwMock.Object, tokenMock.Object, errs, new NullAuditLogSink());
 
         var result = await handler.HandleAsync(new LoginCommand("u001", "pass"), CancellationToken.None);
 
@@ -96,7 +97,7 @@ public sealed class LoginCommandHandlerTests
         pwMock.Setup(p => p.Verify("wrong", "hash123")).Returns(false);
         var tokenMock = new Mock<IJwtTokenService>();
         var errs = new Errs();
-        var handler = new LoginCommandHandler<TestUser, TestDbContext>(factory, pwMock.Object, tokenMock.Object, errs);
+        var handler = new LoginCommandHandler<TestUser, TestDbContext>(factory, pwMock.Object, tokenMock.Object, errs, new NullAuditLogSink());
 
         var result = await handler.HandleAsync(new LoginCommand("u001", "wrong"), CancellationToken.None);
 
@@ -113,7 +114,7 @@ public sealed class LoginCommandHandlerTests
         pwMock.Setup(p => p.Verify(It.IsAny<string>(), It.IsAny<string>())).Returns(false);
         var tokenMock = new Mock<IJwtTokenService>();
         var errs = new Errs();
-        var handler = new LoginCommandHandler<TestUser, TestDbContext>(factory, pwMock.Object, tokenMock.Object, errs);
+        var handler = new LoginCommandHandler<TestUser, TestDbContext>(factory, pwMock.Object, tokenMock.Object, errs, new NullAuditLogSink());
 
         var result = await handler.HandleAsync(new LoginCommand("ghost", "any"), CancellationToken.None);
 
@@ -136,7 +137,7 @@ public sealed class LoginCommandHandlerTests
         pwMock.Setup(p => p.Verify("pass", "hash123")).Returns(true);
         var tokenMock = new Mock<IJwtTokenService>();
         var errs = new Errs();
-        var handler = new LoginCommandHandler<TestUser, TestDbContext>(factory, pwMock.Object, tokenMock.Object, errs);
+        var handler = new LoginCommandHandler<TestUser, TestDbContext>(factory, pwMock.Object, tokenMock.Object, errs, new NullAuditLogSink());
 
         var result = await handler.HandleAsync(new LoginCommand("u001", "pass"), CancellationToken.None);
 
