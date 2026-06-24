@@ -24,7 +24,7 @@ public sealed class ClosedXmlExcelExporter(
     private readonly ImportExportOptions _options = options.Value;
 
     /// <inheritdoc/>
-    public async Task<ExportStream> ExportAsync<T>(
+    public Task<ExportStream> ExportAsync<T>(
         IEnumerable<T> data,
         ExportOptions? options = null,
         CancellationToken ct = default)
@@ -32,7 +32,8 @@ public sealed class ClosedXmlExcelExporter(
         options ??= new ExportOptions();
         var columns = MappingResolver.Resolve<T>().ExportColumns();
 
-        var wb = new XLWorkbook();
+        // using 确保 XLWorkbook（IDisposable，持有非托管资源）每次导出后释放，避免生产负载下的资源泄漏。
+        using var wb = new XLWorkbook();
         var ws = wb.AddWorksheet(options.SheetName);
         WriteHeader(ws, columns, options);
 
@@ -47,7 +48,7 @@ public sealed class ClosedXmlExcelExporter(
         var ms = new MemoryStream();
         wb.SaveAs(ms);
         ms.Position = 0;
-        return new ExportStream(ms, ExportFormat.Xlsx);
+        return Task.FromResult(new ExportStream(ms, ExportFormat.Xlsx));
     }
 
     /// <inheritdoc/>
@@ -77,7 +78,7 @@ public sealed class ClosedXmlExcelExporter(
         }
 
         var columns = MappingResolver.Resolve<T>().ExportColumns();
-        var wb = new XLWorkbook();
+        using var wb = new XLWorkbook();
         var ws = wb.AddWorksheet(options.SheetName);
         WriteHeader(ws, columns, options);
 
