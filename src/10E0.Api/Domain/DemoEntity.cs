@@ -8,8 +8,11 @@ namespace TenE0.Api.Domain;
 internal sealed class DemoEntity : AggregateRoot
 {
     // 流水号自动生成：每天重置，4 位补零，前缀 "DEMO-"
+    // 注意：Code 同时是序列字段（Create 时由 ISequenceGenerator 自动填充），
+    // 故导入时不接收用户传入值（[ImportIgnore]）—— 否则会误导用户以为编码可由导入指定，
+    // 也与序列生成语义冲突（EntityService 仅在值为空时才生成）。仅参与导出/模板展示。
     [Sequence("demo", "DEMO-{yyyyMMdd}-{0000}")]
-    [ImportColumn("编码")]
+    [ImportIgnore]
     [ExportColumn("编码", Order = 1)]
     public string Code { get; set; } = "";
 

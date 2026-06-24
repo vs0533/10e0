@@ -15,6 +15,12 @@ namespace TenE0.Core.ImportExport;
 /// <para><b>事务模式</b>（<see cref="TransactionMode.Transactional"/>）：所有行共享同一 DbContext + 事务，
 /// 任一行失败回滚全量；<see cref="ImportResult.TransactionRolledBack"/> 标记是否已回滚。</para>
 ///
+/// <para><b>⚠ 事务回滚的一致性边界</b>：回滚仅撤销<b>实体表数据</b>。
+/// <see cref="IEntityService.CreateAsync"/> 在每次 <c>SaveChanges</c> 时可能触发的<b>副作用</b> ——
+/// 领域事件（Outbox pattern）与审计日志（#152，异步 Channel 落库）—— 已在各自的
+/// SaveChanges 点发生，<b>不会</b>随实体事务回滚。若业务要求这些副作用也原子撤销，
+/// 需在更外层（如 Outbox 复合事务 / 审计补偿）处理，不要依赖本执行器的事务。</para>
+///
 /// <para>不绑定 DbContext 类型 —— <see cref="IDbContextFactory"/> 由调用方传入，本类纯流处理。</para>
 /// </summary>
 public sealed class ImportExecutor(

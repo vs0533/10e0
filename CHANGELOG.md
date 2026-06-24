@@ -7,6 +7,18 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **导入导出 Code Review 反馈修复** (#154 后续)：合并 PR #169 后 Code Review bot 标记的 🔴 Critical + 关键 🟡
+  - 🔴 `DemoEntity.Code` 同时标 `[Sequence]` + `[ImportColumn]`：导入值会被序列生成覆盖，误导用户。改为 `[ImportIgnore]`，仅导出/模板，导入时由序列生成器自动填充
+  - 🔴 `ExportStream.Content`（MemoryStream）经 `Results.File` 不释放：`ExportStream` 实现 `IDisposable` 持有所有权，Demo 端点改用 `RegisterForDispose` 释放，文档补资源释放说明
+  - 🔴 `ImportResult.Empty` 共享可变单例（`Errors` 列表可被污染）：`Errors` 改 `IReadOnlyList<RowError>`，删除 `Empty`
+  - 🟡 `RowError` 加默认 `Code = ImportRowError`，错误码实际接入（前端 i18n / 路由）
+  - 🟡 导入端点加文件大小限制（50 MB + `RequestSizeLimitAttribute`），防超大文件 DoS
+  - 🟡 `ExportFieldFilter.ShouldMask` 加 `ConcurrentDictionary` 结果缓存（大文件每单元格调用避免重复求值）
+  - 🟡 删除 `ColumnMap` 上死代码 `#pragma CA1051`（全是属性不触发）
+  - 🟡 事务模式副作用文档化：回滚仅撤销实体数据，不撤销已发布的领域事件 / 审计日志
+
 ### Added
 
 - **通用 Excel/CSV 导入导出** (#154)：`TenE0.Core.ImportExport` 模块，企业应用 90% 业务模块需要的"列表导出 Excel" + "批量导入数据"开箱即用

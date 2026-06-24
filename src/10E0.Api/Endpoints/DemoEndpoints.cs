@@ -87,6 +87,7 @@ internal static class DemoEndpoints
         // ─── 导入导出（issue #154）演示 ───────────────────────
         // 导出：接 DynamicWhere/OrderBy，走 IExcelExporter；超阈值自动降级 CSV。
         app.MapGet("/demo/export", async (
+            HttpContext http,
             IDbContextFactory<DemoDbContext> f,
             IExcelExporter exporter,
             [AsParameters] PagedQuery query,
@@ -102,6 +103,10 @@ internal static class DemoEndpoints
             // 导出不限分页，但受 ImportExportOptions.MaxExportRows 兜底
             var export = await exporter.ExportAsync(q, new ExportOptions { SheetName = "Demo列表" }, ct);
 
+            // ExportStream 持有 MemoryStream 所有权 —— Results.File 不会释放传入的 Stream，
+            // 注册到请求生命周期确保响应结束后释放，避免每次导出泄漏一个 MemoryStream。
+            http.Response.RegisterForDispose(export);
+
             return export.Format == ExportFormat.Csv
                 ? Results.File(export.Content, "text/csv", "demo.csv")
                 : Results.File(export.Content,
@@ -111,6 +116,7 @@ internal static class DemoEndpoints
 
         // CSV 导出演示
         app.MapGet("/demo/export-csv", async (
+            HttpContext http,
             IDbContextFactory<DemoDbContext> f,
             ICsvExporter exporter,
             [AsParameters] PagedQuery query,
@@ -124,10 +130,12 @@ internal static class DemoEndpoints
             q = q.DynamicOrderBy(query.OrderBy ?? "CreateTime desc");
 
             var export = await exporter.ExportAsync(q, new ExportOptions(), ct);
+            http.Response.RegisterForDispose(export);
             return Results.File(export.Content, "text/csv", "demo.csv");
         });
 
         // 导入：IFormFile → ImportExecutor（走 EntityService.CreateAsync 校验链）
+        // 文件大小限制：防止超大文件（ClosedXML 全量加载到内存）被用于 DoS。
         app.MapPost("/demo/import", async (
             HttpContext http,
             IDbContextFactory<DemoDbContext> f,
@@ -139,6 +147,10 @@ internal static class DemoEndpoints
             if (file is null || file.Length == 0)
                 return Results.BadRequest(ApiResult<object>.Fail("未上传文件"));
 
+            const long MaxImportBytes = 50 * 1024 * 1024; // 50 MB
+            if (file.Length > MaxImportBytes)
+                return Results.BadRequest(ApiResult<object>.Fail($"文件过大（{file.Length / 1024 / 1024} MB），上限 {MaxImportBytes / 1024 / 1024} MB"));
+
             var format = file.FileName.EndsWith(".csv", StringComparison.OrdinalIgnoreCase)
                 ? ExportFormat.Csv
                 : ExportFormat.Xlsx;
@@ -148,16 +160,18 @@ internal static class DemoEndpoints
                 f, stream, format, ct: ct);
 
             return ApiResultResult.Api(ApiResult<ImportResult>.Ok(result));
-        });
+        }).WithMetadata(new RequestSizeLimitAttribute(60 * 1024 * 1024));
 
         // 导入模板下载
         app.MapGet("/demo/import-template", async (
+            HttpContext http,
             IImportTemplateGenerator generator,
             CancellationToken ct) =>
         {
             var ms = new MemoryStream();
             await generator.GenerateAsync<DemoEntity>(ms, ct);
             ms.Position = 0;
+            http.Response.RegisterForDispose(ms);
             return Results.File(ms,
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 "demo-import-template.xlsx");

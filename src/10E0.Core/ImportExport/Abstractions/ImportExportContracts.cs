@@ -85,7 +85,8 @@ public sealed record ImportRow<T>(int RowNumber, T? Data, List<string> Errors)
 /// <summary>单行导入错误的程序化描述。</summary>
 /// <param name="RowNumber">行号（1-based）。</param>
 /// <param name="Errors">错误消息列表（一行可能多错）。</param>
-public sealed record RowError(int RowNumber, List<string> Errors);
+/// <param name="Code">错误码（默认 <see cref="TenE0.Core.Abstractions.ErrorCodes.ImportRowError"/>，便于前端 i18n / 路由）。</param>
+public sealed record RowError(int RowNumber, List<string> Errors, string Code = TenE0.Core.Abstractions.ErrorCodes.ImportRowError);
 
 /// <summary>
 /// 导入执行汇总结果。
@@ -101,14 +102,14 @@ public sealed class ImportResult
     /// <summary>失败行数。</summary>
     public int Failed { get; init; }
 
-    /// <summary>失败行明细。</summary>
-    public List<RowError> Errors { get; init; } = [];
+    /// <summary>
+    /// 失败行明细（只读）。暴露为 <see cref="IReadOnlyList{T}"/> 防止调用方
+    /// 通过 <c>Add</c> 改写结果（原 <c>List</c> 可变，存在被污染风险）。
+    /// </summary>
+    public IReadOnlyList<RowError> Errors { get; init; } = Array.Empty<RowError>();
 
     /// <summary>事务模式：若任一行失败已触发整体回滚，标记为 true。</summary>
     public bool TransactionRolledBack { get; init; }
-
-    /// <summary>静态的空结果（零行）。</summary>
-    public static ImportResult Empty { get; } = new();
 }
 
 /// <summary>
@@ -117,8 +118,28 @@ public sealed class ImportResult
 /// <para>之所以包成 record 而非直接返回 Stream：大文件降级（xlsx→csv）时调用方必须感知
 /// <see cref="Format"/> 才能设置正确的 Content-Type / 文件后缀。降级原因通过
 /// <see cref="DowngradedReason"/> 透出，便于上层日志/提示。</para>
+///
+/// <para><b>资源所有权</b>：<see cref="Content"/> 由本对象持有，<see cref="IDisposable.Dispose"/>
+/// 释放它。调用方（如 ASP.NET Core 端点）必须负责释放 —— 直接把 <see cref="Content"/> 传给
+/// <c>Results.File(Stream)</c> 不会自动释放（ASP.NET Core 只读取不 dispose），
+/// 应用 <c>HttpContext.Response.RegisterForDisposeAsync</c> 或 <c>using</c> 包裹。
+/// 详见 <see cref="Dispose"/>。</para>
 /// </summary>
-public sealed record ExportStream(Stream Content, ExportFormat Format, string? DowngradedReason = null);
+public sealed record ExportStream(Stream Content, ExportFormat Format, string? DowngradedReason = null) : IDisposable
+{
+    private bool _disposed;
+
+    /// <summary>
+    /// 释放 <see cref="Content"/>（典型为 MemoryStream / 临时文件流）。
+    /// 幂等：多次调用安全。
+    /// </summary>
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        Content?.Dispose();
+    }
+}
 
 /// <summary>
 /// 导入进度回调载体。配合 <c>IProgress&lt;ImportProgress&gt;</c> 让调用方感知进度。
