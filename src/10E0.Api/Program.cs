@@ -20,6 +20,10 @@ builder.Services.AddTenE0DataContext<DemoDbContext>((_, options) =>
 builder.Services.AddTenE0Cqrs(typeof(Program).Assembly);
 builder.Services.AddTenE0PermissionsFromAssembly(typeof(Program).Assembly);
 builder.Services.AddTenE0Menus<DemoDbContext>();
+builder.Services.AddTenE0Configuration<DemoDbContext>();
+// #153：注册 Demo 声明的系统参数定义（供 SystemParameterStore 校验 + Seeder 落库）
+foreach (var def in SystemParameterDefinitions.All)
+    builder.Services.AddSingleton<TenE0.Core.Configuration.ISystemParameterDefinition>(def);
 
 // Identity 模式：一行注册 JWT + 权限 + 组织树（含扩展用户字段：AppUser）
 // Jwt:SigningKey 必须从配置/环境变量/密钥管理服务读取，未配置时启动期
@@ -74,6 +78,7 @@ builder.Services.AddTenE0ExceptionHandler();
 builder.Services.AddScoped<IDataSeeder, PermissionSeeder>();
 builder.Services.AddScoped<IDataSeeder, AuthSeeder>();
 builder.Services.AddScoped<IDataSeeder, MenuSeeder>();
+builder.Services.AddScoped<IDataSeeder, ConfigurationSeeder>();
 
 // IUserInfoLoader 默认实现由 AddTenE0Core() 通过 TryAddScoped 注册（#43 下沉），
 // 这里不再重复 AddScoped —— 否则会在 Api 端解析成 Api.Hosting.NullUserInfoLoader

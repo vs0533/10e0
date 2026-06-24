@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using TenE0.Api.Domain;
 using TenE0.Api.Handlers;
 using TenE0.Core.Auditing;
+using TenE0.Core.Configuration;
 using TenE0.Core.DynamicFilters;
 using TenE0.Core.Menus;
 using TenE0.Core.Organizations;
@@ -398,6 +399,90 @@ internal static class AdminEndpoints
             }, ct);
             return Results.Ok(result);
         }).WithMetadata(new RequireAdminAttribute());
+
+        // ----------------- 配置：数据字典（Admin CRUD） -----------------
+        // Issue #153：写入需 [RequireAdmin]，公开只读见文件末尾 /dict/{code}
+
+        app.MapGet("/admin/dict-types", [RequireAdmin] async (IDataDictionaryService svc, CancellationToken ct) =>
+            Results.Ok(await svc.GetTypesAsync(ct)));
+
+        app.MapPost("/admin/dict-types", [RequireAdmin] async (DictTypeCreateRequest req, IDataDictionaryService svc, CancellationToken ct) =>
+            Results.Ok(await svc.AddTypeAsync(req, ct)));
+
+        app.MapPut("/admin/dict-types/{code}", [RequireAdmin] async (
+            string code, DictTypeUpdateRequest req, IDataDictionaryService svc, CancellationToken ct) =>
+        {
+            await svc.UpdateTypeAsync(code, req, ct);
+            return Results.Ok(new { ok = true });
+        });
+
+        app.MapDelete("/admin/dict-types/{code}", [RequireAdmin] async (string code, IDataDictionaryService svc, CancellationToken ct) =>
+        {
+            await svc.DeleteTypeAsync(code, ct);
+            return Results.Ok(new { ok = true });
+        });
+
+        app.MapGet("/admin/dict-types/{code}/items", [RequireAdmin] async (
+            string code, bool onlyEnabled, bool asTree, IDataDictionaryService svc, CancellationToken ct) =>
+            Results.Ok(await svc.GetItemsAsync(code, onlyEnabled, asTree, ct)));
+
+        app.MapPost("/admin/dict-types/{code}/items", [RequireAdmin] async (
+            string code, DictItemCreateRequest req, IDataDictionaryService svc, CancellationToken ct) =>
+            Results.Ok(await svc.AddItemAsync(code, req, ct)));
+
+        app.MapPut("/admin/dict-types/{code}/items/{value}", [RequireAdmin] async (
+            string code, string value, DictItemUpdateRequest req, IDataDictionaryService svc, CancellationToken ct) =>
+        {
+            await svc.UpdateItemAsync(code, value, req, ct);
+            return Results.Ok(new { ok = true });
+        });
+
+        app.MapDelete("/admin/dict-types/{code}/items/{value}", [RequireAdmin] async (
+            string code, string value, IDataDictionaryService svc, CancellationToken ct) =>
+        {
+            await svc.DeleteItemAsync(code, value, ct);
+            return Results.Ok(new { ok = true });
+        });
+
+        // ----------------- 配置：系统参数（Admin 读取 + 改值） -----------------
+
+        app.MapGet("/admin/system-parameters", [RequireAdmin] async (
+            string? group, ISystemParameterStore store, CancellationToken ct) =>
+        {
+            if (string.IsNullOrEmpty(group))
+                return Results.BadRequest(new { error = "group 查询参数必填" });
+            var items = await store.GetByGroupAsync(group, ct);
+            // 隐藏参数脱敏：不回传 Value
+            var safe = items.Select(p => new
+            {
+                p.Id,
+                p.Key,
+                Value = p.IsHidden ? null : p.Value,
+                p.ValueType,
+                p.Description,
+                p.Group,
+                p.IsReadOnly,
+                p.IsHidden,
+            });
+            return Results.Ok(safe);
+        });
+
+        app.MapPut("/admin/system-parameters/{key}", [RequireAdmin] async (
+            string key, SystemParameterUpdateRequest req, ISystemParameterStore store, CancellationToken ct) =>
+        {
+            await store.SetAsync(key, req.Value, ct);
+            return Results.Ok(new { ok = true });
+        });
+
+        // ----------------- 配置：公开只读（任何已登录用户） -----------------
+        // 不带 [RequireAdmin]；RequireAuthorization 默认策略要求已认证（与 /menus/* 同款）。
+
+        app.MapGet("/dict/{code}", async (
+            string code, bool? asTree, IDataDictionaryService svc, CancellationToken ct) =>
+        {
+            var items = await svc.GetItemsAsync(code, onlyEnabled: true, asTree: asTree ?? false, ct);
+            return Results.Ok(items);
+        }).RequireAuthorization();
 
         return app;
     }

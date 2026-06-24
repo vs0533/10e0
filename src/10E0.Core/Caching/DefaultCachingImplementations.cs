@@ -33,10 +33,34 @@ internal sealed class MultiLevelCache : IMultiLevelCache
     /// <summary>#125: 取 key 对应的锁对象，不存在则创建。不同 key 返回不同锁 → 并行 SETNX。</summary>
     private static object GateFor(string key) => _setnxGates.GetOrAdd(key, _ => new object());
 
+    /// <summary>宿主是否为 L1 配置了 SizeLimit —— 决定每条 entry 是否必须声明 Size。</summary>
+    private readonly bool _l1HasSizeLimit;
+
     public MultiLevelCache(IMemoryCache l1, IDistributedCache l2)
     {
         _l1 = l1;
         _l2 = l2;
+
+        // #153: 探测一次 SizeLimit 配置。MemoryCache 不公开 SizeLimit，故用一次试探写：
+        // 配置了 SizeLimit 的 cache 要求 entry 带 Size，否则抛 InvalidOperationException；
+        // 未配置的反之。缓存探测结果，避免每条 entry 都试错。
+        _l1HasSizeLimit = ProbeSizeLimit(l1);
+    }
+
+    private static bool ProbeSizeLimit(IMemoryCache cache)
+    {
+        try
+        {
+            cache.Set("__multilevelcache_sizeprobe__", 0, new MemoryCacheEntryOptions
+            {
+                AbsoluteExpirationRelativeToNow = TimeSpan.FromMilliseconds(1),
+            });
+            return false; // 无 SizeLimit：不带 Size 的 entry 写入成功
+        }
+        catch (InvalidOperationException)
+        {
+            return true; // 有 SizeLimit：写入被拒
+        }
     }
 
     public async Task<T?> GetOrSetAsync<T>(
@@ -168,10 +192,19 @@ internal sealed class MultiLevelCache : IMultiLevelCache
     private void SetL1<T>(string key, T value, CacheOptions options) where T : class
     {
         if (options.L1Duration <= TimeSpan.Zero) return;
-        _l1.Set(key, value, new MemoryCacheEntryOptions
+        var entryOpts = new MemoryCacheEntryOptions
         {
             AbsoluteExpirationRelativeToNow = options.L1Duration,
-        });
+        };
+
+        // #153: 宿主可能为 IMemoryCache 配置 SizeLimit（如 AddTenE0Caching 的 16MB 兜底），
+        // 此时每条 entry 必须声明 Size，否则抛 "Cache entry must specify a value for Size
+        // when SizeLimit is set"；反之未配置 SizeLimit 时设置 Size 又会抛
+        // "Size was specified but SizeLimit is not set"。按构造期探测结果决定是否设 Size=1。
+        if (_l1HasSizeLimit)
+            entryOpts.Size = 1;
+
+        _l1.Set(key, value, entryOpts);
     }
 
     private async Task SetL2Async<T>(
