@@ -28,6 +28,20 @@ public static class JwtClaims
     /// 缺失时（系统账号 / 多租户关闭）— Filter 走"safe-by-default"分支隐藏所有 <see cref="IMultiTenantEntity"/> 行。
     /// </summary>
     public const string TenantId = "tenant_id";
+
+    /// <summary>
+    /// 组织 ID claim（#155 realtime 推送 / 行级 org 隔离）。
+    /// 值为 <see cref="Organizations.TenE0Org"/> 节点的 Id（GUID-N 单值）—— 与 tenant 正交：
+    /// org 是全局树，不属于任何 tenant。
+    ///
+    /// 登录时由 <see cref="Auth.Jwt.Commands.LoginCommandHandler{TUser,TContext}"/> 读取
+    /// <see cref="Auth.Jwt.Storage.TenE0User.OrgId"/> 写入本 claim；refresh 用 DB 最新值。
+    /// 消费端：
+    /// - 业务行级过滤（如 Demo 的 CurrentOrgId）按本 claim 隔离数据；
+    /// - 实时推送默认把连接加入 <c>org:{orgId}</c> 组，支持按组织广播。
+    /// 缺失时（未绑定组织的用户 / 系统账号）— 不写入 claim，实时组不产出 org 组，过滤走"safe-by-default"。
+    /// </summary>
+    public const string Org = "org";
 }
 
 /// <summary>

@@ -75,6 +75,11 @@ builder.Services.AddTenE0Files<DemoDbContext>(options =>
 // 纯流处理，不绑 DbContext；ImportExecutor 在端点接收 IDbContextFactory<DemoDbContext>。
 builder.Services.AddTenE0ImportExport();
 
+// 实时推送（#155）：声明式 SignalR —— 领域事件实现 INotifyClient 即自动推送给前端。
+// AddRealtimeHubTokenFromQuery 让 WebSocket 握手从 ?access_token= 取 JWT（浏览器无法在 WS 握手设 Authorization 头）。
+builder.Services.AddTenE0Realtime();
+builder.Services.AddRealtimeHubTokenFromQuery();
+
 // #39: 集中异常映射 (PermissionDenied → 403, Validation → 400, DbUpdate → 409, 其余 → 500)
 builder.Services.AddTenE0ExceptionHandler();
 
@@ -139,5 +144,8 @@ app.MapHealthEndpoints()
    .MapAdminEndpoints()
    .MapFileEndpoints()
    .MapWorkflowEndpoints();
+
+// 实时推送 Hub 端点（/hub/notification）—— 必须在 UseAuthentication/UseAuthorization 之后。
+app.MapTenE0Hub();
 
 app.Run();

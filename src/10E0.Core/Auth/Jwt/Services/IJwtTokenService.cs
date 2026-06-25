@@ -22,13 +22,19 @@ public interface IJwtTokenService
     /// 传 null 表示该用户不归属任何租户（系统账号 / 多租户关闭 / legacy 用户）—— token 不带该 claim，
     /// 后续 EF Filter 走"safe-by-default"分支。
     /// </param>
+    /// <param name="orgId">
+    /// 组织节点 Id（#155 realtime / 行级 org 隔离）。会写入 <see cref="TenE0.Core.Abstractions.JwtClaims.Org"/>
+    /// claim（单值 GUID-N），由业务行级过滤与实时推送 org:{orgId} 组读回。与 <paramref name="tenantId"/> 正交：
+    /// org 是全局树，不属于任何 tenant。传 null 表示该用户未绑定组织（系统账号 / legacy 用户）—— token 不带该 claim。
+    /// </param>
     IssuedTokens Issue(
         string userCode,
         string displayName,
         TenE0.Core.Abstractions.UserType userType,
         IReadOnlyList<string> roles,
         IReadOnlyDictionary<string, long> roleVersions,
-        string? tenantId = null);
+        string? tenantId = null,
+        string? orgId = null);
 
     /// <summary>
     /// 生成一个新的 refresh token 字符串和其 SHA-256 哈希。

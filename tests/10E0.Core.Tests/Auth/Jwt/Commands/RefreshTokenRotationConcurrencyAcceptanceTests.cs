@@ -207,7 +207,8 @@ public sealed class RefreshTokenRotationConcurrencyAcceptanceTests
     {
         private static int _counter;
         public IssuedTokens Issue(string userCode, string displayName, UserType userType,
-            IReadOnlyList<string> roles, IReadOnlyDictionary<string, long> roleVersions, string? tenantId = null)
+            IReadOnlyList<string> roles, IReadOnlyDictionary<string, long> roleVersions, string? tenantId = null,
+            string? orgId = null)
         {
             var i = Interlocked.Increment(ref _counter);
             return new IssuedTokens(

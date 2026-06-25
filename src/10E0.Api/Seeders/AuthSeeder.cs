@@ -56,6 +56,23 @@ internal sealed class AuthSeeder(
 
         await using var dc = await dcFactory.CreateDbContextAsync(ct);
 
+        // 组织树先种（user.OrgId 引用其节点 Id）。org 全局树，与 tenant 正交（#155）。
+        // 幂等：已存在则跳过；但即便跳过，下面仍按 Code 回查节点 Id 赋给 user.OrgId（支持用户首次播种）。
+        string? hqId = null;
+        if (!await dc.Orgs.AnyAsync(ct))
+        {
+            // 组织树：集团 → 北京/上海 → 销售/技术
+            var hq = await orgTree.AddAsync("HQ", "集团总部", cancellationToken: ct);
+            var bj = await orgTree.AddAsync("BJ", "北京分公司", parentId: hq.Id, cancellationToken: ct);
+            var sh = await orgTree.AddAsync("SH", "上海分公司", parentId: hq.Id, cancellationToken: ct);
+            await orgTree.AddAsync("BJ-SALES", "北京销售部", parentId: bj.Id, cancellationToken: ct);
+            await orgTree.AddAsync("BJ-TECH", "北京技术部", parentId: bj.Id, cancellationToken: ct);
+            await orgTree.AddAsync("SH-SALES", "上海销售部", parentId: sh.Id, cancellationToken: ct);
+        }
+        // 回查节点 Id（首次播种 + 已有库两种路径都覆盖）—— admin→HQ，alice→BJ
+        hqId ??= await dc.Orgs.Where(o => o.Code == "HQ").Select(o => o.Id).FirstOrDefaultAsync(ct);
+        var bjId = await dc.Orgs.Where(o => o.Code == "BJ").Select(o => o.Id).FirstOrDefaultAsync(ct);
+
         if (!await dc.Users.AnyAsync(ct))
         {
             // 默认管理员：admin — 密码来自 Seed:DefaultPassword 配置，演示项目可自定义
@@ -68,6 +85,8 @@ internal sealed class AuthSeeder(
                 UserType = UserType.Person,
                 Avatar = "/avatars/admin.png",
                 Department = "信息中心",
+                // #155: OrgId 写入 "org" claim，登录后 admin 连接进入 org:{HQ} 组、DemoDbContext.CurrentOrgId 命中
+                OrgId = hqId,
             });
 
             // 普通用户：alice — 同样使用配置的默认密码
@@ -80,6 +99,8 @@ internal sealed class AuthSeeder(
                 Avatar = "/avatars/alice.png",
                 Department = "市场部",
                 Birthday = new DateOnly(1995, 6, 15),
+                // #155: alice 归属北京分公司（BJ），用于实时 org group 推送 E2E 验证
+                OrgId = bjId,
             });
 
             // 角色绑定
@@ -92,17 +113,6 @@ internal sealed class AuthSeeder(
                 new TenE0UserRole { UserCode = "alice", RoleCode = "editor" });
 
             await dc.SaveChangesAsync(ct);
-        }
-
-        if (!await dc.Orgs.AnyAsync(ct))
-        {
-            // 组织树：集团 → 北京/上海 → 销售/技术
-            var hq = await orgTree.AddAsync("HQ", "集团总部", cancellationToken: ct);
-            var bj = await orgTree.AddAsync("BJ", "北京分公司", parentId: hq.Id, cancellationToken: ct);
-            var sh = await orgTree.AddAsync("SH", "上海分公司", parentId: hq.Id, cancellationToken: ct);
-            await orgTree.AddAsync("BJ-SALES", "北京销售部", parentId: bj.Id, cancellationToken: ct);
-            await orgTree.AddAsync("BJ-TECH", "北京技术部", parentId: bj.Id, cancellationToken: ct);
-            await orgTree.AddAsync("SH-SALES", "上海销售部", parentId: sh.Id, cancellationToken: ct);
         }
     }
 }

@@ -34,4 +34,16 @@ public class TenE0User : AuditedEntity
     /// 系统账号 / 多租户关闭场景可保持 nullable。
     /// </summary>
     public string? TenantId { get; set; }
+
+    /// <summary>
+    /// 组织 ID（#155 realtime 推送 / 行级 org 隔离）。
+    /// 值为 <see cref="Organizations.TenE0Org"/> 节点的 Id（GUID-N 单值）—— 与 tenant 正交：
+    /// org 是全局树，不属于任何 tenant。
+    ///
+    /// 登录时由 LoginCommandHandler 读取并写入 JWT "org" claim（refresh 用 DB 最新值）；
+    /// 消费端：业务行级过滤按此 claim 隔离数据，实时推送把连接加入 org:{orgId} 组。
+    /// 业务方通常继承扩展在子类按业务语义赋值（如登录时查 user→org 归属）；
+    /// 未绑定组织的用户 / 系统账号可保持 nullable —— 不写入 claim，实时组不产出 org 组。
+    /// </summary>
+    public string? OrgId { get; set; }
 }
