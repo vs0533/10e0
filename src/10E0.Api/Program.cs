@@ -1,97 +1,64 @@
-using Microsoft.EntityFrameworkCore;
 using Scalar.AspNetCore;
 using TenE0.Api.Domain;
 using TenE0.Api.Endpoints;
 using TenE0.Api.Hosting;
-using TenE0.Api.Seeders;
+using TenE0.Api.Modules;
 using TenE0.Core.DependencyInjection;
 using TenE0.Core.Errors;
-using TenE0.Core.Hosting;
-using TenE0.Core.Workflow.DependencyInjection;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// -------- 服务注册 --------
+// -------- 框架装配（issue #160：AddTenE0All 一键注册 + DemoAppModule 业务下沉） --------
 
-builder.Services.AddTenE0Core();
-builder.Services.AddTenE0EntityService();
-builder.Services.AddTenE0DataContext<DemoDbContext>((_, options) =>
-    options.UseInMemoryDatabase("10E0-demo-perm"));
-builder.Services.AddTenE0Cqrs(typeof(Program).Assembly);
-builder.Services.AddTenE0PermissionsFromAssembly(typeof(Program).Assembly);
-builder.Services.AddTenE0Menus<DemoDbContext>();
-builder.Services.AddTenE0Configuration<DemoDbContext>();
-// #153：注册 Demo 声明的系统参数定义（供 SystemParameterStore 校验 + Seeder 落库）
-foreach (var def in SystemParameterDefinitions.All)
-    builder.Services.AddSingleton<TenE0.Core.Configuration.ISystemParameterDefinition>(def);
-
-// Identity 模式：一行注册 JWT + 权限 + 组织树（含扩展用户字段：AppUser）
-// Jwt:SigningKey 必须从配置/环境变量/密钥管理服务读取，未配置时启动期
-// JwtOptionsValidator + ValidateOnStart 会抛 OptionsValidationException 拒绝启动。
-builder.Services.AddTenE0Identity<AppUser, DemoDbContext>(opt =>
+// 框架部分：一行 AddTenE0All 替代原来的 15+ 行 AddTenE0Xxx 样板。
+// 默认启用 Core/EntityService/DataContext/Cqrs/Permissions/Identity/Menus/Sequences/
+// DomainEvents/DynamicFilters/Configuration；按需启用项在 options 里 opt-in（见下）。
+builder.Services.AddTenE0All<AppUser, DemoDbContext>(builder.Configuration, opt =>
 {
-    opt.Jwt.Issuer = "10E0.Api";
-    opt.Jwt.Audience = "10E0.Api";
-    opt.Jwt.SigningKey = builder.Configuration["Jwt:SigningKey"]
-        ?? throw new InvalidOperationException(
-            "Jwt:SigningKey 未配置。请通过 appsettings.json / 环境变量 JWT__SigningKey / " +
-            "dotnet user-secrets / 密钥管理服务注入。dev 模式可在 appsettings.Development.json 设置。");
-    opt.Jwt.AccessTokenLifetime = TimeSpan.FromMinutes(30);
-    opt.Jwt.RefreshTokenLifetime = TimeSpan.FromDays(14);
-    opt.Permissions.SuperUserRoles.Add("super_admin");
+    // demo 用 InMemory（显式指定 provider，避免连接串探测）。生产改 SqlServer/PostgreSQL/SQLite
+    // 并通过 DemoAppModule 注册对应 IDbProviderConfigurator。
+    opt.Provider = DatabaseProvider.InMemory;
+    opt.ConnectionString = "10E0-demo-perm"; // InMemory 用作数据库名
+    opt.HandlerAssemblies = [typeof(Program).Assembly];
+
+    // 必填：JWT SigningKey 从配置/环境变量/密钥管理服务读取。
+    // JwtOptionsValidator + ValidateOnStart 在未配置或为占位符时拒绝启动。
+    opt.Identity = identity =>
+    {
+        identity.Jwt.Issuer = "10E0.Api";
+        identity.Jwt.Audience = "10E0.Api";
+        identity.Jwt.SigningKey = builder.Configuration["Jwt:SigningKey"]
+            ?? throw new InvalidOperationException(
+                "Jwt:SigningKey 未配置。请通过 appsettings.json / 环境变量 JWT__SigningKey / " +
+                "dotnet user-secrets / 密钥管理服务注入。dev 模式可在 appsettings.Development.json 设置。");
+        identity.Jwt.AccessTokenLifetime = TimeSpan.FromMinutes(30);
+        identity.Jwt.RefreshTokenLifetime = TimeSpan.FromDays(14);
+        identity.Permissions.SuperUserRoles.Add("super_admin");
+    };
+
+    // 按需启用项（默认关）
+    opt.Auditing = true;       // #152
+    opt.Files = true;          // 文件上传（本地存储）
+    opt.FilesOptions = files =>
+    {
+        files.BasePath = "uploads";
+        files.BaseUrl = "/uploads";
+    };
+    opt.ImportExport = true;   // #154
+    opt.Realtime = true;       // #155
+    opt.Workflow = true;       // #156 epic
+    opt.DomainEventsOptions = relay =>
+    {
+        relay.BatchSize = 50;
+        relay.PollInterval = TimeSpan.FromMilliseconds(500);
+    };
 });
 
-// 流水号生成器 + 领域事件
-builder.Services.AddTenE0Sequences<DemoDbContext>();
-builder.Services.AddTenE0DomainEvents<DemoDbContext>(opt =>
-{
-    opt.BatchSize = 50;
-    opt.PollInterval = TimeSpan.FromMilliseconds(500);
-});
-builder.Services.AddTenE0DomainEventHandlersFromAssembly(typeof(Program).Assembly);
-
-// 审计日志（#152）：独立 AuditLog/LoginLog 表 + 操作日志字段级 diff + 登录日志埋点。
-// 默认异步落库（Channel + 后台 Worker），best-effort 失败不阻断业务。
-builder.Services.AddTenE0Auditing<DemoDbContext>();
-
-// 动态数据过滤
-builder.Services.AddTenE0DynamicFilters<DemoDbContext>();
-
-// 工作流（#156 epic：状态机 + 流程定义 + 流程运行）
-builder.Services.AddTenE0WorkflowStateMachine(typeof(Program).Assembly);
-builder.Services.AddTenE0WorkflowDefinitions<DemoDbContext>();
-builder.Services.AddTenE0WorkflowRuntime<DemoDbContext>();
-// AssigneeDirectory：把"角色/组织 → 用户"查询从 Core 解耦到 Api 层
-builder.Services.AddScoped<TenE0.Core.Workflow.Definitions.IAssigneeDirectory, TenE0.Api.Hosting.AssigneeDirectory<DemoDbContext>>();
-
-// 文件上传
-builder.Services.AddTenE0Files<DemoDbContext>(options =>
-{
-    options.BasePath = "uploads";
-    options.BaseUrl = "/uploads";
-});
-
-// 导入导出（#154）：Excel(ClosedXML) / CSV(RFC 4180) + 通用 ImportExecutor + 模板生成。
-// 纯流处理，不绑 DbContext；ImportExecutor 在端点接收 IDbContextFactory<DemoDbContext>。
-builder.Services.AddTenE0ImportExport();
-
-// 实时推送（#155）：声明式 SignalR —— 领域事件实现 INotifyClient 即自动推送给前端。
-// AddRealtimeHubTokenFromQuery 让 WebSocket 握手从 ?access_token= 取 JWT（浏览器无法在 WS 握手设 Authorization 头）。
-builder.Services.AddTenE0Realtime();
-builder.Services.AddRealtimeHubTokenFromQuery();
+// 业务部分（demo 专属）：seeder / 系统参数定义 / AssigneeDirectory / InMemory 装配器。
+builder.Services.AddAppModule<DemoAppModule>(builder.Configuration);
 
 // #39: 集中异常映射 (PermissionDenied → 403, Validation → 400, DbUpdate → 409, 其余 → 500)
 builder.Services.AddTenE0ExceptionHandler();
-
-// Seeder：初始权限授予 + 管理员账号 + 组织树
-builder.Services.AddScoped<IDataSeeder, PermissionSeeder>();
-builder.Services.AddScoped<IDataSeeder, AuthSeeder>();
-builder.Services.AddScoped<IDataSeeder, MenuSeeder>();
-builder.Services.AddScoped<IDataSeeder, ConfigurationSeeder>();
-
-// IUserInfoLoader 默认实现由 AddTenE0Core() 通过 TryAddScoped 注册（#43 下沉），
-// 这里不再重复 AddScoped —— 否则会在 Api 端解析成 Api.Hosting.NullUserInfoLoader
-// 而非 Core 版本（issue #93 修复后 Api 自带副本已删）。
 
 // API 版本化（#163）：版本透明策略（默认版本 1.0，未声明版本按默认处理，向后兼容裸路由），
 // 同时注册版本感知 OpenAPI 文档生成（每版本一份，配合下方 MapTenE0OpenApi 在 Scalar 切换）。
@@ -142,7 +109,8 @@ app.MapControllers();
 // 加载动态过滤规则（启动时一次性）
 await DynamicFilterBootstrap.LoadRulesAsync(app);
 
-// 路由映射
+// 业务模块路由（demo 各端点）—— 端点扩展签名在 WebApplication 上，
+// 与 IAppModule.MapEndpoints(IEndpointRouteBuilder) 契约不兼容，故此处显式挂载。
 app.MapHealthEndpoints()
    .MapAuthEndpoints()
    .MapDemoEndpoints()
