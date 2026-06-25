@@ -32,6 +32,15 @@
   - DI 一行注册 `AddTenE0ImportExport()`（无 `<TContext>`，纯流处理）；Demo 端点 `GET /demo/export` / `POST /demo/import` / `GET /demo/import-template`
   - 新增错误码 `ImportRowError`（`IMPORT_ROW`）/ `ImportTransactionRolledback`（`IMPORT_ROLLBACK`）
   - 新增文档 `docs/22-import-export.md`
+- **API 版本化（Asp.Versioning）** (#163)：`TenE0.Core.ApiVersioning` 模块，基于 Asp.Versioning v10 实现 API 多版本共存 + 每版本独立 OpenAPI 文档
+  - **版本透明策略**：默认版本 `1.0`，未声明版本的请求按默认处理（`AssumeDefaultVersionWhenUnspecified=true`），既有裸路由端点零改动向后兼容
+  - 三种版本声明方式并存：query string（`?api-version=1.0`，裸路由推荐）/ header（`X-Api-Version`）/ URL segment（需路由含 `{version:apiVersion}` 占位符）
+  - `AddTenE0ApiVersioning()` 一行注册：版本读取器 + API Explorer（`GroupNameFormat = "'v'VVV"`）+ 版本感知 OpenAPI 文档生成
+  - `MapTenE0OpenApi()` 包装 `MapOpenApi().WithDocumentPerVersion()`，Dev 环境 Scalar UI 按版本切换文档
+  - 框架配置类 `ApiVersioningOptions` 与 Asp.Versioning 内部同名类冲突，DI 扩展用 `TenE0ApiVersioningOptions` 别名消歧 + `Configure<IServiceProvider>` 桥接
+  - Demo 端点（全部）声明 v1.0 作为示范；其余端点（Auth/Admin/File/Workflow/Health）未版本化
+  - 依赖：`Asp.Versioning.Http` + `Asp.Versioning.Mvc.ApiExplorer`（10.0.0 GA）+ `Asp.Versioning.OpenApi`（10.0.0-rc.1，受上游 [aspnetcore#66408](https://github.com/dotnet/aspnetcore/issues/66408) 阻塞，功能可用）
+  - 新增文档 `docs/24-api-versioning.md`
 - **多租户（Multi-Tenancy）** (#11)：业务实体实现 `IMultiTenantEntity` 后自动启用租户隔离
   - `IMultiTenantEntity` 接口（`TenantId` string 属性）
   - `ITenantContext` 抽象 + `HttpTenantContext` HTTP 实现（从 JWT `tenant_id` claim 读取）
