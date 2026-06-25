@@ -121,7 +121,7 @@ public sealed class RefreshTokenCommandHandler<TUser, TContext>(
             where u.UserCode == record.UserCode
             join ur in dc.Set<TenE0UserRole>() on u.UserCode equals ur.UserCode into roleJoin
             from ur in roleJoin.DefaultIfEmpty()
-            select new { u.IsActive, u.DisplayName, u.UserType, u.TenantId, u.UserCode, RoleCode = ur != null ? ur.RoleCode : null }
+            select new { u.IsActive, u.DisplayName, u.UserType, u.TenantId, u.OrgId, u.UserCode, RoleCode = ur != null ? ur.RoleCode : null }
         ).AsNoTracking().ToListAsync(ct);
 
         // 无 user 行 = 用户不存在；任一行 IsActive=false 即账号禁用
@@ -155,8 +155,8 @@ public sealed class RefreshTokenCommandHandler<TUser, TContext>(
                 .Where(r => roles.Contains(r.Code))
                 .ToDictionaryAsync(r => r.Code, r => r.Version, StringComparer.Ordinal, ct);
 
-        // #11: refresh 必须用 DB 最新 TenantId（admin 把人迁走/用户在多租户间切换都能生效）
-        var tokens = tokenService.Issue(userRow.UserCode, userRow.DisplayName, userRow.UserType, roles, roleVersions, userRow.TenantId);
+        // #11/#155: refresh 必须用 DB 最新 TenantId 与 OrgId（admin 把人迁走/用户在多租户或组织间切换都能生效）
+        var tokens = tokenService.Issue(userRow.UserCode, userRow.DisplayName, userRow.UserType, roles, roleVersions, userRow.TenantId, userRow.OrgId);
 
         // 滑动过期：新 refresh token 的过期时间刷新为 now + RefreshTokenLifetime
         // 关闭滑动时保留原 token 的剩余有效期；按 JWT 'exp' 语义 record.ExpiresAt == now 视为已到期，

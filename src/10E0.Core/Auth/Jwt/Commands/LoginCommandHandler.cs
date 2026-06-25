@@ -77,8 +77,8 @@ public sealed class LoginCommandHandler<TUser, TContext>(
                 .Where(r => roles.Contains(r.Code))
                 .ToDictionaryAsync(r => r.Code, r => r.Version, StringComparer.Ordinal, ct);
 
-        // #11: 透传租户 ID（user.TenantId 可空 → null 时 token 不带 tenant_id claim）
-        var tokens = tokenService.Issue(user.UserCode, user.DisplayName, user.UserType, roles, roleVersions, user.TenantId);
+        // #11/#155: 透传租户 ID 与组织 Id（均可空 → null 时 token 不带对应 claim）
+        var tokens = tokenService.Issue(user.UserCode, user.DisplayName, user.UserType, roles, roleVersions, user.TenantId, user.OrgId);
 
         dc.Set<TenE0RefreshToken>().Add(new TenE0RefreshToken
         {

@@ -33,6 +33,12 @@ public interface ITokenClaimNames
 
     /// <summary>租户 ID（#11 multi-tenancy）的 claim 名。默认 "tenant_id"。</summary>
     string TenantId { get; }
+
+    /// <summary>
+    /// 组织 ID（#155 realtime / 行级 org 隔离）的 claim 名。默认 "org"。
+    /// 值为 <see cref="Organizations.TenE0Org"/> 节点 Id（GUID-N 单值），与 tenant 正交（org 全局树）。
+    /// </summary>
+    string Org { get; }
 }
 
 /// <summary>
@@ -44,7 +50,7 @@ public interface ITokenClaimNames
 /// 各属性值与 <see cref="JwtClaims"/> 静态常量逐字一致，保持向后兼容：
 /// <c>Subject="sub"</c> / <c>Name="name"</c> / <c>Role="role"</c> /
 /// <c>UserType="user_type"</c> / <c>RoleVersion="role_versions"</c> /
-/// <c>TenantId="tenant_id"</c>。
+/// <c>TenantId="tenant_id"</c> / <c>Org="org"</c>。
 /// </summary>
 public sealed class JwtClaimsTokenClaimNames : ITokenClaimNames
 {
@@ -65,4 +71,7 @@ public sealed class JwtClaimsTokenClaimNames : ITokenClaimNames
 
     /// <inheritdoc />
     public string TenantId => "tenant_id";
+
+    /// <inheritdoc />
+    public string Org => "org";
 }
