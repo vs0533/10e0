@@ -82,6 +82,10 @@ app.Run();
 | [同步 PR 策略](docs/18-sync-pr-strategy.md) | dev → main 合并为何禁 Squash |
 | [同步事故复盘](docs/19-sync-retrospective.md) | 2026-06 同步事故复盘 |
 | [多租户](docs/20-multi-tenancy.md) | `IMultiTenantEntity` + Named Query Filter |
+| [审批流](docs/21-workflow.md) | 状态机 + 流程定义 + 运行时 |
+| [导入导出](docs/22-import-export.md) | Excel/CSV 导入导出（ClosedXML + ImportExecutor） |
+| [实时推送](docs/23-realtime.md) | 声明式 SignalR（INotifyClient） |
+| [API 版本化](docs/24-api-versioning.md) | Asp.Versioning + 版本透明 + 每版本 OpenAPI |
 | [文档索引](docs/index.md) | 全文档分类导航 |
 
 ## 构建与运行

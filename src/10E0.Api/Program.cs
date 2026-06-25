@@ -92,7 +92,10 @@ builder.Services.AddScoped<IDataSeeder, ConfigurationSeeder>();
 // IUserInfoLoader 默认实现由 AddTenE0Core() 通过 TryAddScoped 注册（#43 下沉），
 // 这里不再重复 AddScoped —— 否则会在 Api 端解析成 Api.Hosting.NullUserInfoLoader
 // 而非 Core 版本（issue #93 修复后 Api 自带副本已删）。
-builder.Services.AddOpenApi();
+
+// API 版本化（#163）：版本透明策略（默认版本 1.0，未声明版本按默认处理，向后兼容裸路由），
+// 同时注册版本感知 OpenAPI 文档生成（每版本一份，配合下方 MapTenE0OpenApi 在 Scalar 切换）。
+builder.Services.AddTenE0ApiVersioning();
 
 // #119: 注册 perm.admin Authorization Policy。底层走 IPermissionEvaluator，
 // 与 PermissionBehavior 共用 super_admin bypass + role-version 检查 — 保证
@@ -115,7 +118,9 @@ var app = builder.Build();
 
 if (app.Environment.IsDevelopment())
 {
-    app.MapOpenApi();
+    // #163：MapTenE0OpenApi 包装 MapOpenApi().WithDocumentPerVersion()，
+    // 按 GroupNameFormat 产出每版本一份 OpenAPI 文档，Scalar UI 据此切换版本。
+    app.MapTenE0OpenApi();
     app.MapScalarApiReference();
 }
 
