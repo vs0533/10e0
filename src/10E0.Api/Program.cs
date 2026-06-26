@@ -81,6 +81,14 @@ builder.Services.AddTenE0All<AppUser, DemoDbContext>(builder.Configuration, opt 
         obs.ServiceName = "10E0.Api";
         obs.OtlpEndpoint = builder.Configuration["OTEL:Endpoint"];
     };
+
+    // #164 定时任务调度：注册 SchedulerWorker + IScheduler + 静态任务扫描。
+    // demo 用短扫描间隔（10s）便于观察；生产建议默认 30s。
+    opt.Scheduling = true;
+    opt.SchedulingOptions = sched =>
+    {
+        sched.ScanInterval = TimeSpan.FromSeconds(10);
+    };
 });
 
 // #161 可观测性 —— app 层装配 OTel SDK（core 不带 OTel 依赖，避免框架包膨胀）。

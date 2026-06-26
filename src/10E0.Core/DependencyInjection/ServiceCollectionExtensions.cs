@@ -353,6 +353,9 @@ public static class ServiceCollectionExtensions
         // 从而条件挂载 FileStorageHealthCheck。默认 false。
         if (opt.Observability) services.AddTenE0Observability<TContext>(opt.ObservabilityOptions);
 
+        // 定时任务调度（#164）：默认 false。opt-in。
+        if (opt.Scheduling) services.AddTenE0Scheduling<TContext>(handlerAssemblies, opt.SchedulingOptions);
+
         return services;
     }
 }
