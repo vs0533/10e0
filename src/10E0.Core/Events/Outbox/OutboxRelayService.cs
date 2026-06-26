@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using TenE0.Core.Observability;
 
 namespace TenE0.Core.Events.Outbox;
 
@@ -117,6 +118,8 @@ public sealed class OutboxRelayService<TContext>(
         var dcFactory = sp.GetRequiredService<IDbContextFactory<TContext>>();
         var publisher = sp.GetRequiredService<IOutboxPublisher>();
         var outboxLock = sp.GetRequiredService<IOutboxLock>();
+        // #161 可观测性埋点：未注册 Observability 时 metrics == null → no-op。
+        var metrics = sp.GetService<TenE0Metrics>();
 
         await using var dc = await dcFactory.CreateDbContextAsync(cancellationToken);
         var batch = await dc.Set<OutboxMessage>()
@@ -125,7 +128,8 @@ public sealed class OutboxRelayService<TContext>(
             .Take(_options.BatchSize)
             .ToListAsync(cancellationToken);
 
-        if (batch.Count == 0) return 0;
+        if (batch.Count == 0)
+            return 0;
 
         foreach (var msg in batch)
         {
@@ -152,6 +156,10 @@ public sealed class OutboxRelayService<TContext>(
                 await publisher.PublishAsync(msg, cancellationToken);
                 msg.SentTime = timeProvider.GetUtcNow();
                 msg.LastError = null;
+                metrics?.OutboxDelivered.Add(1,
+                [
+                    new(TenE0Metrics.Tags.Result, TenE0Metrics.Tags.Success),
+                ]);
             }
             catch (Exception ex)
             {
@@ -159,6 +167,10 @@ public sealed class OutboxRelayService<TContext>(
                 logger.LogWarning(ex,
                     "Outbox 消息投递失败 Id={Id} Attempt={Attempt}/{Max}",
                     msg.Id, msg.AttemptCount, _options.MaxAttempts);
+                metrics?.OutboxDelivered.Add(1,
+                [
+                    new(TenE0Metrics.Tags.Result, TenE0Metrics.Tags.Failure),
+                ]);
             }
             finally
             {
@@ -172,6 +184,16 @@ public sealed class OutboxRelayService<TContext>(
         }
 
         await dc.SaveChangesAsync(cancellationToken);
+
+        // #161 刷新积压指标：仅启用 Observability 时跑一次 CountAsync（每轮一次，可接受）。
+        // 用刚 SaveChanges 完的同上下文查询最新积压数（已被本批投递影响后的快照）。
+        if (metrics is not null)
+        {
+            var backlog = await dc.Set<OutboxMessage>()
+                .CountAsync(m => m.SentTime == null, cancellationToken);
+            metrics.SetBacklog(backlog);
+        }
+
         return batch.Count;
     }
 

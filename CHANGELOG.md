@@ -21,6 +21,14 @@
 
 ### Added
 
+- **可观测性** (#161)：`TenE0.Core.Observability` 模块 —— 健康检查 + Metrics + OpenTelemetry 接入点，**Core 零新依赖**（HealthChecks 与 `System.Diagnostics.Metrics` 都在 `Microsoft.AspNetCore.App` 共享框架内；OTel SDK 由 app 层按需引用）
+  - **健康检查**：`DbContextHealthCheck`（`AnyAsync()` 探测，关系型 + InMemory 通用）/ `OutboxHealthCheck`（积压数阈值 → Healthy/Degraded/Unhealthy）/ `FileStorageHealthCheck`（写读删往返，仅 Files 启用时挂）
+  - **三层健康端点**：`/health/live`（匿名恒 200，K8s liveness）/ `/health/ready`（匿名就绪）/ `/health`（完整 JSON 报告，需 `perm.admin`）
+  - **Metrics**：`TenE0Metrics`（DI Singleton，Meter "TenE0"）—— `tene0.command.total`/`.duration`（CommandDispatcher 埋点）+ `tene0.outbox.delivered`/`.backlog`（OutboxRelay 埋点），未启用时 no-op
+  - **聚合接入**：`opt.Observability = true`（`AddTenE0All`）+ `app.MapTenE0HealthChecks(adminAuthorizationPolicy:)`
+  - OTel SDK 装配示范在 `10E0.Api` demo（OTLP 导出 + Prometheus `/metrics`，EFCore instrumentation 与 Prometheus exporter 当前仅 prerelease）
+  - 详见 `docs/26-observability.md`
+
 - **安全防刷三件套** (#162)：`TenE0.Core.Security` 模块（限流 + 登录失败锁定 + 验证码），补齐认证端点的暴力撞库 / 脚本刷防御
   - **限流**：基于 .NET 10 内置 `RateLimiter`（不引入已废弃的 `AspNetCoreRateLimit`），按 IP / User / 端点前缀多维度分区；最长前缀匹配选规则；默认规则覆盖 `/auth/login`（每 IP 每分钟 10 次）/ `/auth/refresh`（每用户 5 次）/ `/captcha/*`（每 IP 30 次）/ `/files/upload`（每用户 30 次）
   - 429 响应走统一 `ApiResult<T>` 信封 + `Retry-After` 头（与 `TenE0ExceptionHandler` / `ForbiddenResponseWriter` 同风格）

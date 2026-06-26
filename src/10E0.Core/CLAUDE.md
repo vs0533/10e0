@@ -29,6 +29,7 @@
 | `Queries/` | 动态查询 + 分页 | `DynamicQueryExtensions`, `PagedQuery<T>` |
 | `Sequences/` | 序列号生成器（支持日期重置） | `ISequenceGenerator`, `EfSequenceGenerator` |
 | `Workflow/` | 轻量审批流引擎（状态机 + 流程定义 + 运行时，#156 epic） | `StateMachine<TState,TAction>`, `ProcessBuilder`, `IProcessRuntimeService`, `WorkflowEngine`, `TimeoutProcessor` |
+| `Observability/` | 健康检查 + Metrics（#161，Core 零新依赖） | `TenE0Metrics`（Meter "TenE0"）, `DbContextHealthCheck`, `OutboxHealthCheck`, `FileStorageHealthCheck` |
 
 ## 设计原则
 

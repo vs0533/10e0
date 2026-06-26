@@ -1,3 +1,6 @@
+using OpenTelemetry.Metrics;
+using OpenTelemetry.Resources;
+using OpenTelemetry.Trace;
 using Scalar.AspNetCore;
 using TenE0.Api.Domain;
 using TenE0.Api.Endpoints;
@@ -69,7 +72,46 @@ builder.Services.AddTenE0All<AppUser, DemoDbContext>(builder.Configuration, opt 
         // demo 默认关验证码强制，避免每次登录都填；可改 Always / AfterFailures 验证效果。
         cap.LoginTrigger = TenE0.Core.Security.Captcha.CaptchaTrigger.Disabled;
     };
+
+    // #161 可观测性：注册 TenE0Metrics + HealthChecks（DbContext/Outbox/FileStorage）。
+    // OTel SDK 追踪/导出 + Prometheus /metrics 端点在下方 app 层装配。
+    opt.Observability = true;
+    opt.ObservabilityOptions = obs =>
+    {
+        obs.ServiceName = "10E0.Api";
+        obs.OtlpEndpoint = builder.Configuration["OTEL:Endpoint"];
+    };
 });
+
+// #161 可观测性 —— app 层装配 OTel SDK（core 不带 OTel 依赖，避免框架包膨胀）。
+// metrics 常开（含自定义 Meter("TenE0") + AspNetCore/Http/EFCore instrument + Prometheus exporter）；
+// tracing 仅当配置了 OTEL:Endpoint 时接 OTLP（开发环境默认不导出，避免无 Collector 时刷错日志）。
+{
+    var otelOpts = builder.Configuration.GetSection("Observability")
+        .Get<TenE0.Core.Observability.ObservabilityOptions>() ?? new();
+    var otlp = otelOpts.OtlpEndpoint ?? builder.Configuration["OTEL:Endpoint"];
+
+    var otel = builder.Services.AddOpenTelemetry();
+    otel.ConfigureResource(r => r.AddService(otelOpts.ServiceName));
+
+    // Metrics：自定义 Meter + 框架内置 instrument + Prometheus 导出。
+    otel.WithMetrics(m => m
+        .AddMeter(TenE0.Core.Observability.TenE0Metrics.MeterName)
+        .AddAspNetCoreInstrumentation()
+        .AddHttpClientInstrumentation()
+        .AddPrometheusExporter());
+
+    // Tracing：仅配置了 OTLP 端点时启用（OTLP exporter 需要 Collector，开发默认无）。
+    if (!string.IsNullOrWhiteSpace(otlp))
+    {
+        otel.WithTracing(t => t
+            .AddAspNetCoreInstrumentation()
+            .AddHttpClientInstrumentation()
+            .AddEntityFrameworkCoreInstrumentation()
+            .AddSource(TenE0.Core.Observability.TenE0Metrics.MeterName)
+            .AddOtlpExporter(o => o.Endpoint = new Uri(otlp)));
+    }
+}
 
 // 业务部分（demo 专属）：seeder / 系统参数定义 / AssigneeDirectory / InMemory 装配器。
 builder.Services.AddAppModule<DemoAppModule>(builder.Configuration);
@@ -140,6 +182,14 @@ app.MapHealthEndpoints()
    .MapAdminEndpoints()
    .MapFileEndpoints()
    .MapWorkflowEndpoints();
+
+// #161 标准健康端点：/health/live（匿名恒 200）、/health/ready（匿名就绪）。
+// /health 完整报告需 perm.admin（含每项 check 详情/积压数，敏感）。
+app.MapTenE0HealthChecks(adminAuthorizationPolicy: TenE0.Core.Permissions.PermissionPolicies.Admin);
+
+// Prometheus 抓取端点：需 perm.admin（service account token 抓取），避免内部指标外泄。
+app.MapPrometheusScrapingEndpoint("/metrics")
+   .RequireAuthorization(TenE0.Core.Permissions.PermissionPolicies.Admin);
 
 // 实时推送 Hub 端点（/hub/notification）—— 必须在 UseAuthentication/UseAuthorization 之后。
 app.MapTenE0Hub();

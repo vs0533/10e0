@@ -1,8 +1,10 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Reflection;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using TenE0.Core.Abstractions;
+using TenE0.Core.Observability;
 
 namespace TenE0.Core.Cqrs;
 
@@ -33,7 +35,7 @@ internal sealed class CommandDispatcher(IServiceProvider serviceProvider) : ICom
     /// </remarks>
     internal static readonly ConcurrentDictionary<Type, object> WrapperCache = new();
 
-    public Task<TResult> SendAsync<TResult>(ICommand<TResult> command, CancellationToken cancellationToken = default)
+    public async Task<TResult> SendAsync<TResult>(ICommand<TResult> command, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(command);
 
@@ -49,8 +51,44 @@ internal sealed class CommandDispatcher(IServiceProvider serviceProvider) : ICom
             },
             typeof(TResult));
 
-        return wrapper.HandleAsync(command, serviceProvider, cancellationToken);
+        // #161 可观测性埋点：未注册 Observability 时 metrics == null → no-op，零热路径开销。
+        // 用 GetService（而非构造注入）避免 CommandDispatcher 在未启用 Observability 时强依赖 TenE0Metrics。
+        var metrics = serviceProvider.GetService<TenE0Metrics>();
+        if (metrics is null)
+            return await wrapper.HandleAsync(command, serviceProvider, cancellationToken);
+
+        var start = Stopwatch.GetTimestamp();
+        try
+        {
+            var result = await wrapper.HandleAsync(command, serviceProvider, cancellationToken);
+            metrics.CommandTotal.Add(1, SuccessTags(commandType.Name));
+            return result;
+        }
+        catch
+        {
+            metrics.CommandTotal.Add(1, FailureTags(commandType.Name));
+            throw;
+        }
+        finally
+        {
+            var elapsedMs = Stopwatch.GetElapsedTime(start).TotalMilliseconds;
+            metrics.CommandDuration.Record(elapsedMs, [new(TenE0Metrics.Tags.Command, commandType.Name)]);
+        }
     }
+
+    // 用集合表达式构造 KeyValuePair[] 显式匹配 params 重载，规避
+    // Counter<long>.Add(long, KVP) 与 Add(long, params KVP[]) 单标签时的重载歧义。
+    private static KeyValuePair<string, object?>[] SuccessTags(string commandName) =>
+    [
+        new(TenE0Metrics.Tags.Command, commandName),
+        new(TenE0Metrics.Tags.Result, TenE0Metrics.Tags.Success),
+    ];
+
+    private static KeyValuePair<string, object?>[] FailureTags(string commandName) =>
+    [
+        new(TenE0Metrics.Tags.Command, commandName),
+        new(TenE0Metrics.Tags.Result, TenE0Metrics.Tags.Failure),
+    ];
 }
 
 /// <summary>

@@ -13,6 +13,23 @@
     <PackageReference Include="Microsoft.EntityFrameworkCore.InMemory" Version="10.0.0" />
     <!-- 现代 OpenAPI UI，替代 SwaggerUI -->
     <PackageReference Include="Scalar.AspNetCore" Version="2.0.0" />
+
+    <!--
+      #161 可观测性：OpenTelemetry SDK 装配在 app 层（非 Core）——
+      契合本仓库 IDbProviderConfigurator 反膨胀 SPI 惯例，发布的 TenE0.Core 不带这些依赖。
+      本项目（Web 应用，IsPackable=false）按需引入：
+      - core + OTLP exporter（metrics + traces）走 OTel Collector，生产推荐路径，均 stable。
+      - AspNetCore / Http instrumentation 自动 instrument 入口与出站 HTTP，stable。
+      - EFCore instrumentation + Prometheus scrape endpoint 当前仅 prerelease（上游未 GA）；
+        本项目不 pack，故 NU5104 不适用。业务项目可按需取舍（见 docs/26-observability.md）。
+    -->
+    <PackageReference Include="OpenTelemetry" Version="1.16.0" />
+    <PackageReference Include="OpenTelemetry.Extensions.Hosting" Version="1.16.0" />
+    <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.16.0" />
+    <PackageReference Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.16.0" />
+    <PackageReference Include="OpenTelemetry.Instrumentation.Http" Version="1.16.0" />
+    <PackageReference Include="OpenTelemetry.Instrumentation.EntityFrameworkCore" Version="1.16.0-beta.1" />
+    <PackageReference Include="OpenTelemetry.Exporter.Prometheus.AspNetCore" Version="1.16.0-beta.1" />
   </ItemGroup>
 
   <ItemGroup>

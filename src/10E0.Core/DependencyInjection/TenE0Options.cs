@@ -4,6 +4,7 @@ using TenE0.Core.Configuration;
 using TenE0.Core.Events.Outbox;
 using TenE0.Core.Files.Storage;
 using TenE0.Core.ImportExport;
+using TenE0.Core.Observability;
 using TenE0.Core.Realtime;
 using TenE0.Core.Security.Captcha;
 using TenE0.Core.Security.LoginProtection;
@@ -140,6 +141,19 @@ public sealed class TenE0Options
 
     /// <summary>验证码配置。</summary>
     public Action<CaptchaOptions>? CaptchaOptions { get; set; }
+
+    // ---------- 可观测性（默认 false；issue #161）----------
+
+    /// <summary>
+    /// 启用可观测性（健康检查 + Metrics 埋点，默认 false）。对应 issue #161。
+    /// 启用后注册 <c>TenE0Metrics</c> + HealthChecks（DbContext/Outbox/可选 FileStorage），
+    /// 并在 <see cref="CommandDispatcher"/> / <see cref="OutboxRelayService{TContext}"/> 自动埋点。
+    /// 端点（<c>/health*</c>）由调用方在 Program.cs 调 <c>MapTenE0HealthChecks</c> 挂载。
+    /// </summary>
+    public bool Observability { get; set; }
+
+    /// <summary>可观测性配置。</summary>
+    public Action<ObservabilityOptions>? ObservabilityOptions { get; set; }
 }
 
 /// <summary>
