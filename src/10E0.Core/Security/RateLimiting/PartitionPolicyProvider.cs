@@ -14,11 +14,16 @@ namespace TenE0.Core.Security.RateLimiting;
 /// <para>
 /// <b>为什么用自定义分区而非 <c>global limiter</c></b>：全局 limiter 只能一种策略，
 /// 无法对 <c>/auth/login</c> 按 IP、<c>/auth/refresh</c> 按用户分别配额。
-/// 自定义 <see cref="RateLimitPartition{TKey}"/> 让每条规则独立分区，互不干扰。
+/// 自定义 <see cref="RateLimitPartition{TKey}"/> 让每条路径独立配额，互不干扰。
 /// </para>
 ///
-/// <para>
-/// <b>分区 key 字符串拼接约定</b>：
+/// <para><b>单路径单规则</b>：ASP.NET Core <c>AddPolicy</c> 回调一次只能返回一个
+/// <see cref="RateLimitPartition{TKey}"/>，故 <c>ResolveRules</c> 选中的规则列表里只有
+/// <b>首条</b>生效。业务方若需"同一路径多维度叠加限流"，请改用
+/// <c>PartitionedRateLimiter.Create</c> 自行串联（任一 limiter 拒绝即拒），
+/// 或在 <see cref="RateLimitOptions.EndpointRules"/> 把多维度需求拆到更细的路径前缀。</para>
+///
+/// <para><b>分区 key 字符串拼接约定</b>：</para>
 /// <list type="bullet">
 /// <item><see cref="PartitionKind.Ip"/> → <c>"ip:{ip}"</c></item>
 /// <item><see cref="PartitionKind.User"/> → <c>"user:{user}|anon:{ip}"</c>（未登录回退到匿名 IP 桶）</item>

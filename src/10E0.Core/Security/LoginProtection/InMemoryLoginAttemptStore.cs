@@ -27,13 +27,16 @@ public sealed class InMemoryLoginAttemptStore : ILoginAttemptStore
     };
 
     private readonly ConcurrentDictionary<string, Entry> _store = new();
-    private readonly ConcurrentDictionary<string, object> _locks = new();
 
     /// <inheritdoc />
     public Task<LoginAttemptState> GetAsync(string userCode, CancellationToken ct = default)
     {
-        var snapshot = ReadSnapshot(userCode, TimeProvider.System);
-        return Task.FromResult(snapshot);
+        // 读不取锁（ConcurrentDictionary 读线程安全）；返回 entry 当前快照
+        if (_store.TryGetValue(userCode, out var entry))
+        {
+            return Task.FromResult(new LoginAttemptState(entry.FailedCount, entry.LockedUntil));
+        }
+        return Task.FromResult(new LoginAttemptState(0, null));
     }
 
     /// <inheritdoc />
@@ -45,19 +48,23 @@ public sealed class InMemoryLoginAttemptStore : ILoginAttemptStore
         TimeProvider timeProvider,
         CancellationToken ct = default)
     {
-        lock (LockFor(userCode))
+        // 用 entry 自带的 lock 对象保证 read-modify-write 原子性（per-user 锁）。
+        // #162 review #5：lock 对象与 Entry 合并存储，entry 被清除时 lock 也随之 GC，
+        // 避免用户名枚举攻击让 _locks 字典无界增长。
+        var entry = _store.GetOrAdd(userCode, _ => new Entry());
+        lock (entry)
         {
             var now = timeProvider.GetUtcNow();
-            var current = _store.GetValueOrDefault(userCode);
+            var current = entry;
 
             // 滑动窗口：上次失败距今超过窗口，重置计数起点
-            if (current is not null && (now - current.LastFailureAt) > slidingWindow)
+            if ((now - entry.LastFailureAt) > slidingWindow)
             {
-                current = null;
+                entry.FailedCount = 0;
             }
 
-            var newCount = (current?.FailedCount ?? 0) + 1;
-            DateTimeOffset? lockedUntil = current?.LockedUntil;
+            var newCount = entry.FailedCount + 1;
+            DateTimeOffset? lockedUntil = entry.LockedUntil;
 
             // 达到阈值 → 写锁定截止时间（除非已锁更长）
             if (newCount >= maxFailedAttempts)
@@ -68,7 +75,9 @@ public sealed class InMemoryLoginAttemptStore : ILoginAttemptStore
                     : proposedLock;
             }
 
-            _store[userCode] = new Entry(newCount, now, lockedUntil);
+            entry.FailedCount = newCount;
+            entry.LastFailureAt = now;
+            entry.LockedUntil = lockedUntil;
             return Task.FromResult(new LoginAttemptState(newCount, lockedUntil));
         }
     }
@@ -76,35 +85,26 @@ public sealed class InMemoryLoginAttemptStore : ILoginAttemptStore
     /// <inheritdoc />
     public Task RecordSuccessAsync(string userCode, CancellationToken ct = default)
     {
-        lock (LockFor(userCode))
-        {
-            _store.TryRemove(userCode, out _);
-        }
+        _store.TryRemove(userCode, out _);
         return Task.CompletedTask;
     }
 
     /// <inheritdoc />
     public Task ResetAsync(string userCode, CancellationToken ct = default)
     {
-        lock (LockFor(userCode))
-        {
-            _store.TryRemove(userCode, out _);
-        }
+        _store.TryRemove(userCode, out _);
         return Task.CompletedTask;
     }
 
-    private LoginAttemptState ReadSnapshot(string userCode, TimeProvider timeProvider)
+    /// <summary>
+    /// 持久化条目：失败计数 + 最后失败时间 + 锁定截止时间 + per-entry 同步锁。
+    /// lock 内联在 entry 上，entry 被 <see cref="RecordSuccessAsync"/> / <see cref="ResetAsync"/>
+    /// 清除时 lock 对象一并 GC，杜绝用户名枚举导致的内存膨胀。
+    /// </summary>
+    private sealed class Entry
     {
-        // 读不取锁（ConcurrentDictionary 读线程安全）；返回 entry 当前快照
-        if (_store.TryGetValue(userCode, out var entry))
-        {
-            // 已过期的锁视为未锁：调用方判定，但这里返回原始 LockedUntil 让上层决定是否清。
-            return new LoginAttemptState(entry.FailedCount, entry.LockedUntil);
-        }
-        return new LoginAttemptState(0, null);
+        public int FailedCount;
+        public DateTimeOffset LastFailureAt;
+        public DateTimeOffset? LockedUntil;
     }
-
-    private object LockFor(string userCode) => _locks.GetOrAdd(userCode, _ => new object());
-
-    private sealed record Entry(int FailedCount, DateTimeOffset LastFailureAt, DateTimeOffset? LockedUntil);
 }
