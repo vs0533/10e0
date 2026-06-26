@@ -65,6 +65,10 @@ jobs:
           echo "Next version: $NEW_TAG (from $LATEST_TAG)"
 
       # ─── Pack NuGet ────────────────────────────────────────────────
+      # NU5104 豁免：Asp.Versioning.OpenApi 当前仅有 10.0.0-rc.1（无 stable），
+      # NuGet 默认禁止 stable 包带 prerelease 依赖（NU5104），但此处是上游版本
+      # 不可控的客观约束（#163 引入）。TreatWarningsAsErrors 会把 NU5104 升为 error
+      # 阻断 pack，故此处显式 NoWarn。待上游发 stable 后可移除。
       - name: Pack TenE0.Core NuGet package
         run: |
           dotnet pack src/10E0.Core/10E0.Core.csproj \
@@ -73,6 +77,7 @@ jobs:
             -o ./nupkgs \
             /p:Version=${{ steps.semver.outputs.version }} \
             /p:ContinuousIntegrationBuild=true \
+            /p:NoWarn=NU5104 \
             /p:PackageReleaseNotes="Release notes: https://github.com/${{ github.repository }}/releases/tag/${{ steps.semver.outputs.tag }}"
 
       # ─── Changelog ─────────────────────────────────────────────────
