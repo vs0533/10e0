@@ -87,9 +87,9 @@ builder.Services.AddTenE0All<AppUser, DemoDbContext>(builder.Configuration, opt 
 // metrics 常开（含自定义 Meter("TenE0") + AspNetCore/Http/EFCore instrument + Prometheus exporter）；
 // tracing 仅当配置了 OTEL:Endpoint 时接 OTLP（开发环境默认不导出，避免无 Collector 时刷错日志）。
 {
+    // OTel SDK 装配读 Observability 段（含上面 options lambda 写入的 ServiceName / OtlpEndpoint）。
     var otelOpts = builder.Configuration.GetSection("Observability")
         .Get<TenE0.Core.Observability.ObservabilityOptions>() ?? new();
-    var otlp = otelOpts.OtlpEndpoint ?? builder.Configuration["OTEL:Endpoint"];
 
     var otel = builder.Services.AddOpenTelemetry();
     otel.ConfigureResource(r => r.AddService(otelOpts.ServiceName));
@@ -102,6 +102,7 @@ builder.Services.AddTenE0All<AppUser, DemoDbContext>(builder.Configuration, opt 
         .AddPrometheusExporter());
 
     // Tracing：仅配置了 OTLP 端点时启用（OTLP exporter 需要 Collector，开发默认无）。
+    var otlp = otelOpts.OtlpEndpoint;
     if (!string.IsNullOrWhiteSpace(otlp))
     {
         otel.WithTracing(t => t

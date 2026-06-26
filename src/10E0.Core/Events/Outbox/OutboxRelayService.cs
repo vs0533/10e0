@@ -186,11 +186,13 @@ public sealed class OutboxRelayService<TContext>(
         await dc.SaveChangesAsync(cancellationToken);
 
         // #161 刷新积压指标：仅启用 Observability 时跑一次 CountAsync（每轮一次，可接受）。
-        // 用刚 SaveChanges 完的同上下文查询最新积压数（已被本批投递影响后的快照）。
+        // 口径与 OutboxHealthCheck 及候选查询一致：SentTime == null && AttemptCount < MaxAttempts
+        // （排除已超 MaxAttempts 的毒消息 —— 那些是 DLQ 运维问题，不应让积压计数虚高，否则
+        // Prometheus 指标与 /health 报告对不齐，误导运维告警阈值）。
         if (metrics is not null)
         {
             var backlog = await dc.Set<OutboxMessage>()
-                .CountAsync(m => m.SentTime == null, cancellationToken);
+                .CountAsync(m => m.SentTime == null && m.AttemptCount < _options.MaxAttempts, cancellationToken);
             metrics.SetBacklog(backlog);
         }
 

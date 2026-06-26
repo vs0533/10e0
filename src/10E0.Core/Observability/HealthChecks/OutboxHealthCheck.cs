@@ -26,14 +26,20 @@ namespace TenE0.Core.Observability.HealthChecks;
 public sealed class OutboxHealthCheck<TContext> : IHealthCheck
     where TContext : DbContext
 {
+    /// <summary>
+    /// 未注册 <c>IOptions&lt;OutboxRelayOptions&gt;</c> 时的回退最大重试次数（= <see cref="OutboxRelayOptions"/> 默认值）。
+    /// 用 const 避免 HealthCheck（Singleton）每次 DI 解析分配一个临时 options 实例。
+    /// </summary>
+    private const int DefaultMaxAttempts = 8;
+
     private readonly IDbContextFactory<TContext> _factory;
     private readonly ObservabilityOptions _options;
     private readonly int _maxAttempts;
 
     /// <summary>构造。</summary>
     /// <param name="relayOptions">
-    /// 可选 —— DomainEvents 模块注册。未注册时回退到 <see cref="OutboxRelayOptions"/> 默认值
-    /// （<c>MaxAttempts = 8</c>），让单启用 Observability 而不启用 DomainEvents 的项目仍可用。
+    /// 可选 —— DomainEvents 模块注册。未注册时回退到 <see cref="DefaultMaxAttempts"/>
+    /// （= <see cref="OutboxRelayOptions"/> 默认值），让单启用 Observability 而不启用 DomainEvents 的项目仍可用。
     /// </param>
     public OutboxHealthCheck(
         IDbContextFactory<TContext> factory,
@@ -42,7 +48,7 @@ public sealed class OutboxHealthCheck<TContext> : IHealthCheck
     {
         _factory = factory;
         _options = options.Value;
-        _maxAttempts = relayOptions?.Value.MaxAttempts ?? new OutboxRelayOptions().MaxAttempts;
+        _maxAttempts = relayOptions?.Value.MaxAttempts ?? DefaultMaxAttempts;
     }
 
     /// <inheritdoc />

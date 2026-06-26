@@ -88,10 +88,8 @@ public sealed class ObservabilityAcceptanceTests
         using var factory = new IsolatedFactory();
         var client = factory.CreateClient();
 
-        // 触发一次 CQRS 命令：admin 登录（LoginCommandHandler 经 CommandDispatcher 分发 → 埋点）。
-        await LoginAsAsync(client, "admin", "dev-default-password-change-me");
-
-        // 用 admin token 抓取 /metrics。
+        // 登录 admin 既触发了 CQRS 命令埋点（LoginCommandHandler 经 CommandDispatcher 分发），
+        // 又取得了抓取 /metrics 所需的 admin token —— 一次登录即可。
         var adminAuth = await LoginAsAsync(client, "admin", "dev-default-password-change-me");
         client.DefaultRequestHeaders.Authorization = new("Bearer", adminAuth.AccessToken);
         var resp = await client.GetAsync("/metrics");

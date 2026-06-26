@@ -6,7 +6,6 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
-using Microsoft.Extensions.Options;
 using System.Text.Json;
 using TenE0.Core.Files;
 using TenE0.Core.Observability;
@@ -57,17 +56,28 @@ public static class ObservabilityExtensions
         // Metrics：TryAdd 让测试 / 业务方可 Replace；未启用时埋点 no-op。
         services.TryAddSingleton<TenE0Metrics>();
 
-        // HealthChecks：始终注册（无检查则探针返回 Healthy）。
-        // 不在注册阶段读 options（避免 BuildServiceProvider 副作用 —— 会导致单例重复）；
-        // 仅当 Files 模块启用（IFileStorage 已注册）才挂文件存储检查，避免对未启用文件功能的项目误报。
-        var healthChecks = services.AddHealthChecks();
-        healthChecks
-            .AddCheck<DbContextHealthCheck<TContext>>("db", tags: [ReadyTag])
-            .AddCheck<OutboxHealthCheck<TContext>>("outbox", tags: [ReadyTag]);
+        // 解析配置好的 options 用于：a) 是否启用 HealthChecks；b) per-check 超时。
+        // 在此实例化默认 options 并应用 callback（而非 BuildServiceProvider 读 IOptions —— 那会
+        // 触发单例重复）。callback 已在上面 services.Configure 注册，这里只是为了拿到 timeout 值喂给 AddCheck。
+        var options = new ObservabilityOptions();
+        configure?.Invoke(options);
 
-        var filesEnabled = services.Any(d => d.ServiceType == typeof(IFileStorage));
-        if (filesEnabled)
-            healthChecks.AddCheck<FileStorageHealthCheck>("files", tags: [ReadyTag]);
+        if (options.EnableHealthChecks)
+        {
+            // AddCheck 的 timeout 重载：DefaultHealthCheckService 会用它为每个 check
+            // 套带超时的 CancellationToken —— 避免单个依赖 hang 住拖垮 K8s readiness 探针。
+            var healthChecks = services.AddHealthChecks();
+            var timeout = options.HealthCheckTimeout;
+            healthChecks
+                .AddCheck<DbContextHealthCheck<TContext>>("db", failureStatus: null, tags: [ReadyTag], timeout)
+                .AddCheck<OutboxHealthCheck<TContext>>("outbox", failureStatus: null, tags: [ReadyTag], timeout);
+
+            // 仅当 Files 模块启用（IFileStorage 已注册）才挂文件存储检查 ——
+            // 避免对未启用文件功能的项目引入无意义的 Unhealthy。
+            var filesEnabled = services.Any(d => d.ServiceType == typeof(IFileStorage));
+            if (filesEnabled)
+                healthChecks.AddCheck<FileStorageHealthCheck>("files", failureStatus: null, tags: [ReadyTag], timeout);
+        }
 
         return services;
     }
@@ -89,15 +99,15 @@ public static class ObservabilityExtensions
         this IEndpointRouteBuilder endpoints,
         string? adminAuthorizationPolicy = null)
     {
-        var timeout = endpoints.ServiceProvider
-            .GetService<IOptions<ObservabilityOptions>>()?.Value.HealthCheckTimeout
-            ?? TimeSpan.FromSeconds(3);
+        // per-check 超时在 AddTenE0Observability 注册时已通过 HealthCheckRegistration.Timeout 应用；
+        // 这里只负责端点映射。
 
         // live：恒 200（predicate 全 false = 不跑任何 check）。
         endpoints.MapHealthChecks("/health/live", new HealthCheckOptions
         {
             Predicate = _ => false,
             ResponseWriter = WriteMinimalStatusResponse,
+            ResultStatusCodes = StatusCodesByHealth,
         });
 
         // ready：只跑带 "ready" 标签的检查。

@@ -111,6 +111,28 @@ public sealed class TenE0MetricsTests
         observed.Should().Be(123);
     }
 
+    [Fact]
+    public void OutboxDelivered_Add_IncrementsCounterByResult()
+    {
+        // OutboxRelayService 投递成功/失败时调用此计数器。直接断言两种 result tag 互不串扰。
+        var metrics = new TenE0Metrics();
+        long success = 0, failure = 0;
+        using var listener = CreateListener(metrics, (name, tags, value) =>
+        {
+            if (name != "tene0.outbox.delivered") return;
+            var result = TagValue(tags, TenE0Metrics.Tags.Result);
+            if (result == TenE0Metrics.Tags.Success) success += (long)value;
+            if (result == TenE0Metrics.Tags.Failure) failure += (long)value;
+        });
+
+        metrics.OutboxDelivered.Add(1, [new(TenE0Metrics.Tags.Result, TenE0Metrics.Tags.Success)]);
+        metrics.OutboxDelivered.Add(2, [new(TenE0Metrics.Tags.Result, TenE0Metrics.Tags.Success)]);
+        metrics.OutboxDelivered.Add(1, [new(TenE0Metrics.Tags.Result, TenE0Metrics.Tags.Failure)]);
+
+        success.Should().Be(3);
+        failure.Should().Be(1);
+    }
+
     /// <summary>从 ReadOnlySpan&lt;KeyValuePair&gt; 中按 key 取 value（span 无 LINQ 支持）。</summary>
     private static string? TagValue(ReadOnlySpan<KeyValuePair<string, object?>> tags, string key)
     {
