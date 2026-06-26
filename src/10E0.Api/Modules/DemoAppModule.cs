@@ -1,3 +1,4 @@
+using Microsoft.EntityFrameworkCore;
 using TenE0.Api.Domain;
 using TenE0.Api.Hosting;
 using TenE0.Api.Seeders;
@@ -42,7 +43,7 @@ public sealed class DemoAppModule : IAppModule
         // demo 用 EF Core InMemory —— 通过 IDbProviderConfigurator SPI 接入 AddTenE0All 的
         // 连接串重载（Core 不引用 provider 包，装配在 app 层）。
         // 生产项目把它换成 SqlServerDbProviderConfigurator / NpgsqlConfigurator 等。
-        services.AddTenE0DbProviderConfigurator(new InMemoryDbProviderConfigurator("10E0-demo-perm"));
+        services.AddTenE0DbProviderConfigurator(new InMemoryDbProviderConfigurator());
 
         // #153：注册 Demo 声明的系统参数定义（供 SystemParameterStore 校验 + Seeder 落库）
         foreach (var def in SystemParameterDefinitions.All)
@@ -67,18 +68,18 @@ public sealed class DemoAppModule : IAppModule
 /// <summary>
 /// EF Core InMemory provider 装配器 —— 仅供 demo / 测试场景（issue #160 SPI）。
 /// 生产不应使用 InMemory（无事务、无关系语义）。
+///
+/// <para>
+/// 直接用框架下传的 <c>connectionString</c> 作为 InMemory 数据库名（demo 把
+/// <c>TenE0Options.ConnectionString</c> 设为 <c>"10E0-demo-perm"</c>），与
+/// <c>NpgsqlConfigurator.Configure(..., connectionString) => UseNpgsql(connectionString)</c>
+/// 的调用方语义一致 —— framework 传什么就用什么，不在装配器里另存一份。
+/// </para>
 /// </summary>
 internal sealed class InMemoryDbProviderConfigurator : IDbProviderConfigurator
 {
-    private readonly string _databaseName;
-
-    public InMemoryDbProviderConfigurator(string databaseName)
-    {
-        _databaseName = databaseName;
-    }
-
     public DatabaseProvider Provider => DatabaseProvider.InMemory;
 
-    public void Configure(IServiceProvider services, Microsoft.EntityFrameworkCore.DbContextOptionsBuilder options, string connectionString)
-        => Microsoft.EntityFrameworkCore.InMemoryDbContextOptionsExtensions.UseInMemoryDatabase(options, _databaseName);
+    public void Configure(IServiceProvider services, DbContextOptionsBuilder options, string connectionString)
+        => options.UseInMemoryDatabase(connectionString);
 }

@@ -50,11 +50,15 @@ public sealed class ConnectionStringProbeTests
     [Fact]
     public void Detect_DoesNotLeakFullConnectionStringInException()
     {
-        // 连接串故意写成不可识别形式以触发异常 —— 异常消息只暴露前缀，不应含敏感值。
+        // 连接串故意写成不可识别形式以触发异常 —— 异常消息只暴露首个 key + 掩码，
+        // 绝不含 value 字符（value 可能是密码 / 凭证）。
         var act = () => ConnectionStringProbe.Detect("weird=SUPERSECRET123;");
 
         var ex = act.Should().Throw<InvalidOperationException>().Subject.First();
+        // 只允许 "weird=***"（key + = + 掩码），不允许任何 value 字符
+        ex.Message.Should().Contain("weird=***");
         ex.Message.Should().NotContain("SUPERSECRET123");
+        ex.Message.Should().NotContain("SUPER");
     }
 }
 
@@ -139,6 +143,32 @@ public sealed class AddTenE0DataContextOverloadsTests
         sp.GetRequiredService<IDbContextFactory<ProbeDbContext>>().CreateDbContext();
 
         extraCalled.Should().BeTrue();
+    }
+
+    [Fact]
+    public void AddTenE0DbProviderConfigurator_RegistersAdditively_MultipleProviders()
+    {
+        // Code Review 🔴 Critical 回归测试：AddTenE0DbProviderConfigurator 必须累加（Add）而非替换（Replace），
+        // 否则多 provider 场景（迁移工具 / 分库）只有最后一个装配器存活，与 TryConfigure 的 GetServices 遍历语义冲突。
+        var services = new ServiceCollection();
+
+        services.AddTenE0DbProviderConfigurator(new ProviderSpecificConfigurator(DatabaseProvider.SqlServer));
+        services.AddTenE0DbProviderConfigurator(new ProviderSpecificConfigurator(DatabaseProvider.InMemory));
+
+        using var sp = services.BuildServiceProvider();
+        sp.GetServices<IDbProviderConfigurator>()
+            .Should().HaveCount(2)
+            .And.Contain(c => ((ProviderSpecificConfigurator)c!).Provider == DatabaseProvider.SqlServer)
+            .And.Contain(c => ((ProviderSpecificConfigurator)c!).Provider == DatabaseProvider.InMemory);
+    }
+
+    /// <summary>测试用：按构造参数决定 Provider 的装配器，便于在单测里注册多个不同 Provider。</summary>
+    private sealed class ProviderSpecificConfigurator : IDbProviderConfigurator
+    {
+        private readonly DatabaseProvider _provider;
+        public ProviderSpecificConfigurator(DatabaseProvider provider) => _provider = provider;
+        public DatabaseProvider Provider => _provider;
+        public void Configure(IServiceProvider services, DbContextOptionsBuilder options, string connectionString) { }
     }
 
     [Fact]

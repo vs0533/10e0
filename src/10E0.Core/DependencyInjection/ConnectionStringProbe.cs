@@ -93,9 +93,10 @@ public static class ConnectionStringProbe
     private static string Snippet(string? s)
     {
         if (string.IsNullOrEmpty(s)) return "<empty>";
-        // 仅暴露前缀 + 是否含凭证的提示，避免把整串（可能含密码）写进异常消息。
+        // 只暴露首个 key + "=" + 掩码，绝不含 value 字符（value 可能是密码 / 凭证）。
+        // 例：weird=SUPERSECRET123; → "weird=***"（不泄露 SUPER...）。
         var i = s.IndexOf('=');
-        return i < 0 ? s : s[..Math.Min(s.Length, i + 8)] + "***";
+        return i < 0 ? "<no-key>" : s[..(i + 1)] + "***";
     }
 
     private static Dictionary<string, string> ParseKeyValue(string connectionString)

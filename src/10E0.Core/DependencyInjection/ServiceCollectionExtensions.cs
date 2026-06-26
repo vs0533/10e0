@@ -206,13 +206,32 @@ public static class ServiceCollectionExtensions
     /// <code>
     /// builder.Services.AddTenE0DbProviderConfigurator(new NpgsqlConfigurator());
     /// </code>
+    ///
+    /// <para>
+    /// <b>累加式注册</b>：多次调用可注册多个 provider（如同时挂 SqlServer + Npgsql，
+    /// 供迁移工具 / 分库场景使用）。注册时若发现已有相同 <see cref="IDbProviderConfigurator.Provider"/>
+    /// 的装配器，Debug 构建会断言失败提示去重。
+    /// </para>
     /// </summary>
     public static IServiceCollection AddTenE0DbProviderConfigurator(
         this IServiceCollection services,
         IDbProviderConfigurator configurator)
     {
         ArgumentNullException.ThrowIfNull(configurator);
-        services.Replace(ServiceDescriptor.Singleton(configurator));
+
+        // 累加而非替换：DbContextProviderRegistry 用 GetServices<IDbProviderConfigurator>()
+        // 遍历所有装配器按 Provider 匹配，多 provider 场景（迁移工具 / 分库）才成立。
+        // Debug 下检测重复 Provider，及早暴露"同一 provider 注册了两个装配器"的笔误。
+        var existing = services
+            .Where(d => d.ServiceType == typeof(IDbProviderConfigurator)
+                        && d.ImplementationInstance is IDbProviderConfigurator existing
+                        && existing.Provider == configurator.Provider)
+            .ToList();
+        System.Diagnostics.Debug.Assert(
+            existing.Count == 0,
+            $"已注册 {configurator.Provider} 的 IDbProviderConfigurator，请勿重复注册（多 provider 用不同 DatabaseProvider 值）。");
+
+        services.Add(ServiceDescriptor.Singleton(configurator));
         return services;
     }
 
@@ -258,7 +277,14 @@ public static class ServiceCollectionExtensions
         var opt = new TenE0Options();
         configure?.Invoke(opt);
 
-        var handlerAssemblies = opt.HandlerAssemblies ?? [Assembly.GetEntryAssembly()!];
+        // 入口程序集可能在 NativeAOT / 单文件裁剪 / 部分测试 runner 下为 null —— 显式校验并给出可操作提示，
+        // 而非让下游 [0] 访问抛 NRE。
+        var handlerAssemblies = opt.HandlerAssemblies
+            ?? (Assembly.GetEntryAssembly() is { } entry
+                ? [entry]
+                : throw new InvalidOperationException(
+                    "无法确定入口程序集（NativeAOT / 单文件裁剪 / 测试 runner 场景）。" +
+                    "请显式设置 TenE0Options.HandlerAssemblies。"));
         var workflowAssemblies = opt.WorkflowAssemblies ?? handlerAssemblies;
         var connectionString = opt.ConnectionString
             ?? configuration.GetConnectionString("Default")
