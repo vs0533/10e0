@@ -34,9 +34,26 @@ public sealed class LoginCommandHandler<TUser, TContext>(
     {
         // #162 登录失败锁定：校验密码前先判定账号是否处于锁定期。
         // 锁定异常（AccountLockedException）由 TenE0ExceptionHandler 映射为 423 + AUTH_LOCKED。
+        // #162 review #10：锁定期内的登录尝试单独审计（EventType=Locked），让运维/用户能看到
+        // "账号被锁定"事件，区别于普通凭据失败。
         if (loginProtector is not null)
         {
-            await loginProtector.EnsureNotLockedAsync(cmd.UserCode, ct);
+            try
+            {
+                await loginProtector.EnsureNotLockedAsync(cmd.UserCode, ct);
+            }
+            catch (AccountLockedException lockEx)
+            {
+                await auditSink.WriteLoginAsync(new LoginLogEntry
+                {
+                    UserCode = cmd.UserCode,
+                    EventType = "Locked",
+                    Success = false,
+                    IpAddress = cmd.ClientIp,
+                    FailureReason = $"账号锁定至 {lockEx.LockedUntil:O}",
+                }, ct);
+                throw;
+            }
         }
 
         await using var dc = await contextFactory.CreateDbContextAsync(ct);

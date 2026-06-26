@@ -142,6 +142,33 @@ public sealed class ImageCaptchaProviderTests
         (await provider.ValidateAsync("id", "")).Should().BeFalse();
         (await provider.ValidateAsync("id", null!)).Should().BeFalse();
     }
+
+    /// <summary>
+    /// review #7：同一 captchaId 并发两次校验，"一次性消费"承诺下只应有一个拿到答案。
+    /// 修复前 read-then-remove 非原子，两个并发请求可能都读到真答案 → 都通过。
+    /// 修复后用 per-key 锁 + 已消费哨兵，第二个返回 null。
+    /// </summary>
+    [Fact]
+    public async Task ValidateAsync_ConcurrentConsumption_OnlyOneSucceeds()
+    {
+        var cache = new MemoryDistributedCache(Options.Create(new MemoryDistributedCacheOptions()));
+        var store = new CaptchaStore(cache, Options.Create(new CaptchaOptions()));
+        var provider = new ImageCaptchaProvider(store, Options.Create(new CaptchaOptions()));
+        var result = await provider.GenerateAsync();
+
+        // 读出真实答案
+        var raw = cache.GetString($"captcha:{result.CaptchaId}")!;
+        var answer = System.Text.Json.JsonDocument.Parse(raw).RootElement.GetProperty("answer").GetString()!;
+
+        // 并发多次校验（同一个正确答案）
+        var tasks = Enumerable.Range(0, 10)
+            .Select(_ => Task.Run(() => provider.ValidateAsync(result.CaptchaId, answer)))
+            .ToList();
+        var results = await Task.WhenAll(tasks);
+
+        var successCount = results.Count(r => r);
+        successCount.Should().Be(1, "一次性消费：同一 captchaId 并发校验只应有一个成功");
+    }
 }
 
 /// <summary>

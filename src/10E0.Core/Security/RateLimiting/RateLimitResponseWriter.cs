@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Json;
 using Microsoft.AspNetCore.RateLimiting;
@@ -38,7 +39,15 @@ public static class RateLimitResponseWriter
     {
         var http = context.HttpContext;
         http.Response.StatusCode = StatusCodes.Status429TooManyRequests;
-        http.Response.Headers.RetryAfter = DefaultRetryAfterSeconds.ToString();
+
+        // review #6：优先从 lease 取真实剩余重试时间；limiter 未提供时退回保守默认 60s。
+        var retryAfter = DefaultRetryAfterSeconds;
+        if (context.Lease.TryGetMetadata(MetadataName.RetryAfter, out var retry))
+        {
+            var seconds = (int)Math.Ceiling(retry.TotalSeconds);
+            if (seconds > 0) retryAfter = seconds;
+        }
+        http.Response.Headers.RetryAfter = retryAfter.ToString();
 
         // 用 host 的 JsonOptions（与 ForbiddenResponseWriter / ExceptionHandler 同一序列化器来源）
         var jsonOptions = http.RequestServices
