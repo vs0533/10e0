@@ -5,6 +5,9 @@ using TenE0.Core.Events.Outbox;
 using TenE0.Core.Files.Storage;
 using TenE0.Core.ImportExport;
 using TenE0.Core.Realtime;
+using TenE0.Core.Security.Captcha;
+using TenE0.Core.Security.LoginProtection;
+using TenE0.Core.Security.RateLimiting;
 using TenE0.Core.Workflow.Runtime;
 
 namespace TenE0.Core.DependencyInjection;
@@ -108,6 +111,35 @@ public sealed class TenE0Options
 
     /// <summary>工作流状态机扫描的程序集（默认与 <see cref="HandlerAssemblies"/> 一致）。</summary>
     public Assembly[]? WorkflowAssemblies { get; set; }
+
+    // ---------- 安全防刷三件套（默认 false；issue #162）----------
+
+    /// <summary>
+    /// 启用限流（IP / User / 端点配额，默认 false）。对应 issue #162。
+    /// 启用后还需在 pipeline 调 <c>app.UseTenE0RateLimiting()</c>（在 UseAuthentication 之后）。
+    /// </summary>
+    public bool RateLimiting { get; set; }
+
+    /// <summary>限流配置。</summary>
+    public Action<RateLimitOptions>? RateLimitingOptions { get; set; }
+
+    /// <summary>
+    /// 启用登录失败锁定（默认 false）。对应 issue #162。
+    /// 启用后 <c>LoginCommandHandler</c> 自动注入 <c>LoginProtector</c>。
+    /// </summary>
+    public bool LoginProtection { get; set; }
+
+    /// <summary>登录失败锁定配置。</summary>
+    public Action<LoginProtectionOptions>? LoginProtectionOptions { get; set; }
+
+    /// <summary>
+    /// 启用验证码（图形 / 滑块，默认 false）。对应 issue #162。
+    /// 启用后注册 <c>/captcha/image</c> / <c>/captcha/slider</c> 端点 + 登录端点按配置触发校验。
+    /// </summary>
+    public bool Captcha { get; set; }
+
+    /// <summary>验证码配置。</summary>
+    public Action<CaptchaOptions>? CaptchaOptions { get; set; }
 }
 
 /// <summary>

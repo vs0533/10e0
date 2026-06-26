@@ -10,6 +10,9 @@ using TenE0.Core.Auth.Jwt.Storage;
 using TenE0.Core.DataContext.Interceptors;
 using TenE0.Core.Errors;
 using TenE0.Core.Hosting;
+using TenE0.Core.Security.Captcha;
+using TenE0.Core.Security.LoginProtection;
+using TenE0.Core.Security.RateLimiting;
 using TenE0.Core.Workflow.DependencyInjection;
 
 namespace TenE0.Core.DependencyInjection;
@@ -338,6 +341,13 @@ public static class ServiceCollectionExtensions
             services.AddTenE0WorkflowDefinitions<TContext>();
             services.AddTenE0WorkflowRuntime<TContext>(opt.WorkflowOptions);
         }
+
+        // 安全防刷三件套（#162）：默认 false，按需启用。
+        // - RateLimiting / Captcha 端点 + pipeline 由调用方在 Program.cs 显式接入（UseTenE0RateLimiting / MapCaptchaEndpoints）。
+        // - LoginProtection 仅注册 LoginProtector；LoginCommandHandler 自动解析（未注册时为 null no-op）。
+        if (opt.RateLimiting) services.AddTenE0RateLimiting(opt.RateLimitingOptions);
+        if (opt.LoginProtection) services.AddTenE0LoginProtection(opt.LoginProtectionOptions);
+        if (opt.Captcha) services.AddTenE0Captcha(opt.CaptchaOptions);
 
         return services;
     }
