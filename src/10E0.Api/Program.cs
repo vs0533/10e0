@@ -5,6 +5,7 @@ using TenE0.Api.Hosting;
 using TenE0.Api.Modules;
 using TenE0.Core.DependencyInjection;
 using TenE0.Core.Errors;
+using TenE0.Core.Security.RateLimiting;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -51,6 +52,22 @@ builder.Services.AddTenE0All<AppUser, DemoDbContext>(builder.Configuration, opt 
     {
         relay.BatchSize = 50;
         relay.PollInterval = TimeSpan.FromMilliseconds(500);
+    };
+
+    // #162 安全防刷三件套：限流 + 登录失败锁定 + 验证码。
+    // 限流 / 验证码端点 + pipeline 由下方 UseTenE0RateLimiting / MapCaptchaEndpoints 接入。
+    opt.RateLimiting = true;
+    opt.LoginProtection = true;
+    opt.LoginProtectionOptions = lp =>
+    {
+        lp.MaxFailedAttempts = 5;
+        lp.LockoutDuration = TimeSpan.FromMinutes(15);
+    };
+    opt.Captcha = true;
+    opt.CaptchaOptions = cap =>
+    {
+        // demo 默认关验证码强制，避免每次登录都填；可改 Always / AfterFailures 验证效果。
+        cap.LoginTrigger = TenE0.Core.Security.Captcha.CaptchaTrigger.Disabled;
     };
 });
 
@@ -103,6 +120,11 @@ app.UseExceptionHandler(_ => { });
 app.UseStaticFiles();
 
 app.UseAuthentication();
+
+// #162 限流：必须放在 UseRouting 之后、UseAuthentication 之后（user 分区可用），
+// 在 UseAuthorization 之前（未授权请求也能按 IP 限流，防匿名刷）。
+app.UseTenE0RateLimiting();
+
 app.UseAuthorization();
 app.MapControllers();
 
@@ -113,6 +135,7 @@ await DynamicFilterBootstrap.LoadRulesAsync(app);
 // 与 IAppModule.MapEndpoints(IEndpointRouteBuilder) 契约不兼容，故此处显式挂载。
 app.MapHealthEndpoints()
    .MapAuthEndpoints()
+   .MapCaptchaEndpoints()
    .MapDemoEndpoints()
    .MapAdminEndpoints()
    .MapFileEndpoints()

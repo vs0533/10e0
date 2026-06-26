@@ -21,6 +21,18 @@
 
 ### Added
 
+- **安全防刷三件套** (#162)：`TenE0.Core.Security` 模块（限流 + 登录失败锁定 + 验证码），补齐认证端点的暴力撞库 / 脚本刷防御
+  - **限流**：基于 .NET 10 内置 `RateLimiter`（不引入已废弃的 `AspNetCoreRateLimit`），按 IP / User / 端点前缀多维度分区；最长前缀匹配选规则；默认规则覆盖 `/auth/login`（每 IP 每分钟 10 次）/ `/auth/refresh`（每用户 5 次）/ `/captcha/*`（每 IP 30 次）/ `/files/upload`（每用户 30 次）
+  - 429 响应走统一 `ApiResult<T>` 信封 + `Retry-After` 头（与 `TenE0ExceptionHandler` / `ForbiddenResponseWriter` 同风格）
+  - **登录失败锁定**：滑动窗口内失败 N 次后锁定账号 M 分钟（默认 10 分钟内 5 次锁 15 分钟）；`LoginProtector` 在 `LoginCommandHandler` 密码校验前后自动接入；`AccountLockedException` 映射为 423 Locked + `AUTH_LOCKED`
+  - 存储抽象 `ILoginAttemptStore`：默认 `InMemoryLoginAttemptStore`；多副本需 Replace 为 Redis `INCR` 实现（注释标注 race 警告，对齐 `DistributedAtomicCounter` 风格）
+  - **验证码**：图形（`ImageCaptchaProvider`，复用 Files 模块的 `SixLabors.ImageSharp`）+ 滑块（`SliderCaptchaProvider`）双实现；`ICaptchaProvider` 抽象让业务方可 Replace 切到第三方（极验 / 阿里云 / Cloudflare Turnstile）
+  - 触发策略 `CaptchaTrigger`：`Disabled`（默认）/ `Always` / `AfterFailures`（失败 N 次后才要，配合 `LoginProtector` 计数）；一次性消费防重放
+  - 端点 `GET /captcha/image` / `GET /captcha/slider`；`LoginCommand` 新增可选 `CaptchaId` / `CaptchaCode` 字段
+  - 新增错误码 `AuthLocked` / `CaptchaInvalid` / `CaptchaRequired` / `RateLimited`
+  - `TenE0Options` 新增 `RateLimiting` / `LoginProtection` / `Captcha` 三个 opt-in 开关（默认关，避免强制引入开销）
+  - 新增文档 `docs/25-security.md`
+  - 兼容性：`.NET 10` 把端点扩展 `EnableRateLimiting` 改名为 `RequireRateLimiting`，本次接入用新 API
 - **通用 Excel/CSV 导入导出** (#154)：`TenE0.Core.ImportExport` 模块，企业应用 90% 业务模块需要的"列表导出 Excel" + "批量导入数据"开箱即用
   - 统一抽象 `IExcelExporter` / `IExcelImporter` / `ICsvExporter` / `ICsvImporter` / `IImportTemplateGenerator`
   - Excel 走 ClosedXML 0.105.0（MIT 许可，区别于 EPPlus 社区版的非商业条款），CSV 手写 RFC 4180 状态机（不引入 CsvHelper）

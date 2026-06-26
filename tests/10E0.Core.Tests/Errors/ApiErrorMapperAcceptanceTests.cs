@@ -50,6 +50,27 @@ public sealed class ApiErrorMapperAcceptanceTests
             "the human-readable reason must be preserved verbatim");
     }
 
+    // ── AccountLockedException (#162) ─────────────────────────
+
+    [Fact]
+    public void GivenAccountLockedException_WhenMapped_ThenReturns423WithAuthLockedCode()
+    {
+        // Arrange
+        var mapper = CreateMapper();
+        var lockedUntil = DateTimeOffset.Parse("2026-01-01T00:15:00Z");
+        var ex = new TenE0.Core.Security.LoginProtection.AccountLockedException("u001", lockedUntil);
+
+        // Act
+        var (status, body) = mapper.Map(ex);
+
+        // Assert
+        status.Should().Be(423,
+            "账号锁定对应 HTTP 423 Locked（#162）");
+        body.errorCode.Should().Be("AUTH_LOCKED");
+        body.success.Should().BeFalse();
+        body.errorMessage.Should().Contain("锁定");
+    }
+
     // ── Validation (ArgumentException) ─────────────────────────
 
     [Fact]

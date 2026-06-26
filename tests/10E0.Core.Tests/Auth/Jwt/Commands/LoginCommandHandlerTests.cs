@@ -6,6 +6,7 @@ using TenE0.Core.Auth.Jwt.Services;
 using TenE0.Core.Auth.Jwt.Storage;
 using TenE0.Core.Errors;
 using TenE0.Core.Permissions.Storage;
+using TenE0.Core.Security.LoginProtection;
 
 namespace TenE0.Core.Tests.Auth.Jwt.Commands;
 
@@ -144,5 +145,74 @@ public sealed class LoginCommandHandlerTests
         result.Should().BeNull();
         errs.IsValid.Should().BeFalse();
         errs.GetFirstError().Should().Contain("禁用");
+    }
+
+    // ---------- #162 登录失败锁定集成 ----------
+
+    [Fact]
+    public async Task HandleAsync_WhenAccountLocked_ThrowsAccountLockedException()
+    {
+        var dbName = Guid.NewGuid().ToString("N");
+        var factory = CreateFactory(dbName);
+        await using (var ctx = factory.CreateDbContext())
+        {
+            ctx.Users.Add(new TestUser { UserCode = "u001", DisplayName = "张三", PasswordHash = "hash123", IsActive = true, UserType = UserType.Person });
+            await ctx.SaveChangesAsync();
+        }
+
+        var pwMock = new Mock<IPasswordHasher>();
+        pwMock.Setup(p => p.Verify(It.IsAny<string>(), It.IsAny<string>())).Returns(false);
+        var tokenMock = new Mock<IJwtTokenService>();
+
+        // 预先锁定账号：注入一个已锁定的 LoginProtector
+        var errs = new Errs();
+        var store = new InMemoryLoginAttemptStore();
+        var timeProvider = TimeProvider.System;
+        var options = Microsoft.Extensions.Options.Options.Create(new LoginProtectionOptions
+        {
+            MaxFailedAttempts = 1,
+            LockoutDuration = TimeSpan.FromMinutes(15),
+        });
+        var protector = new LoginProtector(store, timeProvider, options);
+        // 触发一次失败 → 达到阈值 1 → 锁定
+        await protector.RecordFailureAsync("u001");
+
+        var handler = new LoginCommandHandler<TestUser, TestDbContext>(factory, pwMock.Object, tokenMock.Object, errs, new NullAuditLogSink(), protector);
+
+        var act = async () => await handler.HandleAsync(new LoginCommand("u001", "pass"), CancellationToken.None);
+
+        await act.Should().ThrowAsync<AccountLockedException>();
+    }
+
+    [Fact]
+    public async Task HandleAsync_InvalidPassword_RecordsFailureInProtector()
+    {
+        var dbName = Guid.NewGuid().ToString("N");
+        var factory = CreateFactory(dbName);
+        await using (var ctx = factory.CreateDbContext())
+        {
+            ctx.Users.Add(new TestUser { UserCode = "u001", DisplayName = "张三", PasswordHash = "hash123", IsActive = true, UserType = UserType.Person });
+            await ctx.SaveChangesAsync();
+        }
+
+        var pwMock = new Mock<IPasswordHasher>();
+        pwMock.Setup(p => p.Verify(It.IsAny<string>(), It.IsAny<string>())).Returns(false);
+        var tokenMock = new Mock<IJwtTokenService>();
+        var errs = new Errs();
+        var store = new InMemoryLoginAttemptStore();
+        var timeProvider = TimeProvider.System;
+        var options = Microsoft.Extensions.Options.Options.Create(new LoginProtectionOptions
+        {
+            MaxFailedAttempts = 5,
+            LockoutDuration = TimeSpan.FromMinutes(15),
+        });
+        var protector = new LoginProtector(store, timeProvider, options);
+
+        var handler = new LoginCommandHandler<TestUser, TestDbContext>(factory, pwMock.Object, tokenMock.Object, errs, new NullAuditLogSink(), protector);
+
+        await handler.HandleAsync(new LoginCommand("u001", "wrong"), CancellationToken.None);
+
+        var state = await store.GetAsync("u001");
+        state.FailedCount.Should().Be(1, "失败登录应让 LoginProtector 计数 +1");
     }
 }

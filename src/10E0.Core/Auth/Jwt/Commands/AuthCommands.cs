@@ -3,7 +3,15 @@ using TenE0.Core.Abstractions;
 namespace TenE0.Core.Auth.Jwt.Commands;
 
 // 登录命令 — 无权限要求（公开接口）
-public sealed record LoginCommand(string UserCode, string Password, string? ClientIp = null)
+//
+// CaptchaId / CaptchaCode（#162 验证码）：可选字段，登录端点按 CaptchaOptions.LoginTrigger
+// 决定是否强制校验。Disabled 触发策略时这俩字段被忽略。
+public sealed record LoginCommand(
+    string UserCode,
+    string Password,
+    string? ClientIp = null,
+    string? CaptchaId = null,
+    string? CaptchaCode = null)
     : ICommand<AuthResult>;
 
 // 刷新 token — 公开接口（携带 refresh token 即可）
