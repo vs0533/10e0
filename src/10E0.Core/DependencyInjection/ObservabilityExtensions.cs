@@ -6,6 +6,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
+using Microsoft.Extensions.Options;
 using System.Text.Json;
 using TenE0.Core.Files;
 using TenE0.Core.Observability;
@@ -48,19 +49,18 @@ public static class ObservabilityExtensions
         Action<ObservabilityOptions>? configure = null)
         where TContext : DbContext
     {
-        if (configure is not null)
-            services.Configure(configure);
-        else
-            services.AddOptions<ObservabilityOptions>();
+        // 实例化默认 options 并应用 callback 一次。这份已配置的实例同时用于：
+        // a) 注册到 IOptions<ObservabilityOptions>（业务方/测试可解析）；
+        // b) 决定是否启用 HealthChecks；
+        // c) per-check 超时（喂给 AddCheck）。
+        // 不用 BuildServiceProvider 读 IOptions —— 那会触发单例重复；也不二次调用 callback
+        // （Options.Create 把同一份实例包成 IOptions<T> 单例，零额外开销）。
+        var options = new ObservabilityOptions();
+        configure?.Invoke(options);
+        services.AddSingleton<IOptions<ObservabilityOptions>>(Options.Create(options));
 
         // Metrics：TryAdd 让测试 / 业务方可 Replace；未启用时埋点 no-op。
         services.TryAddSingleton<TenE0Metrics>();
-
-        // 解析配置好的 options 用于：a) 是否启用 HealthChecks；b) per-check 超时。
-        // 在此实例化默认 options 并应用 callback（而非 BuildServiceProvider 读 IOptions —— 那会
-        // 触发单例重复）。callback 已在上面 services.Configure 注册，这里只是为了拿到 timeout 值喂给 AddCheck。
-        var options = new ObservabilityOptions();
-        configure?.Invoke(options);
 
         if (options.EnableHealthChecks)
         {
