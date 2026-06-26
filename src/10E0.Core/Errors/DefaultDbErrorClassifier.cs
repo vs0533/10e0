@@ -98,6 +98,9 @@ public sealed class DefaultDbErrorClassifier : IDbErrorClassifier
         //    rather than a message field) surface the prefix on ToString
         //    only. ToString() for the base Exception is also fine to
         //    call — it never throws and is cheap to construct.
+        //
+        //    #118: || 短路保证 messageProbe 命中时不再扫描 toStringProbe ——
+        //    无重复扫描开销。两个 probe 都必须检查（stand-in 可能在任一暴露前缀）。
         var messageProbe = inner.Message;
         var toStringProbe = inner.ToString();
         if (HasSqlServerPrefix(messageProbe) || HasSqlServerPrefix(toStringProbe))

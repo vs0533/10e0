@@ -84,7 +84,10 @@ public static class PermissionsExtensions
                 services.AddSingleton(typeof(IPermissionProvider), type);  // 静态定义，Singleton
 
             if (typeof(IEntityFilterContributor).IsAssignableFrom(type))
-                services.AddScoped(typeof(IEntityFilterContributor), type);
+                // #95 captive-dependency 修复：contribs 无状态，注册 Singleton。
+                // BaseDataContext 在 OnModelCreating 期间通过 sp 解析 IEnumerable<IEntityFilterContributor>，
+                // 如果是 Scoped 会触发 "Cannot resolve scoped from root provider"。
+                services.AddSingleton(typeof(IEntityFilterContributor), type);
         }
 
         return services;

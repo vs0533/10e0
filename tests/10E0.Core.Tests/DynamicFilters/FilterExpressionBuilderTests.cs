@@ -1,8 +1,9 @@
 using System.Text.Json;
+using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.DependencyInjection;
 using TenE0.Core.Abstractions;
 using TenE0.Core.DataContext;
 using TenE0.Core.DynamicFilters;
-using TenE0.Core.Permissions.DataFilter;
 
 namespace TenE0.Core.Tests.DynamicFilters;
 
@@ -39,12 +40,9 @@ public sealed class FilterExpressionBuilderTests
     {
         public TestDbContext(
             DbContextOptions options,
-            ICurrentUserContext currentUser,
-            IDataAccessPolicy accessPolicy)
-            : base(options, currentUser, accessPolicy,
-                   Enumerable.Empty<IEntityFilterContributor>(),
-                   Mock.Of<IDynamicFilterProvider>(),
-                   Mock.Of<ITenantContext>())
+            IServiceProvider serviceProvider,
+            IHttpContextAccessor httpContextAccessor)
+            : base(options, serviceProvider, httpContextAccessor)
         {
         }
     }
@@ -78,10 +76,20 @@ public sealed class FilterExpressionBuilderTests
     {
         var currentUser = CreateUserMock(userCode, roleIds);
         var policy = CreatePolicyMock(bypassFilters);
+        var tenant = Mock.Of<ITenantContext>();
         var options = new DbContextOptionsBuilder<TestDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString())
             .Options;
-        return new TestDbContext(options, currentUser.Object, policy.Object);
+        // #95 captive-dependency 修复后 BaseDataContext ctor 改为 (options, IServiceProvider, IHttpContextAccessor)。
+        var services = new ServiceCollection();
+        services.AddSingleton(currentUser.Object);
+        services.AddSingleton(policy.Object);
+        services.AddSingleton(tenant);
+        services.AddSingleton(Mock.Of<IDynamicFilterProvider>());
+        services.AddHttpContextAccessor();
+        var sp = services.BuildServiceProvider();
+        var accessor = sp.GetRequiredService<IHttpContextAccessor>();
+        return new TestDbContext(options, sp, accessor);
     }
 
     private static string SerializeGroup(ConditionRuleGroup group)

@@ -1,16 +1,18 @@
+using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
-using TenE0.Core.Abstractions;
+using TenE0.Core.Auditing;
 using TenE0.Core.Auth.Jwt.Storage;
-using TenE0.Core.DynamicFilters;
+using TenE0.Core.Configuration.Storage;
 using TenE0.Core.DynamicFilters.Storage;
 using TenE0.Core.Events.Outbox;
 using TenE0.Core.Menus.Storage;
 using TenE0.Core.Organizations;
-using TenE0.Core.Permissions.DataFilter;
 using TenE0.Core.Permissions.Storage;
 using TenE0.Core.Files;
 using TenE0.Core.Files.Storage;
 using TenE0.Core.Sequences.Storage;
+using TenE0.Core.Workflow.Definitions;
+using TenE0.Core.Workflow.Runtime;
 
 namespace TenE0.Core.DataContext;
 
@@ -40,12 +42,9 @@ namespace TenE0.Core.DataContext;
 /// </summary>
 public abstract class TenE0SystemDbContext<TUser, TRole>(
     DbContextOptions options,
-    ICurrentUserContext currentUser,
-    IDataAccessPolicy accessPolicy,
-    IEnumerable<IEntityFilterContributor> filterContributors,
-    IDynamicFilterProvider dynamicFilterProvider,
-    ITenantContext tenantContext)
-    : BaseDataContext(options, currentUser, accessPolicy, filterContributors, dynamicFilterProvider, tenantContext)
+    IServiceProvider serviceProvider,
+    IHttpContextAccessor httpContextAccessor)
+    : BaseDataContext(options, serviceProvider, httpContextAccessor)
     where TUser : TenE0User
     where TRole : TenE0Role
 {
@@ -64,6 +63,15 @@ public abstract class TenE0SystemDbContext<TUser, TRole>(
     public DbSet<TenE0RoleMenu> RoleMenus => Set<TenE0RoleMenu>();
     public DbSet<TenE0DataFilterRule> DataFilterRules => Set<TenE0DataFilterRule>();
     public DbSet<TenE0FileAttachment> FileAttachments => Set<TenE0FileAttachment>();
+    public DbSet<TenE0ProcessDefinition> ProcessDefinitions => Set<TenE0ProcessDefinition>();
+    public DbSet<TenE0ProcessInstance> ProcessInstances => Set<TenE0ProcessInstance>();
+    public DbSet<TenE0ProcessTask> ProcessTasks => Set<TenE0ProcessTask>();
+    public DbSet<TenE0ProcessHistory> ProcessHistories => Set<TenE0ProcessHistory>();
+    public DbSet<TenE0AuditLog> AuditLogs => Set<TenE0AuditLog>();
+    public DbSet<TenE0LoginLog> LoginLogs => Set<TenE0LoginLog>();
+    public DbSet<TenE0DictType> DictTypes => Set<TenE0DictType>();
+    public DbSet<TenE0DictItem> DictItems => Set<TenE0DictItem>();
+    public DbSet<TenE0SystemParameter> SystemParameters => Set<TenE0SystemParameter>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -77,6 +85,10 @@ public abstract class TenE0SystemDbContext<TUser, TRole>(
         modelBuilder.ConfigureTenE0MenuTables();
         modelBuilder.ConfigureTenE0DataFilterTables();
         modelBuilder.ConfigureTenE0FileAttachmentTables();
+        modelBuilder.ConfigureTenE0WorkflowDefinitionTables();
+        modelBuilder.ConfigureTenE0WorkflowRuntimeTables();
+        modelBuilder.ConfigureTenE0AuditTables();
+        modelBuilder.ConfigureTenE0ConfigurationTables();
     }
 }
 
@@ -86,9 +98,6 @@ public abstract class TenE0SystemDbContext<TUser, TRole>(
 /// </summary>
 public abstract class TenE0SystemDbContext(
     DbContextOptions options,
-    ICurrentUserContext currentUser,
-    IDataAccessPolicy accessPolicy,
-    IEnumerable<IEntityFilterContributor> filterContributors,
-    IDynamicFilterProvider dynamicFilterProvider,
-    ITenantContext tenantContext)
-    : TenE0SystemDbContext<TenE0User, TenE0Role>(options, currentUser, accessPolicy, filterContributors, dynamicFilterProvider, tenantContext);
+    IServiceProvider serviceProvider,
+    IHttpContextAccessor httpContextAccessor)
+    : TenE0SystemDbContext<TenE0User, TenE0Role>(options, serviceProvider, httpContextAccessor);

@@ -5,6 +5,9 @@ on:
     branches: [dev, main]
   push:
     branches: [test/**]
+  # workflow_dispatch 允许手动 trigger（PR #88 教训：synchronize 事件有时不触发新 run，
+  # 手动 trigger 可作为 fallback）。workflow 跑时用调用时的 ref 内容（默认 main，可指定 feature 分支）。
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -40,8 +43,14 @@ jobs:
 
       - name: Run tests (coverage gate ≥ 80%)
         run: |
+          # --filter "Requires!=Docker"：跳过所有标了 [Trait("Requires", "Docker")] 的测试（#82 PR #88 引入）。
+          # 这些测试用 Testcontainers 起 SQL Server 容器做真并发验证：
+          #   - 本地开发机有 Docker：直接 `dotnet test` 即可（测试 loud-fail 提醒你 Docker 没起）
+          #   - CI：见 .github/workflows/docker-integration-tests.yml（ubuntu-latest 自带 Docker，
+          #          单独跑 Requires=Docker 测试）；本 pr-build.yml 不重复跑以省 CI 资源
           dotnet test 10e0.slnx \
             -c Release \
+            --filter "Requires!=Docker" \
             --logger "trx;LogFileName=test-results.trx" \
             --logger "html;LogFileName=test-results.html" \
             /p:CollectCoverage=true \

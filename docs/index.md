@@ -40,6 +40,12 @@
 | [17-deployment](17-deployment.md) | 部署与 CI/CD 配置 |
 | [18-sync-pr-strategy](18-sync-pr-strategy.md) | dev → main 同步 PR 合并策略（为何禁 Squash） |
 | [19-sync-retrospective](19-sync-retrospective.md) | 2026-06 同步事故复盘：教训、安全底线、行业做法 |
+| [20-multi-tenancy](20-multi-tenancy.md) | 多租户隔离（`IMultiTenantEntity` + Named Query Filter + JWT tenant claim） |
+| [21-workflow](21-workflow.md) | 轻量审批流引擎（状态机 + 流程定义 + 流程运行时） |
+| [22-import-export](22-import-export.md) | 通用 Excel/CSV 导入导出（ClosedXML + RFC 4180 + ImportExecutor） |
+| [23-realtime](23-realtime.md) | 声明式实时推送（SignalR + INotifyClient + org claim 链路） |
+| [24-api-versioning](24-api-versioning.md) | API 版本化（Asp.Versioning + 版本透明 + 每版本 OpenAPI 文档） |
+| [25-security](25-security.md) | 安全防刷三件套（限流 + 登录失败锁定 + 验证码） |
 
 ---
 

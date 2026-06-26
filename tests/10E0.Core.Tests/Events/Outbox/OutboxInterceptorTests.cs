@@ -190,4 +190,38 @@ public sealed class OutboxInterceptorTests
         // PendingEvents should remain empty
         aggregate.PendingEvents.Should().BeEmpty();
     }
+
+    /// <summary>
+    /// #108 回归守护：OutboxInterceptor 缓存 Type → AssemblyQualifiedName，
+    /// 同一事件类型多次 SaveChanges 产出的 EventType 字段必须一致（缓存命中而非每次重拼）。
+    /// 同时验证多事件类型各自的 EventType 不混淆。
+    /// </summary>
+    [Fact]
+    public async Task SavingChangesAsync_RepeatedEventTypes_EventTypeCachedConsistently()
+    {
+        using var db = CreateDbContext();
+        _timeProvider.SetUtcNow(new DateTimeOffset(2026, 7, 1, 10, 0, 0, TimeSpan.Zero));
+
+        var expectedTestEventType = typeof(TestEvent).AssemblyQualifiedName;
+        var expectedAnotherEventType = typeof(AnotherTestEvent).AssemblyQualifiedName;
+
+        // 两次不同 aggregate 各 raise 同一类型事件 + 另一类型事件
+        var agg1 = new TestAggregate();
+        agg1.RaisePublicEvent(new TestEvent("first"));
+        var agg2 = new TestAggregate();
+        agg2.RaisePublicEvent(new TestEvent("second"));
+        agg2.RaisePublicEvent(new AnotherTestEvent(42));
+
+        db.TestAggregates.Add(agg1);
+        db.TestAggregates.Add(agg2);
+        await db.SaveChangesAsync();
+
+        var messages = await db.OutboxMessages.ToListAsync();
+
+        // 两条 TestEvent 的 EventType 必须相同且等于缓存值
+        messages.Where(m => m.EventType == expectedTestEventType)
+            .Should().HaveCount(2, "两次 TestEvent 的 EventType 应一致（缓存命中）");
+        messages.Single(m => m.EventType == expectedAnotherEventType).EventType
+            .Should().Be(expectedAnotherEventType, "AnotherTestEvent 的 EventType 独立缓存");
+    }
 }

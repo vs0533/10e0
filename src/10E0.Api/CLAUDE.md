@@ -11,8 +11,9 @@
 | `Endpoints/HealthEndpoints.cs` | `/` 健康检查 |
 | `Endpoints/AuthEndpoints.cs` | `/auth/login` `/auth/refresh` `/auth/logout` |
 | `Endpoints/DemoEndpoints.cs` | `/whoami` `/demo/*` CRUD + 动态查询 + 部分更新演示 |
-| `Endpoints/AdminEndpoints.cs` | `/admin/*` 后台管理（组织、Outbox、权限、菜单、数据过滤规则）；`RequireAdminAttribute` 在此 |
+| `Endpoints/AdminEndpoints.cs` | `/admin/*` 后台管理（组织、Outbox、权限、菜单、数据过滤规则、工作流定义）；`RequireAdminAttribute` 在此 |
 | `Endpoints/FileEndpoints.cs` | `/files/*` 文件上传/下载/元数据 |
+| `Endpoints/WorkflowEndpoints.cs` | `/workflow/*` 业务端点（发起/审批/委派/会签/回退/待办/历史，#156 epic） |
 | `Handlers/` | `DemoCommands` / `*DemoCommandHandler` / `ListDemosQueryHandler` / `DemoEventTrigger` / `DemoFieldPermissions` |
 | `Events/DemoEvents.cs` | `DemoCreatedEvent` / `DemoPublishedEvent` |
 | `Events/DemoEventHandlers.cs` | 三个日志订阅者：`DemoCreatedAuditHandler` / `DemoPublishedNotificationHandler` / `DemoPublishedAuditHandler` |
@@ -32,6 +33,9 @@
 | `DemoEntity : AggregateRoot` | `Domain/DemoEntity.cs` | 演示聚合根 + 领域事件 |
 | `DemoPermissions` / `DemoPermissionProvider` | `Domain/DemoPermissions.cs` | 权限常量定义 + 注册 |
 | `DemoOrgScopedFilter : EntityFilterContributor<DemoEntity>` | `Domain/DemoDbContext.cs` | 行级数据过滤演示 |
+| `Order` + `OrderStateMachineDefinition` | `Domain/Order.cs` / `Handlers/OrderStateMachineDefinition.cs` | #157 状态机演示（`[StateMachine]` + fluent API） |
+| `ExpenseClaimProcess` | `Handlers/ExpenseClaimProcess.cs` | #158 流程定义 fluent API 演示 |
+| `AssigneeDirectory<TContext> : IAssigneeDirectory` | `Hosting/AssigneeDirectory.cs` | #158/#159 审批人目录实现（查 TenE0UserRole + 组织树） |
 | `DemoCreatedAuditHandler` / `DemoPublishedNotificationHandler` | `Events/DemoEventHandlers.cs` | 领域事件处理器演示 |
 
 ## API 端点

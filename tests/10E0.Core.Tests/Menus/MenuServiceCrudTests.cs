@@ -1,4 +1,6 @@
+using Microsoft.AspNetCore.Http;
 using TenE0.Core.Abstractions;
+using TenE0.Core.DataContext.Interceptors;
 using TenE0.Core.Menus;
 using TenE0Menu = TenE0.Core.Menus.Storage.TenE0Menu;
 using StorageMenuType = TenE0.Core.Menus.Storage.MenuType;
@@ -69,13 +71,39 @@ public sealed class MenuServiceCrudTests
         DbContextOptions<TestDbContext> options,
         Action<Mock<ICurrentUserContext>>? configureMock = null)
     {
+        var currentUserMock = MakeCurrentUser(configureMock);
+        return new MenuService<TestDbContext>(CreateFactory(options), currentUserMock.Object);
+    }
+
+    private static Mock<ICurrentUserContext> MakeCurrentUser(Action<Mock<ICurrentUserContext>>? configureMock = null)
+    {
         var currentUserMock = new Mock<ICurrentUserContext>();
         currentUserMock.SetupGet(c => c.IsAuthenticated).Returns(true);
         currentUserMock.SetupGet(c => c.UserCode).Returns("test-user");
         currentUserMock.SetupGet(c => c.RoleIds).Returns(new List<string> { "admin" });
         configureMock?.Invoke(currentUserMock);
+        return currentUserMock;
+    }
 
-        return new MenuService<TestDbContext>(CreateFactory(options), currentUserMock.Object);
+    /// <summary>
+    /// 创建同时注册了 <see cref="AuditInterceptor"/> 的 DbContextOptions。
+    /// 模拟生产 <c>AddTenE0Core</c> 自动注册拦截器的行为，让 DeleteAsync 走拦截器路径（issue #95 修复）。
+    /// #95 captive-dependency 修复后 AuditInterceptor 唯一 ctor 是 (IServiceProvider, IHttpContextAccessor, TimeProvider)，
+    /// 这里 mock 出带 HttpContext.RequestServices 的 accessor，让拦截器在 SavingChanges 时能解析 ICurrentUserContext。
+    /// </summary>
+    private static DbContextOptions<TestDbContext> AddAuditInterceptor(
+        DbContextOptions<TestDbContext> options, ICurrentUserContext currentUser, TimeProvider? timeProvider = null)
+    {
+        var mockSp = new Mock<IServiceProvider>();
+        mockSp.Setup(sp => sp.GetService(typeof(ICurrentUserContext))).Returns(currentUser);
+        var mockHttp = new Mock<HttpContext>();
+        mockHttp.Setup(h => h.RequestServices).Returns(mockSp.Object);
+        var mockAccessor = new Mock<IHttpContextAccessor>();
+        mockAccessor.Setup(a => a.HttpContext).Returns(mockHttp.Object);
+        var interceptor = new AuditInterceptor(mockSp.Object, mockAccessor.Object, timeProvider ?? TimeProvider.System);
+        var builder = new DbContextOptionsBuilder<TestDbContext>(options);
+        builder.AddInterceptors(interceptor);
+        return builder.Options;
     }
 
     // ──────────────────────────────────────────────
@@ -387,7 +415,9 @@ public sealed class MenuServiceCrudTests
     public async Task DeleteAsync_SoftDelete_SetsAuditFields()
     {
         var dbName = Guid.NewGuid().ToString();
+        var currentUser = MakeCurrentUser();
         var options = new DbContextOptionsBuilder<TestDbContext>().UseInMemoryDatabase(dbName).Options;
+        options = AddAuditInterceptor(options, currentUser.Object);
 
         {
             await using var db = new TestDbContext(options);
@@ -395,7 +425,7 @@ public sealed class MenuServiceCrudTests
             await db.SaveChangesAsync();
         }
 
-        var service = CreateService(options);
+        var service = new MenuService<TestDbContext>(CreateFactory(options), currentUser.Object);
         await service.DeleteAsync("d1");
 
         {
@@ -425,7 +455,9 @@ public sealed class MenuServiceCrudTests
     public async Task DeleteAsync_AlreadyDeleted_DoesNotThrow()
     {
         var dbName = Guid.NewGuid().ToString();
+        var currentUser = MakeCurrentUser();
         var options = new DbContextOptionsBuilder<TestDbContext>().UseInMemoryDatabase(dbName).Options;
+        options = AddAuditInterceptor(options, currentUser.Object);
 
         {
             await using var db = new TestDbContext(options);
@@ -436,7 +468,7 @@ public sealed class MenuServiceCrudTests
             await db.SaveChangesAsync();
         }
 
-        var service = CreateService(options);
+        var service = new MenuService<TestDbContext>(CreateFactory(options), currentUser.Object);
 
         // Should not throw — DeleteAsync doesn't check IsSoftDelete
         await service.DeleteAsync("d2");
@@ -453,7 +485,9 @@ public sealed class MenuServiceCrudTests
     public async Task DeleteAsync_AuditFields_SetCorrectly()
     {
         var dbName = Guid.NewGuid().ToString();
+        var currentUser = MakeCurrentUser();
         var options = new DbContextOptionsBuilder<TestDbContext>().UseInMemoryDatabase(dbName).Options;
+        options = AddAuditInterceptor(options, currentUser.Object);
 
         {
             await using var db = new TestDbContext(options);
@@ -462,7 +496,7 @@ public sealed class MenuServiceCrudTests
         }
 
         var before = DateTimeOffset.UtcNow;
-        var service = CreateService(options);
+        var service = new MenuService<TestDbContext>(CreateFactory(options), currentUser.Object);
         await service.DeleteAsync("d3");
 
         {

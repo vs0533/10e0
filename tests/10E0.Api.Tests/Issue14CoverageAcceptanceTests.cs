@@ -69,7 +69,7 @@ public sealed class Issue14CoverageAcceptanceTests
     {
         using var factory = new IsolatedFactory();
         var client = factory.CreateClient();
-        var auth = await LoginAsync(client, "alice", "111111");
+        var auth = await LoginAsync(client, "alice", "dev-default-password-change-me");
         client.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", auth.AccessToken);
 
@@ -124,7 +124,7 @@ public sealed class Issue14CoverageAcceptanceTests
     {
         using var factory = new IsolatedFactory();
         var client = factory.CreateClient();
-        var adminAuth = await LoginAsync(client, "admin", "111111");
+        var adminAuth = await LoginAsync(client, "admin", "dev-default-password-change-me");
         client.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", adminAuth.AccessToken);
 
@@ -142,7 +142,7 @@ public sealed class Issue14CoverageAcceptanceTests
     {
         using var factory = new IsolatedFactory();
         var client = factory.CreateClient();
-        var auth = await LoginAsync(client, "alice", "111111");
+        var auth = await LoginAsync(client, "alice", "dev-default-password-change-me");
 
         var logoutResp = await client.PostAsJsonAsync(
             "/auth/logout", new { refreshToken = auth.RefreshToken });
@@ -163,7 +163,7 @@ public sealed class Issue14CoverageAcceptanceTests
     {
         using var factory = new IsolatedFactory();
         var client = factory.CreateClient();
-        var initial = await LoginAsync(client, "alice", "111111");
+        var initial = await LoginAsync(client, "alice", "dev-default-password-change-me");
 
         var refreshResp = await client.PostAsJsonAsync(
             "/auth/refresh", new { refreshToken = initial.RefreshToken });
@@ -192,7 +192,7 @@ public sealed class Issue14CoverageAcceptanceTests
     {
         using var factory = new IsolatedFactory();
         var client = factory.CreateClient();
-        var adminAuth = await LoginAsync(client, "admin", "111111");
+        var adminAuth = await LoginAsync(client, "admin", "dev-default-password-change-me");
         client.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", adminAuth.AccessToken);
 
@@ -206,7 +206,7 @@ public sealed class Issue14CoverageAcceptanceTests
     {
         using var factory = new IsolatedFactory();
         var client = factory.CreateClient();
-        var adminAuth = await LoginAsync(client, "admin", "111111");
+        var adminAuth = await LoginAsync(client, "admin", "dev-default-password-change-me");
         client.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", adminAuth.AccessToken);
 
@@ -241,7 +241,7 @@ public sealed class Issue14CoverageAcceptanceTests
     {
         using var factory = new IsolatedFactory();
         var client = factory.CreateClient();
-        var auth = await LoginAsync(client, "alice", "111111");   // alice has editor
+        var auth = await LoginAsync(client, "alice", "dev-default-password-change-me");   // alice has editor
         client.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", auth.AccessToken);
 
@@ -279,7 +279,7 @@ public sealed class Issue14CoverageAcceptanceTests
         // 该测试锁定 PermissionBehavior 对权限不足的 DELETE 也返回 403。
         using var factory = new IsolatedFactory();
         var client = factory.CreateClient();
-        var auth = await LoginAsync(client, "alice", "111111");
+        var auth = await LoginAsync(client, "alice", "dev-default-password-change-me");
         client.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", auth.AccessToken);
 
@@ -294,7 +294,7 @@ public sealed class Issue14CoverageAcceptanceTests
     {
         using var factory = new IsolatedFactory();
         var client = factory.CreateClient();
-        var auth = await LoginAsync(client, "admin", "111111");   // admin has manager + super_admin
+        var auth = await LoginAsync(client, "admin", "dev-default-password-change-me");   // admin has manager + super_admin
         client.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", auth.AccessToken);
 
@@ -318,7 +318,7 @@ public sealed class Issue14CoverageAcceptanceTests
     {
         using var factory = new IsolatedFactory();
         var client = factory.CreateClient();
-        var auth = await LoginAsync(client, "alice", "111111");
+        var auth = await LoginAsync(client, "alice", "dev-default-password-change-me");
         client.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", auth.AccessToken);
 
@@ -352,7 +352,7 @@ public sealed class Issue14CoverageAcceptanceTests
         // 的查询路径，足以覆盖 issue #14 描述中的动态查询端点契约。
         using var factory = new IsolatedFactory();
         var client = factory.CreateClient();
-        var auth = await LoginAsync(client, "alice", "111111");
+        var auth = await LoginAsync(client, "alice", "dev-default-password-change-me");
         client.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", auth.AccessToken);
 
@@ -388,7 +388,7 @@ public sealed class Issue14CoverageAcceptanceTests
     {
         using var factory = new IsolatedFactory();
         var client = factory.CreateClient();
-        var auth = await LoginAsync(client, "admin", "111111");
+        var auth = await LoginAsync(client, "admin", "dev-default-password-change-me");
         client.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", auth.AccessToken);
 
@@ -431,7 +431,7 @@ public sealed class Issue14CoverageAcceptanceTests
     {
         using var factory = new IsolatedFactory();
         var client = factory.CreateClient();
-        var auth = await LoginAsync(client, "admin", "111111");
+        var auth = await LoginAsync(client, "admin", "dev-default-password-change-me");
         client.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", auth.AccessToken);
 

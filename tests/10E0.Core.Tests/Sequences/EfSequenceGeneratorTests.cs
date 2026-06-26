@@ -132,4 +132,87 @@ public sealed class EfSequenceGeneratorTests
         seqs[1].SequenceKey.Should().Be("B");
         seqs[1].CurrentNumber.Should().Be(1);
     }
+
+    // ══════════════════════════════════════════════════════════════
+    //  #100: 重试耗尽错误上下文 + RowVersion 并发控制配置
+    // ══════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// #100 问题 1：重试耗尽时抛带 key/bucket 上下文的 InvalidOperationException，
+    /// 而非裸 "流水号生成失败"。运维能直接从异常定位是哪个序列卡住。
+    /// 用自定义 DbContext 强制 SaveChangesAsync 总抛 DbUpdateConcurrencyException 模拟持续冲突。
+    /// </summary>
+    [Fact]
+    public async Task NextAsync_RetriesExhausted_ThrowsWithContextualMessage()
+    {
+        // FailingSaveContext 的 SaveChangesAsync 总抛 DbUpdateConcurrencyException，
+        // IncrementAsync 无论是 INSERT 还是 UPDATE 路径都会冲突 → 重试耗尽
+        var dbName = Guid.NewGuid().ToString("N");
+        var options = new DbContextOptionsBuilder<FailingSaveContext>()
+            .UseInMemoryDatabase(dbName)
+            .ConfigureWarnings(w => w.Ignore(InMemoryEventId.TransactionIgnoredWarning))
+            .Options;
+        var failingFactory = new FailingSaveContextFactory(options);
+
+        var timeProvider = new FakeTimeProvider();
+        timeProvider.SetUtcNow(DateTimeOffset.UtcNow);
+        var gen = new EfSequenceGenerator<FailingSaveContext>(failingFactory, timeProvider);
+
+        var act = () => gen.NextAsync("FAILKEY", "FAILKEY-{0000}", CancellationToken.None);
+
+        var ex = await act.Should().ThrowAsync<InvalidOperationException>();
+        ex.Which.Message.Should().Contain("FAILKEY", "异常消息必须含序列 key 便于运维定位");
+        ex.Which.Message.Should().Contain("bucket", "异常消息必须含 bucket 上下文");
+        ex.Which.InnerException.Should().BeOfType<DbUpdateConcurrencyException>(
+            "InnerException 应携带最后一次冲突的原始异常");
+    }
+
+    /// <summary>
+    /// #100 问题 2：TenE0Sequence 必须配置 RowVersion shadow property，
+    /// 让 EF Core 在 UPDATE 时校验版本触发 DbUpdateConcurrencyException → 重试，消除 lost update。
+    /// </summary>
+    [Fact]
+    public void ConfigureTenE0SequenceTables_ConfiguresRowVersionShadowProperty()
+    {
+        var mb = new ModelBuilder();
+        mb.ConfigureTenE0SequenceTables();
+
+        var entity = mb.Model.FindEntityType(typeof(TenE0Sequence));
+        entity.Should().NotBeNull();
+
+        var rowVersion = entity!.FindProperty("RowVersion");
+        rowVersion.Should().NotBeNull(
+            "RowVersion shadow property 必须配置 —— 乐观并发控制的载体，消除 lost update");
+        rowVersion!.IsConcurrencyToken.Should().BeTrue(
+            "RowVersion 必须是并发 token，EF Core 才会在 UPDATE 时校验版本");
+    }
+
+    /// <summary>总是抛 DbUpdateConcurrencyException 的 DbContext，模拟持续并发冲突。</summary>
+    private sealed class FailingSaveContext(DbContextOptions<FailingSaveContext> options) : DbContext(options)
+    {
+        public DbSet<TenE0Sequence> Sequences => Set<TenE0Sequence>();
+
+        protected override void OnModelCreating(ModelBuilder modelBuilder)
+        {
+            modelBuilder.Entity<TenE0Sequence>(b =>
+            {
+                b.HasKey(e => e.Id);
+                b.HasIndex(e => e.SequenceKey).IsUnique();
+            });
+        }
+
+        protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
+        {
+            base.OnConfiguring(optionsBuilder);
+            optionsBuilder.ConfigureWarnings(w => w.Ignore(InMemoryEventId.TransactionIgnoredWarning));
+        }
+
+        public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
+            => throw new DbUpdateConcurrencyException("模拟并发冲突");
+    }
+
+    private sealed class FailingSaveContextFactory(DbContextOptions<FailingSaveContext> options) : IDbContextFactory<FailingSaveContext>
+    {
+        public FailingSaveContext CreateDbContext() => new(options);
+    }
 }

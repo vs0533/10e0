@@ -6,10 +6,26 @@
 
 - **触发**: PR 到 `dev` 或 `main`，以及 push 到 `test/**` 分支
 - **流程**: restore → build (Release) → **check code format (dotnet format --verify-no-changes)** → test + 覆盖率（门禁 `/p:ThresholdLine=80`）
+- **测试过滤**: `--filter "Requires!=Docker"` — 跳过 Docker 依赖测试（见 `docker-integration-tests.yml`）
 - **格式化验证**: `dotnet format --verify-no-changes` 阻断 PR（格式化不符的代码无法合并）
 - **并发**: 同 PR 旧运行自动取消
 - **产物**: test results (.trx/.html) + coverage (.cobertura.xml)
 - **权限**: 最小化 (`contents: read`)
+
+### `docker-integration-tests.yml` — Docker 集成测试
+
+- **触发**: PR 到 `dev` / `main`（与 pr-build 同步），可手动 `workflow_dispatch` 重跑
+- **流程**: restore → build (Release) → **预拉镜像 (3 次重试 + 退避)** → `dotnet test --filter "Requires=Docker"` → 上传 .trx/.html + `/tmp/outbox-diag.txt` artifact
+- **预拉镜像 retry**（PR #89）：Docker Hub 偶发 5xx/限流会导致 `PullImageAsync` 失败 → 整个测试套件挂。加 3 次重试 + 退避 10s/20s/30s 改为 self-healing。镜像若真不存在（404）仍 fail，行为保持明确。拉取的镜像：`testcontainers/ryuk:0.9.0`（Testcontainers sidecar）+ `mcr.microsoft.com/mssql/server:2022-latest`
+- **范围**: 仅跑 `[Trait("Requires", "Docker")]` 的测试 —— 当前是 Outbox 真实并发系列（PR #88）：
+  - `OutboxRelayConcurrencyTests` —— Testcontainers.MsSql 启真实 SQL Server 2022 容器
+  - `OutboxRelayLeaderElectionAcceptanceTests` —— LeaderElector 全局抢主 + exactly-once
+  - `OutboxLockAcceptanceTests` / `OutboxLockProviderAcceptanceTests` —— 行级锁 provider 全套路径
+  - 30 轮 × 50 条消息并发跑，断言 Publisher 每条消息恰好被调 1 次（exactly-once 语义）
+- **Runner**: `ubuntu-latest`（自带 Docker daemon），`timeout-minutes: 30`
+- **与 pr-build 关系**: pr-build 跳过这些测试（`--filter "Requires!=Docker"`，Testcontainers 慢、CI 资源消耗大），本 workflow 单独跑并要求绿
+- **本地等价**: `dotnet test`（需 Docker daemon 开着）
+  - **OrbStack macOS 兼容**（PR #89）：`SqlServerContainerFixture.TryResolveDockerEndpoint` 探测 4 路径（`DOCKER_HOST` env → `/private/var/run/docker.sock` 真 OrbStack socket → `~/.orbstack/run/docker.sock` → `/var/run/docker.sock`），找到可用 socket 后注入 `DOCKER_HOST` env，让 Testcontainers 内部 Docker.DotNet 客户端走相同路径。Mac `/var/run/docker.sock` 是 dangling symlink，必须用 `/private/var/run/docker.sock`
 
 ### `claude-review.yml` — 自动代码审查
 

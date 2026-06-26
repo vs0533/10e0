@@ -21,10 +21,46 @@ internal sealed class MultiLevelCache : IMultiLevelCache
     private readonly IMemoryCache _l1;
     private readonly IDistributedCache _l2;
 
+    // #125: SETNX 锁 — per-key 而非全局。
+    // 旧实现用单把 static _setnxGate 保护所有 key 的 SETNX → 高 QPS 多 key 场景
+    // （如 Outbox Relay 每条消息不同 key）所有 SETNX 串行化，10k+ msg/sec 时成瓶颈。
+    // 改用 ConcurrentDictionary<key, object>：每 key 独立锁，不同 key 的 SETNX 并行。
+    // 仍需 static（跨 MultiLevelCache 实例共享）：测试用同进程两个 ServiceProvider
+    // 模拟"两个 Relay 共享同 cache 后端"，static 让它们共享锁。
+    // 生产部署：不同进程各自 static 锁不共享，但生产 Redis SETNX 天然原子（SET key NX EX）。
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, object> _setnxGates = new();
+
+    /// <summary>#125: 取 key 对应的锁对象，不存在则创建。不同 key 返回不同锁 → 并行 SETNX。</summary>
+    private static object GateFor(string key) => _setnxGates.GetOrAdd(key, _ => new object());
+
+    /// <summary>宿主是否为 L1 配置了 SizeLimit —— 决定每条 entry 是否必须声明 Size。</summary>
+    private readonly bool _l1HasSizeLimit;
+
     public MultiLevelCache(IMemoryCache l1, IDistributedCache l2)
     {
         _l1 = l1;
         _l2 = l2;
+
+        // #153: 探测一次 SizeLimit 配置。MemoryCache 不公开 SizeLimit，故用一次试探写：
+        // 配置了 SizeLimit 的 cache 要求 entry 带 Size，否则抛 InvalidOperationException；
+        // 未配置的反之。缓存探测结果，避免每条 entry 都试错。
+        _l1HasSizeLimit = ProbeSizeLimit(l1);
+    }
+
+    private static bool ProbeSizeLimit(IMemoryCache cache)
+    {
+        try
+        {
+            cache.Set("__multilevelcache_sizeprobe__", 0, new MemoryCacheEntryOptions
+            {
+                AbsoluteExpirationRelativeToNow = TimeSpan.FromMilliseconds(1),
+            });
+            return false; // 无 SizeLimit：不带 Size 的 entry 写入成功
+        }
+        catch (InvalidOperationException)
+        {
+            return true; // 有 SizeLimit：写入被拒
+        }
     }
 
     public async Task<T?> GetOrSetAsync<T>(
@@ -64,13 +100,111 @@ internal sealed class MultiLevelCache : IMultiLevelCache
         await _l2.RemoveAsync(key, cancellationToken);
     }
 
+    /// <summary>
+    /// 仅读 L1 + L2，不调 factory、不回写。供分布式锁 ownership 检查等"读不能写"场景用。
+    /// （PR #88 bot review Critical #1：之前 DistributedOutboxLock 用 GetOrSetAsync + factory=>instanceId
+    /// 做读，key 恰好消失时 factory 会被调并写入自己的 instanceId，调用方误以为抢到锁 → 双 publish。）
+    /// </summary>
+    public async Task<T?> GetAsync<T>(
+        string key,
+        CancellationToken cancellationToken = default) where T : class
+    {
+        if (_l1.TryGetValue(key, out T? hit) && hit is not null)
+            return hit;
+        var l2Bytes = await _l2.GetAsync(key, cancellationToken);
+        if (l2Bytes is not null && l2Bytes.Length > 0)
+        {
+            return JsonSerializer.Deserialize<T>(l2Bytes);
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// SETNX 语义实现：L1+L2 都未命中时写入，否则返回 false。
+    ///
+    /// <para>
+    /// <b>原子性</b>：用 <see cref="_setnxGate"/> 锁住整个 "L1 check + L2 check + L2 set + L1 set"
+    /// 序列，让同进程内多线程并发 SETNX 同一 key 严格只一个 success。生产 Redis 后端天然
+    /// 提供原子 SETNX (<c>SET key NX EX</c>)；InMemory / MemoryDistributedCache / Redis
+    /// (StackExchange.Redis multiplexer sync API) 都在 <see cref="IDistributedCache"/> 同步
+    /// Get/Set 路径上工作，锁内不 await，原子性由 lock + sync I/O 双重保证。
+    /// </para>
+    ///
+    /// <para>
+    /// 这是 PR #88 docker-integration-tests CI 暴露的真 bug 修复：早期实现用 "GetAsync + SetAsync"
+    /// 序列无锁，hostA 跑到 Set 之前 hostB 也 Get 完成 → 两个都 success → 两个 host 都 publish
+    /// 同一消息 → exactly-once 失败。
+    /// </para>
+    /// </summary>
+    public Task<bool> TrySetAsync<T>(
+        string key,
+        T value,
+        CacheOptions options,
+        CancellationToken cancellationToken = default) where T : class
+    {
+        // 在 L2 short-circuit 路径（生产 L2Duration=0）下直接跳过
+        if (options.L2Duration <= TimeSpan.Zero) return Task.FromResult(false);
+
+        // 序列化 SETNX 调用（同进程内多线程并发同一 key 必有 1 winner）
+        // 锁内全 sync 调用（IDistributedCache.Get/Set 都有 sync 版本），不 await yield。
+        lock (GateFor(key))  // per-key 锁：不同 key 的 SETNX 并行，同 key 串行化保证 1 winner
+        {
+            if (_l1.TryGetValue(key, out _)) return Task.FromResult(false);
+
+            // L2 sync Get（IDistributedCache.Get 同步接口；不 yield，锁内安全）
+            var existing = _l2.Get(key);
+            if (existing is { Length: > 0 }) return Task.FromResult(false);
+
+            // L2 sync Set（IDistributedCache.Set 同步接口）
+            _l2.Set(
+                key,
+                JsonSerializer.SerializeToUtf8Bytes(value),
+                new DistributedCacheEntryOptions
+                {
+                    AbsoluteExpirationRelativeToNow = options.L2Duration,
+                });
+
+            // L1 同步写
+            if (options.L1Duration > TimeSpan.Zero)
+            {
+                _l1.Set(key, value, new MemoryCacheEntryOptions
+                {
+                    AbsoluteExpirationRelativeToNow = options.L1Duration,
+                });
+            }
+            return Task.FromResult(true);
+        }
+    }
+
+    /// <summary>
+    /// 覆盖写入：用于锁续约或主动改值。L1+L2 都覆盖。
+    /// </summary>
+    public async Task SetAsync<T>(
+        string key,
+        T value,
+        CacheOptions options,
+        CancellationToken cancellationToken = default) where T : class
+    {
+        await SetL2Async(key, value, options, cancellationToken);
+        SetL1(key, value, options);
+    }
+
     private void SetL1<T>(string key, T value, CacheOptions options) where T : class
     {
         if (options.L1Duration <= TimeSpan.Zero) return;
-        _l1.Set(key, value, new MemoryCacheEntryOptions
+        var entryOpts = new MemoryCacheEntryOptions
         {
             AbsoluteExpirationRelativeToNow = options.L1Duration,
-        });
+        };
+
+        // #153: 宿主可能为 IMemoryCache 配置 SizeLimit（如 AddTenE0Caching 的 16MB 兜底），
+        // 此时每条 entry 必须声明 Size，否则抛 "Cache entry must specify a value for Size
+        // when SizeLimit is set"；反之未配置 SizeLimit 时设置 Size 又会抛
+        // "Size was specified but SizeLimit is not set"。按构造期探测结果决定是否设 Size=1。
+        if (_l1HasSizeLimit)
+            entryOpts.Size = 1;
+
+        _l1.Set(key, value, entryOpts);
     }
 
     private async Task SetL2Async<T>(
@@ -91,14 +225,26 @@ internal sealed class MultiLevelCache : IMultiLevelCache
 /// <summary>
 /// <see cref="IAtomicCounter"/> 基于 <see cref="IDistributedCache"/> 的默认实现。
 ///
-/// 原子性保证：使用 <c>GetString → 解析 → SetString</c> 三步。生产 Redis 实现
-/// 应替换为 <c>INCR</c> 原生命令（通过 IDistributedCache 的 Redis 扩展或自建接口）。
-/// 当前实现适用于单进程 MemoryDistributedCache；多副本部署需要业务项目替换实现。
+/// ⚠️ <b>#98: 多副本并发 race 警告</b>：当前实现使用 <c>Get → Parse → Set</c> 三步非原子操作。
+/// 单进程 MemoryDistributedCache 场景无 race；但多副本 Redis 后端并发 Increment 会丢增。
+/// 生产部署必须 <c>services.Replace(ServiceDescriptor.Singleton&lt;IAtomicCounter, RedisAtomicCounter&gt;())</c>
+/// 走 Redis <c>INCR</c> 原生命令。
 ///
-/// 注：不抛 Redis Lua 脚本依赖是为了保持与 <see cref="IDistributedCache"/> 抽象的兼容性。
+/// 警告关键字（测试断言必须命中）：<see cref="MultiReplicaRaceWarningKeywords"/>。
 /// </summary>
 internal sealed class DistributedAtomicCounter : IAtomicCounter
 {
+    /// <summary>
+    /// #98: xmldoc 中必须出现的关键字常量。xUnit 测试断言这些关键字命中，阻止有人重构时
+    /// 静默删除多副本并发警告。
+    /// </summary>
+    internal static readonly string[] MultiReplicaRaceWarningKeywords =
+    {
+        "race",       // 多副本并发竞态
+        "INCR",       // Redis 原生命令指引
+        "Replace",    // DI 替换指引
+    };
+
     private readonly IDistributedCache _cache;
 
     public DistributedAtomicCounter(IDistributedCache cache)

@@ -1,5 +1,7 @@
+using Microsoft.AspNetCore.Http;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.Extensions.DependencyInjection;
 using TenE0.Core.Abstractions;
 using TenE0.Core.DataContext;
 using TenE0.Core.DynamicFilters;
@@ -54,13 +56,9 @@ public sealed class TenantQueryFilterAcceptanceTests
 
     private sealed class TestTenantContext(
         DbContextOptions<TestTenantContext> options,
-        ICurrentUserContext user,
-        IDataAccessPolicy policy,
-        IEnumerable<IEntityFilterContributor> contributors,
-        IDynamicFilterProvider provider,
-        ITenantContext tenantContext) : BaseDataContext(options, user, policy, contributors, provider, tenantContext)
+        IServiceProvider serviceProvider,
+        IHttpContextAccessor httpContextAccessor) : BaseDataContext(options, serviceProvider, httpContextAccessor)
     {
-        public ITenantContext TenantContext { get; } = tenantContext;
         public DbSet<TenantDocument> Documents => Set<TenantDocument>();
         public DbSet<NonTenantNote> Notes => Set<NonTenantNote>();
         public DbSet<SoftDeleteTenantDoc> SoftDocs => Set<SoftDeleteTenantDoc>();
@@ -109,6 +107,29 @@ public sealed class TenantQueryFilterAcceptanceTests
             .Options;
 
     /// <summary>
+    /// #95 captive-dependency 修复后 BaseDataContext ctor 改为 (DbContextOptions, IServiceProvider, IHttpContextAccessor)，
+    /// OnModelCreating 通过 sp 解析依赖。此 helper 把 user / policy / dynamic provider / tenant / contribs 塞进
+    /// fake ServiceCollection，返回 sp + accessor 给 TestTenantContext ctor 用。
+    /// </summary>
+    private static (IServiceProvider Sp, IHttpContextAccessor Accessor) BuildServices(
+        Mock<ICurrentUserContext> user,
+        Mock<IDataAccessPolicy> policy,
+        IEnumerable<IEntityFilterContributor> contributors,
+        Mock<IDynamicFilterProvider> dynamicProvider,
+        Mock<ITenantContext> tenant)
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton(user.Object);
+        services.AddSingleton(policy.Object);
+        services.AddSingleton(tenant.Object);
+        services.AddSingleton(dynamicProvider.Object);
+        foreach (var c in contributors) services.AddSingleton(c);
+        services.AddHttpContextAccessor();
+        var sp = services.BuildServiceProvider();
+        return (sp, sp.GetRequiredService<IHttpContextAccessor>());
+    }
+
+    /// <summary>
     /// EF InMemory provider does not enforce query filters — runtime cross-tenant
     /// isolation tests need a real relational provider. SQLite in-memory is the
     /// lightest option that honors <c>HasQueryFilter</c>.
@@ -155,13 +176,8 @@ public sealed class TenantQueryFilterAcceptanceTests
     public void GivenEntityImplementsIMultiTenantEntity_WhenModelIsBuilt_ThenNamedTenantFilterIsRegistered()
     {
         // Arrange
-        using var ctx = new TestTenantContext(
-            NewInMemoryOptions(),
-            CreateUser().Object,
-            CreatePolicy().Object,
-            [],
-            CreateDynamicProvider().Object,
-            CreateTenantContext("t-a").Object);
+        var (sp, accessor) = BuildServices(CreateUser(), CreatePolicy(), [], CreateDynamicProvider(), CreateTenantContext("t-a"));
+        using var ctx = new TestTenantContext(NewInMemoryOptions(), sp, accessor);
 
         // Act
         var entityType = ctx.Model.FindEntityType(typeof(TenantDocument));
@@ -176,13 +192,8 @@ public sealed class TenantQueryFilterAcceptanceTests
     public void GivenEntityNotImplementingIMultiTenantEntity_WhenModelIsBuilt_ThenNoTenantFilterIsRegistered()
     {
         // Arrange
-        using var ctx = new TestTenantContext(
-            NewInMemoryOptions(),
-            CreateUser().Object,
-            CreatePolicy().Object,
-            [],
-            CreateDynamicProvider().Object,
-            CreateTenantContext("t-a").Object);
+        var (sp, accessor) = BuildServices(CreateUser(), CreatePolicy(), [], CreateDynamicProvider(), CreateTenantContext("t-a"));
+        using var ctx = new TestTenantContext(NewInMemoryOptions(), sp, accessor);
 
         // Act
         var entityType = ctx.Model.FindEntityType(typeof(NonTenantNote));
@@ -197,13 +208,8 @@ public sealed class TenantQueryFilterAcceptanceTests
     public void GivenTenantEntityAlsoImplementsISoftDelete_WhenModelIsBuilt_ThenBothSoftDeleteAndTenantFiltersAreRegistered()
     {
         // Arrange
-        using var ctx = new TestTenantContext(
-            NewInMemoryOptions(),
-            CreateUser().Object,
-            CreatePolicy().Object,
-            [],
-            CreateDynamicProvider().Object,
-            CreateTenantContext("t-a").Object);
+        var (sp, accessor) = BuildServices(CreateUser(), CreatePolicy(), [], CreateDynamicProvider(), CreateTenantContext("t-a"));
+        using var ctx = new TestTenantContext(NewInMemoryOptions(), sp, accessor);
 
         // Act
         var entityType = ctx.Model.FindEntityType(typeof(SoftDeleteTenantDoc));
@@ -221,10 +227,9 @@ public sealed class TenantQueryFilterAcceptanceTests
     {
         // Arrange
         using var sqlite = NewSqlite();
-        var tenantA = CreateTenantContext("t-a").Object;
-        using (var seed = new TestTenantContext(
-            sqlite.Options, CreateUser().Object, CreatePolicy().Object, [],
-            CreateDynamicProvider().Object, tenantA))
+        var tenantA = CreateTenantContext("t-a");
+        var (seedSp, seedAccessor) = BuildServices(CreateUser(), CreatePolicy(), [], CreateDynamicProvider(), tenantA);
+        using (var seed = new TestTenantContext(sqlite.Options, seedSp, seedAccessor))
         {
             await seed.Database.EnsureCreatedAsync();
             seed.Documents.Add(new TenantDocument { Id = "1", TenantId = "t-a", Title = "A1" });
@@ -234,9 +239,8 @@ public sealed class TenantQueryFilterAcceptanceTests
         }
 
         // Act — query from tenant A's context
-        using var ctxA = new TestTenantContext(
-            sqlite.Options, CreateUser().Object, CreatePolicy().Object, [],
-            CreateDynamicProvider().Object, tenantA);
+        var (sp, accessor) = BuildServices(CreateUser(), CreatePolicy(), [], CreateDynamicProvider(), tenantA);
+        using var ctxA = new TestTenantContext(sqlite.Options, sp, accessor);
 
         var visibleTitles = await ctxA.Documents.Select(d => d.Title).ToListAsync();
 
@@ -250,11 +254,10 @@ public sealed class TenantQueryFilterAcceptanceTests
     {
         // Arrange — seed under tenant A's context
         using var sqlite = NewSqlite();
-        var tenantA = CreateTenantContext("t-a").Object;
-        var tenantB = CreateTenantContext("t-b").Object;
-        using (var seed = new TestTenantContext(
-            sqlite.Options, CreateUser().Object, CreatePolicy().Object, [],
-            CreateDynamicProvider().Object, tenantA))
+        var tenantA = CreateTenantContext("t-a");
+        var tenantB = CreateTenantContext("t-b");
+        var (seedSp, seedAccessor) = BuildServices(CreateUser(), CreatePolicy(), [], CreateDynamicProvider(), tenantA);
+        using (var seed = new TestTenantContext(sqlite.Options, seedSp, seedAccessor))
         {
             await seed.Database.EnsureCreatedAsync();
             seed.Documents.Add(new TenantDocument { Id = "1", TenantId = "t-a", Title = "A1" });
@@ -263,9 +266,8 @@ public sealed class TenantQueryFilterAcceptanceTests
         }
 
         // Act — switch to tenant B and read
-        using var ctxB = new TestTenantContext(
-            sqlite.Options, CreateUser().Object, CreatePolicy().Object, [],
-            CreateDynamicProvider().Object, tenantB);
+        var (sp, accessor) = BuildServices(CreateUser(), CreatePolicy(), [], CreateDynamicProvider(), tenantB);
+        using var ctxB = new TestTenantContext(sqlite.Options, sp, accessor);
 
         var visible = await ctxB.Documents.Select(d => d.Title).ToListAsync();
 
@@ -279,11 +281,10 @@ public sealed class TenantQueryFilterAcceptanceTests
     {
         // Arrange — seed with tenant A
         using var sqlite = NewSqlite();
-        var tenantA = CreateTenantContext("t-a").Object;
-        var tenantNone = CreateTenantContext(null).Object;
-        using (var seed = new TestTenantContext(
-            sqlite.Options, CreateUser().Object, CreatePolicy().Object, [],
-            CreateDynamicProvider().Object, tenantA))
+        var tenantA = CreateTenantContext("t-a");
+        var tenantNone = CreateTenantContext(null);
+        var (seedSp, seedAccessor) = BuildServices(CreateUser(), CreatePolicy(), [], CreateDynamicProvider(), tenantA);
+        using (var seed = new TestTenantContext(sqlite.Options, seedSp, seedAccessor))
         {
             await seed.Database.EnsureCreatedAsync();
             seed.Documents.Add(new TenantDocument { Id = "1", TenantId = "t-a", Title = "A1" });
@@ -291,9 +292,8 @@ public sealed class TenantQueryFilterAcceptanceTests
         }
 
         // Act — read from a context that has no tenant (unauthenticated background job)
-        using var ctx = new TestTenantContext(
-            sqlite.Options, CreateUser().Object, CreatePolicy().Object, [],
-            CreateDynamicProvider().Object, tenantNone);
+        var (sp, accessor) = BuildServices(CreateUser(), CreatePolicy(), [], CreateDynamicProvider(), tenantNone);
+        using var ctx = new TestTenantContext(sqlite.Options, sp, accessor);
 
         var visible = await ctx.Documents.ToListAsync();
 
@@ -309,9 +309,8 @@ public sealed class TenantQueryFilterAcceptanceTests
     {
         // Arrange — seed under any tenant (filters don't apply on seed since policy controls query)
         using var sqlite = NewSqlite();
-        using (var seed = new TestTenantContext(
-            sqlite.Options, CreateUser().Object, CreatePolicy().Object, [],
-            CreateDynamicProvider().Object, CreateTenantContext("t-a").Object))
+        var (seedSp, seedAccessor) = BuildServices(CreateUser(), CreatePolicy(), [], CreateDynamicProvider(), CreateTenantContext("t-a"));
+        using (var seed = new TestTenantContext(sqlite.Options, seedSp, seedAccessor))
         {
             await seed.Database.EnsureCreatedAsync();
             seed.Documents.Add(new TenantDocument { Id = "1", TenantId = "t-a", Title = "A1" });
@@ -320,9 +319,8 @@ public sealed class TenantQueryFilterAcceptanceTests
         }
 
         // Act — admin (BypassFilters=true) reads; even if their tenant is "t-a", they see B1 too
-        using var adminCtx = new TestTenantContext(
-            sqlite.Options, CreateUser().Object, CreatePolicy(bypass: true).Object, [],
-            CreateDynamicProvider().Object, CreateTenantContext("t-a").Object);
+        var (adminSp, adminAccessor) = BuildServices(CreateUser(), CreatePolicy(bypass: true), [], CreateDynamicProvider(), CreateTenantContext("t-a"));
+        using var adminCtx = new TestTenantContext(sqlite.Options, adminSp, adminAccessor);
 
         var visible = await adminCtx.Documents.Select(d => d.Title).ToListAsync();
 
@@ -336,9 +334,8 @@ public sealed class TenantQueryFilterAcceptanceTests
     {
         // Arrange — same as bypass test, but policy says "do not bypass"
         using var sqlite = NewSqlite();
-        using (var seed = new TestTenantContext(
-            sqlite.Options, CreateUser().Object, CreatePolicy().Object, [],
-            CreateDynamicProvider().Object, CreateTenantContext("t-a").Object))
+        var (seedSp, seedAccessor) = BuildServices(CreateUser(), CreatePolicy(), [], CreateDynamicProvider(), CreateTenantContext("t-a"));
+        using (var seed = new TestTenantContext(sqlite.Options, seedSp, seedAccessor))
         {
             await seed.Database.EnsureCreatedAsync();
             seed.Documents.Add(new TenantDocument { Id = "1", TenantId = "t-a", Title = "A1" });
@@ -347,9 +344,8 @@ public sealed class TenantQueryFilterAcceptanceTests
         }
 
         // Act
-        using var ctx = new TestTenantContext(
-            sqlite.Options, CreateUser().Object, CreatePolicy(bypass: false).Object, [],
-            CreateDynamicProvider().Object, CreateTenantContext("t-a").Object);
+        var (sp, accessor) = BuildServices(CreateUser(), CreatePolicy(bypass: false), [], CreateDynamicProvider(), CreateTenantContext("t-a"));
+        using var ctx = new TestTenantContext(sqlite.Options, sp, accessor);
 
         var visible = await ctx.Documents.Select(d => d.Title).ToListAsync();
 

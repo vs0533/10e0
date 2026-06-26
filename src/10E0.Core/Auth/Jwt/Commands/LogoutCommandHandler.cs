@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using TenE0.Core.Abstractions;
+using TenE0.Core.Auditing;
 using TenE0.Core.Auth.Jwt.Services;
 using TenE0.Core.Auth.Jwt.Storage;
 
@@ -9,7 +10,8 @@ namespace TenE0.Core.Auth.Jwt.Commands;
 public sealed class LogoutCommandHandler<TContext>(
     IDbContextFactory<TContext> contextFactory,
     IJwtTokenService tokenService,
-    TimeProvider timeProvider)
+    TimeProvider timeProvider,
+    IAuditLogSink auditSink)
     : ICommandHandler<LogoutCommand, Unit>
     where TContext : DbContext
 {
@@ -24,6 +26,15 @@ public sealed class LogoutCommandHandler<TContext>(
 
         record.RevokedAt = timeProvider.GetUtcNow();
         await dc.SaveChangesAsync(ct);
+
+        // #152 登录日志埋点：登出成功
+        await auditSink.WriteLoginAsync(new LoginLogEntry
+        {
+            UserCode = record.UserCode,
+            EventType = "Logout",
+            Success = true,
+        }, ct);
+
         return Unit.Value;
     }
 }

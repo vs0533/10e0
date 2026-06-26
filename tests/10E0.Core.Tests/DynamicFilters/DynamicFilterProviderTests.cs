@@ -1,6 +1,8 @@
 using System.Data.Common;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using TenE0.Core.Abstractions;
 using TenE0.Core.DataContext;
@@ -29,12 +31,9 @@ public sealed class DynamicFilterProviderTests
 
     private sealed class TestDbContext(
         DbContextOptions<TestDbContext> options,
-        ICurrentUserContext currentUser,
-        IDataAccessPolicy accessPolicy,
-        IEnumerable<TenE0.Core.Permissions.DataFilter.IEntityFilterContributor> filterContributors,
-        IDynamicFilterProvider dynamicFilterProvider,
-        ITenantContext tenantContext)
-        : BaseDataContext(options, currentUser, accessPolicy, filterContributors, dynamicFilterProvider, tenantContext)
+        IServiceProvider serviceProvider,
+        IHttpContextAccessor httpContextAccessor)
+        : BaseDataContext(options, serviceProvider, httpContextAccessor)
     {
         public DbSet<OrderEntity> Orders => Set<OrderEntity>();
         public DbSet<ProductEntity> Products => Set<ProductEntity>();
@@ -56,7 +55,19 @@ public sealed class DynamicFilterProviderTests
         var user = new Mock<ICurrentUserContext>();
         user.SetupGet(c => c.RoleIds).Returns(Array.Empty<string>());
         var policy = new Mock<IDataAccessPolicy>();
-        return new TestDbContext(options, user.Object, policy.Object, [], provider, Mock.Of<ITenantContext>());
+        var tenant = new Mock<ITenantContext>();
+
+        // #95 captive-dependency 修复后 BaseDataContext ctor 改为 (options, IServiceProvider, IHttpContextAccessor)，
+        // 这里组装一个最小的 fake SP 把依赖塞进去。
+        var services = new ServiceCollection();
+        services.AddSingleton(user.Object);
+        services.AddSingleton(policy.Object);
+        services.AddSingleton(tenant.Object);
+        services.AddSingleton(provider);
+        services.AddHttpContextAccessor();
+        var sp = services.BuildServiceProvider();
+        var accessor = sp.GetRequiredService<IHttpContextAccessor>();
+        return new TestDbContext(options, sp, accessor);
     }
 
     // ── CreateDbConnection / ResolveFactory ────────────────────────────
@@ -135,6 +146,47 @@ public sealed class DynamicFilterProviderTests
         // real factory type when the package is present at runtime.
         var asm = typeof(DbConnection).Assembly;
         asm.Should().NotBeNull();
+    }
+
+    // ── #124: TryResolveFactory 可空变体 ──────────────────────────────
+
+    /// <summary>
+    /// #124: ResolveFactory 对未注册 provider 抛 NotSupportedException；TryResolveFactory
+    /// 返回 null。自建引导逻辑（非 LoadRulesAsync 路径）应优先用 TryResolveFactory 探测，
+    /// 避免异常控制流。InMemory / Cosmos 等非关系型后端会落到此分支。
+    /// </summary>
+    [Fact]
+    public void ResolveFactory_UnregisteredProvider_ThrowsNotSupportedException()
+    {
+        var sut = new DynamicFilterProvider(NullLogger<DynamicFilterProvider>.Instance);
+
+        var act = () => sut.ResolveFactory("NonExistent.Provider.NotRegistered");
+
+        act.Should().Throw<NotSupportedException>(
+            "未注册的 provider 必须抛 NotSupportedException，调用方须 catch 或改用 TryResolveFactory");
+    }
+
+    [Fact]
+    public void TryResolveFactory_UnregisteredProvider_ReturnsNull()
+    {
+        var sut = new DynamicFilterProvider(NullLogger<DynamicFilterProvider>.Instance);
+
+        var factory = sut.TryResolveFactory("NonExistent.Provider.NotRegistered");
+
+        factory.Should().BeNull(
+            "TryResolveFactory 对未注册 provider 返回 null 而非抛异常，便于引导逻辑探测支持性");
+    }
+
+    [Fact]
+    public void TryResolveFactory_RegisteredProvider_ReturnsFactory()
+    {
+        DbProviderFactories.RegisterFactory("Microsoft.Data.Sqlite", SqliteFactory.Instance);
+        var sut = new DynamicFilterProvider(NullLogger<DynamicFilterProvider>.Instance);
+
+        var factory = sut.TryResolveFactory("Microsoft.Data.Sqlite");
+
+        factory.Should().NotBeNull().And.BeSameAs(SqliteFactory.Instance,
+            "已注册的 provider 经 TryResolveFactory 应返回同一工厂实例");
     }
 
     // ── LoadRulesAsync: empty / populated / exception paths ───────────

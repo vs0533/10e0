@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using TenE0.Core.Common;
 using TenE0.Core.Permissions.Behaviors;
+using TenE0.Core.Security.LoginProtection;
 
 namespace TenE0.Core.Errors;
 
@@ -12,6 +13,7 @@ namespace TenE0.Core.Errors;
 ///
 /// <list type="bullet">
 ///   <item><see cref="PermissionDeniedException"/>     → 403 / <c>PERM_DENIED</c></item>
+///   <item><see cref="AccountLockedException"/>        → 423 / <c>AUTH_LOCKED</c> (#162 登录失败锁定)</item>
 ///   <item><see cref="ArgumentException"/>            → 400 / <c>VALIDATION_ERROR</c></item>
 ///   <item><see cref="InvalidOperationException"/>     → 400 / <c>INVALID_OPERATION</c></item>
 ///   <item><see cref="DbUpdateConcurrencyException"/> → 409 / <c>CONCURRENCY_CONFLICT</c></item>
@@ -68,6 +70,11 @@ public sealed class DefaultApiErrorMapper : IApiErrorMapper
             PermissionDeniedException permEx => (
                 StatusCodes.Status403Forbidden,
                 ApiResult<object>.Fail(permEx.Message, code: "PERM_DENIED")),
+
+            // #162 登录失败锁定：423 Locked + AUTH_LOCKED，让前端能识别"账号被锁"提示用户等待。
+            AccountLockedException lockedEx => (
+                StatusCodes.Status423Locked,
+                ApiResult<object>.Fail(lockedEx.Message, code: "AUTH_LOCKED")),
 
             ArgumentException argEx => (
                 StatusCodes.Status400BadRequest,

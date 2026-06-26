@@ -77,17 +77,15 @@ internal sealed class CommandHandlerWrapper<TCommand, TResult> : CommandHandlerW
         var raw = serviceProvider.GetServices<IPipelineBehavior<TCommand, TResult>>();
         var behaviors = FilterAndSortBehaviors(serviceProvider, raw);
 
-        // 起点：调用真正的 handler
-        CommandHandlerDelegate<TResult> pipeline = ct => handler.HandleAsync(typedCommand, ct);
+        // #105: 用单个 BehaviorPipeline 对象替代链式闭包。
+        // 旧实现每个 behavior 生成 1 个闭包（捕获 next + behavior + command）→ N 个 DisplayClass + N 个委托分配。
+        // 新实现只 1 个 pipeline 对象 + 1 个指向 InvokeNextAsync 的委托（复用），behaviors 存数组按索引推进。
+        // 单次 SendAsync 内串行调用，pipeline 对象不跨线程，状态机安全。
+        if (behaviors.Length == 0)
+            return handler.HandleAsync(typedCommand, cancellationToken);
 
-        // 逆序包裹：保证 Order 小的行为最先进入、最后退出（与 ASP.NET Core 中间件一致）
-        foreach (var behavior in behaviors.Reverse())
-        {
-            var next = pipeline;
-            pipeline = ct => behavior.HandleAsync(typedCommand, next, ct);
-        }
-
-        return pipeline(cancellationToken);
+        var pipeline = new BehaviorPipeline<TCommand, TResult>(behaviors, handler, typedCommand);
+        return pipeline.InvokeNextAsync(0, cancellationToken);
     }
 
     /// <summary>
@@ -163,5 +161,47 @@ internal sealed class CommandHandlerWrapper<TCommand, TResult> : CommandHandlerW
         if (string.IsNullOrEmpty(scope)) return false;
         if (scope.Equals("All", StringComparison.OrdinalIgnoreCase)) return true;
         return scope.Equals(env, StringComparison.OrdinalIgnoreCase);
+    }
+}
+
+/// <summary>
+/// #105: 行为管道执行器 —— 用数组 + 索引推进替代链式闭包。
+///
+/// 旧实现每次 SendAsync 构建 N 个嵌套闭包（每个捕获 next + behavior + command），
+/// 产生 N 个 DisplayClass 实例 + N 个委托分配。本类把 behaviors 存数组，按索引推进，
+/// 整条管道只需 1 个 BehaviorPipeline 实例 + 每个 behavior 1 个轻量 index 闭包。
+///
+/// 调用语义：InvokeNextAsync(0) 调最外层 behavior（behaviors 已按 Order 降序排列，
+/// index 0 = Order 最大 = 最外层），它调 next → InvokeNextAsync(1) → ... 直到最后调 handler。
+/// </summary>
+internal sealed class BehaviorPipeline<TCommand, TResult> where TCommand : ICommand<TResult>
+{
+    private readonly IPipelineBehavior<TCommand, TResult>[] _behaviors;
+    private readonly ICommandHandler<TCommand, TResult> _handler;
+    private readonly TCommand _command;
+
+    internal BehaviorPipeline(
+        IPipelineBehavior<TCommand, TResult>[] behaviors,
+        ICommandHandler<TCommand, TResult> handler,
+        TCommand command)
+    {
+        _behaviors = behaviors;
+        _handler = handler;
+        _command = command;
+    }
+
+    /// <summary>
+    /// 执行索引 <paramref name="index"/> 处的 behavior；越界则调 handler（管道末端）。
+    /// 每个 behavior 的 next 委托指向 InvokeNextAsync(index+1)，复用本实例。
+    /// </summary>
+    internal Task<TResult> InvokeNextAsync(int index, CancellationToken cancellationToken)
+    {
+        if (index >= _behaviors.Length)
+            return _handler.HandleAsync(_command, cancellationToken);
+
+        // next 委托：指向本实例的 InvokeNextAsync(index+1)，只捕获 index（int）+ this。
+        // 比 旧行为捕获整个 next 链 + behavior + command 的 DisplayClass 更轻。
+        CommandHandlerDelegate<TResult> next = ct => InvokeNextAsync(index + 1, ct);
+        return _behaviors[index].HandleAsync(_command, next, cancellationToken);
     }
 }

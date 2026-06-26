@@ -57,4 +57,23 @@ public static class ErrorCodes
     /// <summary>复合唯一索引冲突（多字段组合）。默认 "UNIQUE_GROUP"。
     /// 散落源：<c>UniqueValidators.cs:115</c>（<c>GroupUniqueValidator</c>）。</summary>
     public const string UniqueGroup = "UNIQUE_GROUP";
+
+    /// <summary>导入行级错误（类型转换失败 / 必填缺失 / 校验失败）。默认 "IMPORT_ROW"。
+    /// 散落源：<c>ImportExecutor</c> / <c>ClosedXmlExcelImporter</c> / <c>CsvImporter</c>。</summary>
+    public const string ImportRowError = "IMPORT_ROW";
+
+    /// <summary>导入事务模式整体回滚（任一行失败已触发回滚全量）。默认 "IMPORT_ROLLBACK"。</summary>
+    public const string ImportTransactionRolledback = "IMPORT_ROLLBACK";
+
+    /// <summary>账号被锁定（登录失败次数过多）。默认 "AUTH_LOCKED"。issue #162。</summary>
+    public const string AuthLocked = "AUTH_LOCKED";
+
+    /// <summary>验证码无效 / 过期 / 不匹配。默认 "CAPTCHA_INVALID"。issue #162。</summary>
+    public const string CaptchaInvalid = "CAPTCHA_INVALID";
+
+    /// <summary>验证码必填但客户端未提供。默认 "CAPTCHA_REQUIRED"。issue #162。</summary>
+    public const string CaptchaRequired = "CAPTCHA_REQUIRED";
+
+    /// <summary>触发限流（429 Too Many Requests）。默认 "RATE_LIMITED"。issue #162。</summary>
+    public const string RateLimited = "RATE_LIMITED";
 }

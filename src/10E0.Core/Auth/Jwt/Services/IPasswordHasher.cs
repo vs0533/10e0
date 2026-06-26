@@ -12,4 +12,19 @@ public interface IPasswordHasher
 
     /// <summary>验证明文与哈希是否匹配。</summary>
     bool Verify(string password, string hash);
+
+    /// <summary>
+    /// 一个固定的、与任何真实密码都不匹配的预生成哈希。
+    ///
+    /// 用于防止 timing attack：在用户名为空时仍需调用一次 <see cref="Verify"/>，
+    /// 传入此 dummy hash 既能保证 Verify 的执行路径/耗时与真实场景一致，
+    /// 又能确保结果必为 false（因为没有任何明文能匹配这个固定的盐+派生密钥）。
+    ///
+    /// 业务侧示例（#97 防 timing attack 短路）：
+    /// <code>
+    /// var hashToCheck = user?.PasswordHash ?? passwordHasher.DummyHash;
+    /// var verified = passwordHasher.Verify(cmd.Password, hashToCheck);
+    /// </code>
+    /// </summary>
+    string DummyHash { get; }
 }

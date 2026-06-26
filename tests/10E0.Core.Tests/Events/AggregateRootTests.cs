@@ -58,6 +58,47 @@ public sealed class AggregateRootTests
     }
 
     [Fact]
+    public void RaiseInternal_ValidEvent_ShouldAddToPending()
+    {
+        // Arrange
+        var aggregate = new TestAggregate();
+        var evt = new TestEvent("via-internal");
+
+        // Act
+        aggregate.RaiseInternal(evt);
+
+        // Assert：与 protected Raise 等价，仅供框架代码（10E0.Api 等）使用
+        aggregate.PendingEvents.Should().ContainSingle().Which.Should().BeSameAs(evt);
+    }
+
+    [Fact]
+    public void RaiseInternal_Null_ShouldThrow()
+    {
+        // Arrange
+        var aggregate = new TestAggregate();
+
+        // Act & Assert
+        Assert.Throws<ArgumentNullException>(() => aggregate.RaiseInternal(null!));
+    }
+
+    [Fact]
+    public void RaiseInternal_IsInternalMethod_SoRefactoringIsTypeSafe()
+    {
+        // Arrange：编译期断言 RaiseInternal 是 internal 入口 —
+        // 业务方不能用它，框架代码（InternalsVisibleTo 暴露的 assembly）能用。
+        var method = typeof(AggregateRoot).GetMethod(
+            nameof(AggregateRoot.RaiseInternal),
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+
+        // Assert
+        method.Should().NotBeNull("RaiseInternal 入口必须存在");
+        method!.IsAssembly.Should().BeTrue("RaiseInternal 必须是 internal（IsAssembly=true），不能是 public 也不能是 protected");
+        method.ReturnType.Should().Be(typeof(void));
+        method.GetParameters().Should().HaveCount(1)
+            .And.ContainSingle(p => p.ParameterType == typeof(IDomainEvent));
+    }
+
+    [Fact]
     public void ClearEvents_ShouldEmptyList()
     {
         // Arrange

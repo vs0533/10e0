@@ -1,9 +1,7 @@
 using System.Linq.Expressions;
 using System.Security.Claims;
 using Microsoft.EntityFrameworkCore;
-using TenE0.Core.Abstractions;
 using TenE0.Core.DataContext;
-using TenE0.Core.DynamicFilters;
 using TenE0.Core.Permissions.DataFilter;
 using TenE0.Core.Permissions.Storage;
 
@@ -15,13 +13,9 @@ namespace TenE0.Api.Domain;
 /// </summary>
 internal sealed class DemoDbContext(
     DbContextOptions<DemoDbContext> options,
-    ICurrentUserContext currentUser,
-    IDataAccessPolicy accessPolicy,
-    IHttpContextAccessor httpContextAccessor,
-    IEnumerable<IEntityFilterContributor> filters,
-    IDynamicFilterProvider dynamicFilterProvider,
-    ITenantContext tenantContext)
-    : TenE0SystemDbContext<AppUser, TenE0Role>(options, currentUser, accessPolicy, filters, dynamicFilterProvider, tenantContext)
+    IServiceProvider serviceProvider,
+    IHttpContextAccessor httpContextAccessor)
+    : TenE0SystemDbContext<AppUser, TenE0Role>(options, serviceProvider, httpContextAccessor)
 {
     public string? CurrentOrgId { get; } =
         httpContextAccessor.HttpContext?.User?.FindFirstValue("org");

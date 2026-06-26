@@ -72,10 +72,17 @@ internal sealed class EntityService(
         var entityType = context.Model.FindEntityType(typeof(TEntity))
             ?? throw new InvalidOperationException($"实体类型未在 DbContext 中注册：{typeof(TEntity).Name}");
 
-        // 1. 加载已存在实体（含所有 M:N 集合）
+        // 1. 加载已存在实体
+        // #110: 只 Include 客户端 opt-in 的 M:N 导航（PostedNavigations），而非全部 SkipNavs。
+        // 原 Include 所有 skip nav 会为每个 M:N 集合生成 JOIN，即使客户端没传也查出来 → 隐藏 N+1。
+        // 收敛到 PostedNavigations 与下方 DiffSkipNavigations 的 opt-in 语义对齐。
         var query = context.Set<TEntity>().AsQueryable();
-        foreach (var nav in entityType.GetSkipNavigations())
-            query = query.Include(nav.Name);
+        if (options.PostedNavigations is { Count: > 0 })
+        {
+            foreach (var nav in entityType.GetSkipNavigations())
+                if (options.PostedNavigations.Contains(nav.Name))
+                    query = query.Include(nav.Name);
+        }
 
         var dbEntity = await query.FirstOrDefaultAsync(e => e.Id == entity.Id, cancellationToken);
         if (dbEntity is null)
@@ -118,16 +125,19 @@ internal sealed class EntityService(
         CancellationToken cancellationToken = default)
         where TEntity : class, IBaseEntity
     {
-        var exists = await context.Set<TEntity>().AsNoTracking()
-            .AnyAsync(e => e.Id == entity.Id, cancellationToken);
-        if (!exists)
+        // #111: 加载 tracked 实体再删除，而非对调用方传入的 stub entity 直接 Remove。
+        // 原实现 Remove(stubEntity) 会让 EF Attach 这个 stub（只含 Id），其他必填字段缺失
+        // 会触发 EF 必填校验异常，而非友好的删除失败。加载 tracked 实体绕开此问题。
+        var dbEntity = await context.Set<TEntity>()
+            .FirstOrDefaultAsync(e => e.Id == entity.Id, cancellationToken);
+        if (dbEntity is null)
         {
             errs.Add("删除的数据不存在", key: nameof(entity.Id), code: ErrorCodes.NotFound);
             return false;
         }
 
         // 软删除转换在 AuditInterceptor 里统一处理
-        context.Set<TEntity>().Remove(entity);
+        context.Set<TEntity>().Remove(dbEntity);
 
         if (!errs.IsValid) return false;
 
@@ -223,17 +233,18 @@ internal sealed class EntityService(
     /// <summary>
     /// 审计字段名集合 —— 这些字段专属 AuditInterceptor，EntityService 永不写入。
     /// 即使被列入 PostedProperties 也会被忽略，防止客户端篡改审计信息。
+    /// #128: 用 ImmutableHashSet 而非 HashSet，防止 static readonly 引用被外部 mutate。
     /// </summary>
-    private static readonly HashSet<string> AuditFieldNames = new(StringComparer.Ordinal)
-    {
-        nameof(ITimerEntity.CreateTime),
-        nameof(ITimerEntity.CreateBy),
-        nameof(ITimerEntity.UpdateTime),
-        nameof(ITimerEntity.UpdateBy),
-        nameof(ISoftDeleteEntity.IsSoftDelete),
-        nameof(ISoftDeleteEntity.DeleteTime),
-        nameof(ISoftDeleteEntity.DeleteBy),
-    };
+    private static readonly System.Collections.Immutable.ImmutableHashSet<string> AuditFieldNames =
+        System.Collections.Immutable.ImmutableHashSet.Create<string>(
+            StringComparer.Ordinal,
+            nameof(ITimerEntity.CreateTime),
+            nameof(ITimerEntity.CreateBy),
+            nameof(ITimerEntity.UpdateTime),
+            nameof(ITimerEntity.UpdateBy),
+            nameof(ISoftDeleteEntity.IsSoftDelete),
+            nameof(ISoftDeleteEntity.DeleteTime),
+            nameof(ISoftDeleteEntity.DeleteBy));
 
     /// <summary>
     /// 把 <paramref name="source"/>（客户端提交）的标量属性补丁到 <paramref name="target"/>（DB 加载的跟踪实体）。

@@ -180,6 +180,45 @@ public sealed class DefaultCachingImplementationsTests
         v.Should().Be(2L);
     }
 
+    // ── #98: DistributedAtomicCounter 非原子警告 ───────────────────────────────
+
+    [Fact]
+    public void DistributedAtomicCounter_Xmldoc_WarnsAboutMultiReplicaRace()
+    {
+        // #98: 测试真读 xmldoc，断言每个 MultiReplicaRaceWarningKeywords 关键字都出现在
+        // DistributedAtomicCounter 类 xmldoc summary 文本里。这才能阻止"删除 xmldoc 警告
+        // + 保留 const 数组"这种 trivially-passing 的回归（review bot 抓到）。
+        var xml = GetXmlDoc(typeof(DistributedAtomicCounter));
+        xml.Should().NotBeNullOrEmpty(
+            "10E0.Core.xml 必须在 src/test bin 中存在；如丢失，检查 Directory.Build.props 的 GenerateDocumentationFile=true");
+        DistributedAtomicCounter.MultiReplicaRaceWarningKeywords
+            .Should().NotBeEmpty("MultiReplicaRaceWarningKeywords 是 #98 警告契约的代码化事实");
+        foreach (var keyword in DistributedAtomicCounter.MultiReplicaRaceWarningKeywords)
+        {
+            xml.Should().Contain(keyword,
+                $"DistributedAtomicCounter xmldoc 必须包含关键字 \"{keyword}\"——防止警告被静默删除");
+        }
+    }
+
+    private static string GetXmlDoc(Type type)
+    {
+        // type.Assembly.Location 在 dotnet test 下指向 test bin；10E0.Core.xml 已被 SDK copy 到 test bin。
+        // 单文件发布 / trim 模式下 Location 可能返回空串，防御一下。
+        var asmPath = type.Assembly.Location;
+        if (string.IsNullOrEmpty(asmPath)) return string.Empty;
+        var xmlPath = Path.ChangeExtension(asmPath, ".xml");
+        if (!File.Exists(xmlPath)) return string.Empty;
+
+        // XDocument（C# 14 / .NET 10 习惯）。返回 member.ToString() —— summary 文本里
+        // 已含被断言的 race/INCR/Replace 三个关键字，不需要单独提取 <see cref> 属性值。
+        var doc = System.Xml.Linq.XDocument.Load(xmlPath);
+        var member = doc.Root?
+            .Element("members")?
+            .Elements("member")
+            .FirstOrDefault(m => m.Attribute("name")?.Value == $"T:{type.FullName}");
+        return member?.ToString() ?? string.Empty;
+    }
+
     /// <summary>
     /// #42 关键验证：并发 IncrementAsync 不能丢增。
     /// 单进程 MemoryDistributedCache 下 Sequential 调用即可模拟 — 多次自增后必须得到正确总数。

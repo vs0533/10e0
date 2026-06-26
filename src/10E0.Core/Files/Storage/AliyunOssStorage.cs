@@ -11,6 +11,17 @@ namespace TenE0.Core.Files.Storage;
 /// KMS 凭据提供者中，<b>不要</b>在 <c>appsettings.*.json</c> 或源代码中明文写入密钥。
 /// 本地开发可使用 <c>dotnet user-secrets</c>。
 /// </para>
+/// <para>
+/// ⚠️ <b>#99: ThreadPool 占用警告</b> —— <c>Aliyun.OSS</c> SDK 的 <c>OssClient</c>
+/// 仅提供同步 API（<c>PutObject</c> / <c>GetObject</c> 等无异步重载），本实现用
+/// <c>Task.Run</c> 把同步阻塞 I/O 转移到 ThreadPool。高并发上传/下载场景下每个请求
+/// 会占用一个 ThreadPool 线程直到网络往返完成，可能导致 <b>线程池饥饿 → 请求雪崩</b>。
+/// 生产部署高吞吐场景应：
+/// <list type="bullet">
+///   <item>配置 <c>ThreadPool.SetMinThreads</c> ≥ 预期并发上传/下载数，避免按需扩容延迟。</item>
+///   <item>或改用 S3 兼容 API（<c>AliyunOssStorage</c> 可替换为基于 AWSSDK / MinIO 的异步实现）。</item>
+/// </list>
+/// </para>
 /// </summary>
 public class AliyunOssStorage : IFileStorage
 {

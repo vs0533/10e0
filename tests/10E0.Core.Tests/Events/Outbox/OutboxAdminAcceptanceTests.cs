@@ -215,6 +215,11 @@ public sealed class OutboxAdminAcceptanceTests
         serviceProviderMock
             .Setup(sp => sp.GetService(typeof(IOutboxPublisher)))
             .Returns(publisherMock.Object);
+        // feature #82 集成：OutboxRelayService 现在依赖 IOutboxLock。Admin acceptance 场景里
+        // 没有多实例竞争，用 NoOpOutboxLock 即可（始终 TryAcquire=true，让消息继续走到 publisher）。
+        serviceProviderMock
+            .Setup(sp => sp.GetService(typeof(IOutboxLock)))
+            .Returns(new NoOpOutboxLock());
 
         var scopeMock = new Mock<IServiceScope>();
         scopeMock.SetupGet(s => s.ServiceProvider).Returns(serviceProviderMock.Object);

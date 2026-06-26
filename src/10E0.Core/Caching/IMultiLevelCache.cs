@@ -31,8 +31,47 @@ public interface IMultiLevelCache
         CancellationToken cancellationToken = default)
         where T : class;
 
+    /// <summary>
+    /// 仅当 key 不存在时设置值；多并发调用只有一个成功。
+    /// 实现应使用底层 SETNX / <c>SET key NX EX</c> 等原子原语（生产 Redis）。
+    /// 用于分布式锁获取等"先到先得"场景。
+    /// </summary>
+    /// <returns>true = 本调用成功写入；false = key 已存在（被其他调用方抢先）。</returns>
+    Task<bool> TrySetAsync<T>(
+        string key,
+        T value,
+        CacheOptions options,
+        CancellationToken cancellationToken = default)
+        where T : class;
+
+    /// <summary>
+    /// 覆盖设置值（无论 key 是否存在）；用于分布式锁续约或主动改值。
+    /// 实现应使用底层 <c>SET key value EX</c> 等覆盖语义原语（生产 Redis）。
+    /// </summary>
+    Task SetAsync<T>(
+        string key,
+        T value,
+        CacheOptions options,
+        CancellationToken cancellationToken = default)
+        where T : class;
+
     /// <summary>从 L1 和 L2 同时移除指定 key。</summary>
     /// <param name="key">要失效的 key。</param>
     /// <param name="cancellationToken">取消令牌。</param>
     Task RemoveAsync(string key, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// 仅读 L1+L2（不调 factory、不写回）。用于分布式锁 ownership 检查等"读但不能写"的场景。
+    ///
+    /// <para>
+    /// <b>不要用 <see cref="GetOrSetAsync{T}"/> 做读</b>：GetOrSetAsync 在 L1 miss 且 L2 miss 时会调 factory，
+    /// factory 写入的值会污染 L2（即便 value 是"哨兵 null"也不安全，因为生产实现可能在 null 时
+    /// 也回写 L2）。锁 ownership 检查必须是纯读。
+    /// </para>
+    /// </summary>
+    /// <returns>命中返回反序列化后的值；L1+L2 双 miss 返回 <c>null</c>。</returns>
+    Task<T?> GetAsync<T>(
+        string key,
+        CancellationToken cancellationToken = default)
+        where T : class;
 }

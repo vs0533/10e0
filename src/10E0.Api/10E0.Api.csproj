@@ -8,7 +8,8 @@
 
   <ItemGroup>
     <!-- 内置 OpenAPI 3.1，替代 Swashbuckle -->
-    <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.0" />
+    <!-- #163：升至 10.0.6，与 Asp.Versioning.OpenApi 的传递依赖链对齐（rc.1 要求 >=10.0.6） -->
+    <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.6" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.InMemory" Version="10.0.0" />
     <!-- 现代 OpenAPI UI，替代 SwaggerUI -->
     <PackageReference Include="Scalar.AspNetCore" Version="2.0.0" />

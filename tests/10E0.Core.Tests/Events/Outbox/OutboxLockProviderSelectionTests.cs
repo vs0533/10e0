@@ -99,6 +99,44 @@ public sealed class OutboxLockProviderSelectionTests
     }
 
     // ================================================================
+    // Scenario 1b: Step 1/6 — Leader 模式枚举 + options 默认值稳定性
+    //   钉死 feature #82 引入的 OutboxLockProviderKind.Leader 枚举存在
+    //   + 后续 LeaderElection 需要的 options 字段默认值（占位配置）
+    //   本测试只验证枚举 + options 字段的"存在 + 默认值"，不触发任何
+    //   LeaderElection 行为（行为在后续步骤实现）。
+    // ================================================================
+
+    [Fact]
+    public void GivenNewOutboxRelayOptions_WhenConstructed_ThenLeaderEnumExistsAndIsNotDefaultChoice()
+    {
+        // Arrange — 验证 Leader 枚举值已存在（int 3，向后兼容 None=0/RowLock=1/Distributed=2）
+        var leaderKind = OutboxLockProviderKind.Leader;
+
+        // Then — Leader 必须有非 None 的显式 int 值，不能与已有枚举值冲突
+        leaderKind.Should().NotBe(OutboxLockProviderKind.None,
+            "Leader 是独立的 provider kind — 不能复用 None（语义完全不同："
+            + "Leader 是全局只一个 Relay 承担投递，其余实例空闲待命）");
+        ((int)leaderKind).Should().Be(3,
+            "Leader 必须是显式 int=3 — 与 None=0/RowLock=1/Distributed=2 错开，向后兼容");
+    }
+
+    [Fact]
+    public void GivenNewOutboxRelayOptions_WhenConstructed_ThenLeaderLeaseAndKeyPrefixDefaultToSaneValues()
+    {
+        // Arrange + Act — Step 1/6 引入的 Leader 模式 options 默认值
+        var options = new OutboxRelayOptions();
+
+        // Then — 默认 30s 租约（与 LockLeaseDuration 保持一致语义）
+        options.LeaderLeaseDuration.Should().Be(TimeSpan.FromSeconds(30),
+            "LeaderLeaseDuration 默认 30s — 与 LockLeaseDuration 一致；"
+            + "Lease 过期后另一实例可在可接受时间内抢主");
+
+        // Then — 默认 Redis key 前缀
+        options.LeaderInstanceKeyPrefix.Should().Be("outbox:leader",
+            "LeaderInstanceKeyPrefix 默认 'outbox:leader' — 让多套环境共用 Redis 时不冲突");
+    }
+
+    // ================================================================
     // Scenario 2: AddTenE0DomainEvents + InMemory 真实集成路径 — 默认下落 NoOp
     //   验证 #80 AddOutboxLocking<TContext> switch 表达式的"未知 provider → NoOp"分支
     //   （InMemory 的 ProviderName 含 "InMemory"，不匹配 SqlServer/Npgsql/Postgres → NoOp）

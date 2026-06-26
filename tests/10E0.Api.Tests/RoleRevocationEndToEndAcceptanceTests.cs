@@ -39,7 +39,7 @@ public sealed class RoleRevocationEndToEndAcceptanceTests
         await factory.ResetAliceRolesAsync();
         var aliceClient = factory.CreateClient();
         var loginResp = await aliceClient.PostAsJsonAsync(
-            "/auth/login", new { userCode = "alice", password = "111111" });
+            "/auth/login", new { userCode = "alice", password = "dev-default-password-change-me" });
         loginResp.StatusCode.Should().Be(HttpStatusCode.OK,
             "alice is seeded in AuthSeeder with password 111111");
         var aliceAuth = (await loginResp.Content.ReadFromJsonAsync<AuthEnvelope>())!.Data!;
@@ -57,7 +57,7 @@ public sealed class RoleRevocationEndToEndAcceptanceTests
         //  the same un-refreshed access token.)
         var adminClient = factory.CreateClient();
         var adminLoginResp = await adminClient.PostAsJsonAsync(
-            "/auth/login", new { userCode = "admin", password = "111111" });
+            "/auth/login", new { userCode = "admin", password = "dev-default-password-change-me" });
         adminLoginResp.StatusCode.Should().Be(HttpStatusCode.OK);
         var adminAuth = (await adminLoginResp.Content.ReadFromJsonAsync<AuthEnvelope>())!.Data!;
         adminClient.DefaultRequestHeaders.Authorization =
@@ -83,13 +83,13 @@ public sealed class RoleRevocationEndToEndAcceptanceTests
         await factory.ResetAliceRolesAsync();
         var aliceClient = factory.CreateClient();
         var loginResp = await aliceClient.PostAsJsonAsync(
-            "/auth/login", new { userCode = "alice", password = "111111" });
+            "/auth/login", new { userCode = "alice", password = "dev-default-password-change-me" });
         var aliceAuth = (await loginResp.Content.ReadFromJsonAsync<AuthEnvelope>())!.Data!;
 
         // Admin revokes demo.view from the viewer role BEFORE alice refreshes
         var adminClient = factory.CreateClient();
         var adminLoginResp = await adminClient.PostAsJsonAsync(
-            "/auth/login", new { userCode = "admin", password = "111111" });
+            "/auth/login", new { userCode = "admin", password = "dev-default-password-change-me" });
         var adminAuth = (await adminLoginResp.Content.ReadFromJsonAsync<AuthEnvelope>())!.Data!;
         adminClient.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", adminAuth.AccessToken);
@@ -118,7 +118,7 @@ public sealed class RoleRevocationEndToEndAcceptanceTests
         using var factory = CreateFactory();
         var aliceClient = factory.CreateClient();
         var loginResp = await aliceClient.PostAsJsonAsync(
-            "/auth/login", new { userCode = "alice", password = "111111" });
+            "/auth/login", new { userCode = "alice", password = "dev-default-password-change-me" });
         var aliceAuth = (await loginResp.Content.ReadFromJsonAsync<AuthEnvelope>())!.Data!;
         aliceClient.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", aliceAuth.AccessToken);
@@ -132,7 +132,7 @@ public sealed class RoleRevocationEndToEndAcceptanceTests
         // a new grant produces a version bump and the next call sees the new state.
         var adminClient = factory.CreateClient();
         var adminLoginResp = await adminClient.PostAsJsonAsync(
-            "/auth/login", new { userCode = "admin", password = "111111" });
+            "/auth/login", new { userCode = "admin", password = "dev-default-password-change-me" });
         var adminAuth = (await adminLoginResp.Content.ReadFromJsonAsync<AuthEnvelope>())!.Data!;
         adminClient.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", adminAuth.AccessToken);

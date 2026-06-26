@@ -34,7 +34,8 @@ public sealed class JwtTokenService(
         UserType userType,
         IReadOnlyList<string> roles,
         IReadOnlyDictionary<string, long> roleVersions,
-        string? tenantId = null)
+        string? tenantId = null,
+        string? orgId = null)
     {
         var now = timeProvider.GetUtcNow();
         var accessExpires = now.Add(_options.AccessTokenLifetime);
@@ -65,6 +66,10 @@ public sealed class JwtTokenService(
         // #11: 租户 ID（仅在非空非空白时写入，避免 EF Filter 误比对空串）
         if (!string.IsNullOrWhiteSpace(tenantId))
             claims.Add(new Claim(claimNames.TenantId, tenantId));
+
+        // #155: 组织节点 Id（仅在非空非空白时写入；与 tenant 正交 —— org 全局树）
+        if (!string.IsNullOrWhiteSpace(orgId))
+            claims.Add(new Claim(claimNames.Org, orgId));
 
         var token = new JwtSecurityToken(
             issuer: _options.Issuer,

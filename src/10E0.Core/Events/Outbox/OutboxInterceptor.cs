@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
@@ -18,6 +19,20 @@ namespace TenE0.Core.Events.Outbox;
 /// </summary>
 public sealed class OutboxInterceptor(TimeProvider timeProvider) : SaveChangesInterceptor
 {
+    /// <summary>
+    /// #108: 缓存 Type → AssemblyQualifiedName，避免每次 SaveChanges 对每个事件
+    /// 重复调用 GetType().AssemblyQualifiedName（每次都拼字符串含版本/公钥 token）。
+    /// 事件类型在进程内稳定，缓存命中后零反射开销。
+    /// </summary>
+    private static readonly ConcurrentDictionary<Type, string> EventTypeNames = new();
+
+    /// <summary>
+    /// #108: 复用 JsonSerializerOptions 避免每次 Serialize 创建默认实例。
+    /// 注意：必须用指定 inputType 的 Serialize 重载（evt 是 IDomainEvent 接口，
+    /// 用静态类型序列化会丢子类属性）。
+    /// </summary>
+    private static readonly JsonSerializerOptions SerializerOptions = new();
+
     public override ValueTask<InterceptionResult<int>> SavingChangesAsync(
         DbContextEventData eventData,
         InterceptionResult<int> result,
@@ -52,10 +67,11 @@ public sealed class OutboxInterceptor(TimeProvider timeProvider) : SaveChangesIn
         {
             foreach (var evt in aggregate.PendingEvents)
             {
+                var eventType = evt.GetType();
                 var msg = new OutboxMessage
                 {
-                    EventType = evt.GetType().AssemblyQualifiedName!,
-                    Payload = JsonSerializer.Serialize(evt, evt.GetType()),
+                    EventType = EventTypeNames.GetOrAdd(eventType, static t => t.AssemblyQualifiedName!),
+                    Payload = JsonSerializer.Serialize(evt, eventType, SerializerOptions),
                     OccurredOn = now,
                 };
                 context.Add(msg);

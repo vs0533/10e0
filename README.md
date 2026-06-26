@@ -12,10 +12,18 @@
 - **自建 CQRS 分发器** — 不依赖 MediatR，无商业许可风险，支持 Command / Query / Event 三种消息类型
 - **Pipeline Behavior 管道链** — Logging → Transaction → Permission → Handler，类 ASP.NET Core 中间件模式，行为可插拔
 - **EF Core 10 + IDbContextFactory** — 作用域工厂模式，支持并发查询；Savepoint 替代嵌套事务，修复经典 Bug
-- **Outbox Pattern 领域事件** — 领域事件同事务落库，后台 Relay 异步发布，保证最终一致性
+- **Outbox Pattern 领域事件** —
+  - 领域事件同事务落库，后台 Relay 异步发布（最终一致性）
+  - **4 种 Lock Provider** (`None` / `RowLock` / `Distributed` / `Leader`) 跨实例 exactly-once
+  - `OutboxSchemaSeeder` 启动期幂等迁移 `LockedUntil` / `LockedByInstance` 列
+  - `IOutboxAdmin` 死信管理：查询 / 重试 / 导出三操作
+- **多租户（Multi-Tenancy）** — `IMultiTenantEntity` + Named Query Filter 自动隔离；`ITenantContext` 从 JWT `tenant_id` claim 注入；超管 `BypassFilters` 短路
+- **角色版本号（instant permission revocation）** — `IRoleVersionStore` + JWT `role_versions` claim；撤销某用户权限后**下一个 HTTP 请求立即 403**，无需等待 token 过期（关 #7 安全 HIGH-4）
 - **RBAC 权限系统** — 功能权限 + 字段级权限 + 行级数据过滤三层粒度，Permission Key 驱动的声明式模型
+- **多级缓存抽象** — `IMultiLevelCache` L1 (进程内) + L2 (分布式) + `IAtomicCounter` (Redis `INCR` / 内存 `Interlocked.Increment` / EF `UPDATE OUTPUT`)；纯读 `GetAsync` API + SETNX 进程内锁防 exactly-once 失败
 - **动态数据过滤** — 运行时 JSON 规则引擎，无需改代码即可实现复杂数据隔离
 - **文件服务** — 统一抽象，支持本地存储、Aliyun OSS、AWS S3，开箱即用的图片处理
+- **导入导出** — 通用 Excel(ClosedXML)/CSV(RFC 4180) 导入导出 + 声明式列映射 + `ImportExecutor` 走 `EntityService` 校验链 + 大文件流式/降级
 - **组织架构与菜单管理** — 物化路径树实现组织树和菜单树，支持角色分配
 - **动态查询与分页** — 参数化查询，防 SQL 注入，支持排序、过滤、字段选择
 
@@ -33,11 +41,22 @@ builder.Services.AddTenE0Identity<AppDbContext>(opt =>
     // ⚠️ 生产环境从配置/环境变量读取
     opt.Jwt.SigningKey = builder.Configuration["Jwt:SigningKey"]
         ?? throw new InvalidOperationException("Jwt:SigningKey 未配置");
+    // 多租户 (#11)：开启 Tenant claim 解析 → EF Named Query Filter 自动按租户隔离
+    opt.Jwt.TenantClaimName = "tenant_id";
+    // 角色版本号 (#7)：签发 JWT 时把 {roleCode: version} 快照写入 role_versions claim
+});
+builder.Services.AddTenE0Outbox<AppDbContext>(opt =>
+{
+    opt.BatchSize = 50;
+    opt.MaxAttempts = 8;
+    opt.LockProvider = OutboxLockProviderKind.RowLock;  // 0/1 实例可省（None）
 });
 var app = builder.Build();
 app.UseAuthentication(); app.UseAuthorization();
 app.Run();
 ```
+
+多租户详细启用方式见 [docs/20-multi-tenancy.md](docs/20-multi-tenancy.md)；Outbox 多实例 Lock Provider 选型见 [docs/10-domain-events.md §10.5.1](docs/10-domain-events.md)。
 
 ## 文档
 
@@ -60,6 +79,14 @@ app.Run();
 | [流水号](docs/15-sequences.md) | 自动编号生成 |
 | [动态查询](docs/16-dynamic-queries.md) | 参数化查询与分页 |
 | [部署](docs/17-deployment.md) | CI/CD 与发版 |
+| [同步 PR 策略](docs/18-sync-pr-strategy.md) | dev → main 合并为何禁 Squash |
+| [同步事故复盘](docs/19-sync-retrospective.md) | 2026-06 同步事故复盘 |
+| [多租户](docs/20-multi-tenancy.md) | `IMultiTenantEntity` + Named Query Filter |
+| [审批流](docs/21-workflow.md) | 状态机 + 流程定义 + 运行时 |
+| [导入导出](docs/22-import-export.md) | Excel/CSV 导入导出（ClosedXML + ImportExecutor） |
+| [实时推送](docs/23-realtime.md) | 声明式 SignalR（INotifyClient） |
+| [API 版本化](docs/24-api-versioning.md) | Asp.Versioning + 版本透明 + 每版本 OpenAPI |
+| [文档索引](docs/index.md) | 全文档分类导航 |
 
 ## 构建与运行
 
