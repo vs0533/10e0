@@ -41,10 +41,21 @@ public static class RateLimitingExtensions
         this IServiceCollection services,
         Action<RateLimitOptions>? configure = null)
     {
-        if (configure is not null)
-            services.Configure(configure);
-        else
-            services.AddOptions<RateLimitOptions>();
+        var optionsBuilder = configure is not null
+            ? services.AddOptions<RateLimitOptions>().Configure(configure)
+            : services.AddOptions<RateLimitOptions>();
+
+        // 测试环境自动关闭限流：WebApplicationFactory 的所有 HTTP 请求共享 127.0.0.1 源 IP，
+        // 而 /auth/login 默认每 IP 每分钟 10 次 —— 测试类内多次登录会被 429 误伤（#162）。
+        // Test 环境无真实流量压力，关闭限流让集成测试聚焦被测业务行为。
+        // Configure<IServiceProvider>：DI 容器恒可解析 IServiceProvider；用 GetService
+        // 弱引用 IWebHostEnvironment（裸 ServiceCollection 单元测试无 web 环境时不抛）。
+        optionsBuilder.Configure<IServiceProvider>((opt, sp) =>
+        {
+            var env = sp.GetService<Microsoft.AspNetCore.Hosting.IWebHostEnvironment>();
+            if (env is not null && string.Equals(env.EnvironmentName, "Test", StringComparison.Ordinal))
+                opt.Enabled = false;
+        });
 
         services.AddRateLimiter(opt =>
         {
