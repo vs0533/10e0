@@ -92,6 +92,41 @@ public sealed class ImageCaptchaProvider : ICaptchaProvider
         return new string(chars);
     }
 
+    /// <summary>
+    /// 字体解析 + 缓存：优先 "Arial" / "DejaVu Sans"（Linux 常见）/ "Liberation Sans"，
+    /// 全部缺失时降级到 <see cref="SystemFonts"/> 中首个可用 family（保证 Linux CI / 最小容器也能生成）。
+    ///
+    /// <para><b>为什么不在构造函数探测一次</b>：fontSize 按图片高度自适应，不同尺寸需不同 Font 实例。
+    /// 按 (family, size, style) 缓存 —— 与 Files 模块 <c>ImageProcessingExtensions._fontCache</c> 同模式。</para>
+    /// </summary>
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, Font> _fontCache = new();
+
+    private static readonly string[] PreferredFonts = ["Arial", "DejaVu Sans", "Liberation Sans", "FreeSans"];
+
+    private static Font ResolveFont(int fontSize)
+    {
+        var key = $"captcha|{fontSize}";
+        return _fontCache.GetOrAdd(key, _ =>
+        {
+            // 按优先级找首个存在的 family
+            foreach (var name in PreferredFonts)
+            {
+                if (SystemFonts.TryGet(name, out var family))
+                    return family.CreateFont(fontSize, FontStyle.Bold);
+            }
+            // 全部缺失：退回系统首个可用 family（Linux 容器至少有 DejaVu / 至少有一个）
+            // FontFamily 是 struct，FirstOrDefault 永远非 null；用 Any() 判空。
+            var families = SystemFonts.Families;
+            if (families.Any())
+                return families.First().CreateFont(fontSize, FontStyle.Bold);
+
+            // 极端情况：系统无任何字体。返回 null 字体会让 DrawText 抛 —— 此时验证码降级为
+            // 纯噪点图（无字符），仍可作为滑块/二次校验触发器，不致 endpoint 500。
+            throw new InvalidOperationException(
+                "系统无可用字体，无法生成图形验证码字符。请在容器中安装 fonts-dejavu 或类似字体包。");
+        });
+    }
+
     private static void DrawNoise(IImageProcessingContext ctx, int w, int h, Random rng)
     {
         // 用 1x1 像素填充模拟噪点（避免依赖 Pen 具体实现版本）
@@ -125,10 +160,11 @@ public sealed class ImageCaptchaProvider : ICaptchaProvider
 
     private static void DrawCharacters(IImageProcessingContext ctx, string code, int w, int h, Random rng)
     {
-        // 用系统默认字体；ImageSharp Drawing 已引入（Files 模块依赖）。
-        // 字体大小按高度自适应；找不到 Arial 时降级到 SystemFonts 默认。
+        // 字体解析：优先 Arial，缺失时（Linux CI / 容器无 Arial）降级到首个可用系统字体。
+        // #104 同款缓存思路：SystemFonts.CreateFont 扫字体目录开销大，缓存 Font 实例。
+        // 不缓存到 static —— 不同图片尺寸会产生不同 fontSize，按 (size) 维度缓存即可。
         var fontSize = (int)(h * 0.7);
-        var font = SystemFonts.CreateFont("Arial", fontSize, FontStyle.Bold);
+        var font = ResolveFont(fontSize);
         var charWidth = w / code.Length;
 
         for (var i = 0; i < code.Length; i++)
