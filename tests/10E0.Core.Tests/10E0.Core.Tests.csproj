@@ -35,6 +35,10 @@
          CI 需 Docker 服务；本地无 Docker 时测试静默跳过（Acceptance 类别 + [Trait] 过滤）。 -->
     <PackageReference Include="Testcontainers.MsSql" Version="4.1.0" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="10.0.0" />
+    <!-- MQ 集成测试（#165）：Testcontainers 起真实 RabbitMQ / Kafka broker。
+         与 SqlServer Acceptance 一样，本地无 Docker 时静默跳过。 -->
+    <PackageReference Include="Testcontainers.RabbitMq" Version="4.1.0" />
+    <PackageReference Include="Testcontainers.Kafka" Version="4.1.0" />
     <!-- Mocking + Assertions -->
     <PackageReference Include="Moq" Version="4.20.72" />
     <PackageReference Include="FluentAssertions" Version="8.0.1" />
@@ -45,6 +49,9 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\10E0.Core\10E0.Core.csproj" />
+    <!-- MQ Publisher 测试（#165）：直接引用 MQ 包（测试 RabbitMqPublisher / KafkaPublisher + Acceptance）。 -->
+    <ProjectReference Include="..\..\src\10E0.Core.RabbitMq\10E0.Core.RabbitMq.csproj" />
+    <ProjectReference Include="..\..\src\10E0.Core.Kafka\10E0.Core.Kafka.csproj" />
   </ItemGroup>
 
   <ItemGroup>
