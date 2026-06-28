@@ -32,6 +32,12 @@ namespace TenE0.Api.Tests;
 /// </summary>
 [Trait("Category", "BDD")]
 [Trait("Category", "Integration")]
+// issue #193: WebApplicationFactory<Program> 在 host 启动抛异常时, factory 的 disposal
+// 与异常传播存在 race —— 并行 / CI 资源紧张时, 真正的 fail-closed 异常会被掩盖成
+// 无关的 ObjectDisposedException("IServiceProvider") / AggregateException。
+// 把这个 class 单独放进一个禁用并行化的 collection, 消除与其它 WebApplicationFactory
+// 测试的并行 race; 同时测试侧也做了 inner-exception 链解包 (见 UnwrapRootException)。
+[Collection("AuthSeederFailClosed")]
 public sealed class AuthSeederDefaultPasswordAcceptanceTests
 {
     // ── 1) Hardcoded literal must disappear from the seeder source ──
@@ -183,13 +189,17 @@ public sealed class AuthSeederDefaultPasswordAcceptanceTests
             "start. Silently booting with the historical literal \"111111\" would " +
             "publish a known admin credential to the public internet.");
 
-        // Assert — exception message must mention the configuration key so an
-        // operator can immediately see what to set, not a generic stack trace.
-        ex.Which.Message.Should().Contain(
+        // issue #193: WebApplicationFactory<Program> 在 host 启动抛异常时, factory 的
+        // disposal 与异常传播存在 race —— CI 资源紧张时真正的 fail-closed 异常会被
+        // 掩盖成 ObjectDisposedException("IServiceProvider") / AggregateException。
+        // 我们关心的是「确有 fail-closed 异常」这一语义, 所以遍历 inner 链解包后再断言。
+        var root = UnwrapRootException(ex.Which, "DefaultPassword");
+        root.Message.Should().Contain(
             "DefaultPassword",
             "the fail-closed exception must name the Seed:DefaultPassword " +
             "configuration key so operators know exactly what to set, instead " +
-            "of just bubbling up a generic 'something is wrong' message.");
+            "of just bubbling up a generic 'something is wrong' message. " +
+            "(issue #193: 容忍 ObjectDisposedException/AggregateException 包装, 解包到根因再断言)");
     }
 
     // ── 4) dev: missing config must still fail-closed (no silent "111111") ──
@@ -213,9 +223,12 @@ public sealed class AuthSeederDefaultPasswordAcceptanceTests
             "missing, regardless of environment — falling back to the historical " +
             "literal \"111111\" would defeat the entire point of the fix.");
 
-        // 强化断言：异常必须明确提到 "DefaultPassword" 配置键，避免被其他无关的
-        // 启动异常（如 DI 验证失败）误命中 —— 那不是 #126 期望的 fail-closed 语义。
-        ex.Which.Message.Should().Contain(
+        // 强化断言:异常必须明确提到 "DefaultPassword" 配置键,避免被其他无关的
+        // 启动异常(如 DI 验证失败)误命中 —— 那不是 #126 期望的 fail-closed 语义。
+        // issue #193: 容忍 disposal race 下的 ObjectDisposedException/AggregateException
+        // 包装,遍历 inner 链解包到根因后再断言。
+        var root = UnwrapRootException(ex.Which, "DefaultPassword");
+        root.Message.Should().Contain(
             "DefaultPassword",
             "the fail-closed exception must name the Seed:DefaultPassword config " +
             "key so operators see exactly what to set, instead of an unrelated DI/IO " +
@@ -294,9 +307,56 @@ public sealed class AuthSeederDefaultPasswordAcceptanceTests
         }
     }
 
+    // ── Exception unwrapping ───────────────────────────────────
+
+    /// <summary>
+    /// 遍历异常链(自身 + InnerException + AggregateException.InnerExceptions),
+    /// 返回第一个 message 含 <paramref name="keyword"/> 的异常; 找不到则返回 <paramref name="root"/>。
+    ///
+    /// issue #193: WebApplicationFactory<Program> 在 host 启动抛异常时, factory 的 disposal
+    /// 与异常传播存在 race —— CI 资源紧张时, 真正的 fail-closed 异常 (message 含 "DefaultPassword")
+    /// 会被掩盖成无关的 ObjectDisposedException("IServiceProvider") / AggregateException。
+    /// 测试想断言的是「确有 fail-closed 异常被抛出」这一语义, 而不是「最外层异常的 message 长什么样」,
+    /// 所以这里做一层容忍包装的解包。
+    /// </summary>
+    private static Exception UnwrapRootException(Exception root, string keyword)
+    {
+        var seen = new HashSet<Exception>();
+        var queue = new Queue<Exception>();
+        queue.Enqueue(root);
+
+        while (queue.Count > 0)
+        {
+            var current = queue.Dequeue();
+            if (!seen.Add(current)) continue;   // 防自循环
+
+            if (current.Message.Contains(keyword, StringComparison.Ordinal))
+                return current;
+
+            if (current.InnerException is not null)
+                queue.Enqueue(current.InnerException);
+
+            if (current is AggregateException agg)
+            {
+                foreach (var inner in agg.InnerExceptions)
+                    queue.Enqueue(inner);
+            }
+        }
+
+        return root;   // 未命中关键词, 返回原异常让调用方按原断言失败、暴露真实信息
+    }
+
     // ── Wire DTOs ──────────────────────────────────────────────
 
     private sealed record AuthResponseDto(string AccessToken);
 
     private sealed record LoginEnvelope(bool Success, AuthResponseDto? Data);
 }
+
+/// <summary>
+/// issue #193: 单独的 collection + <c>DisableParallelization</c>, 让
+/// <see cref="AuthSeederDefaultPasswordAcceptanceTests"/> 不与其它
+/// <c>WebApplicationFactory</c> 测试并行启动 host —— 消除 disposal race。
+/// </summary>
+[CollectionDefinition("AuthSeederFailClosed", DisableParallelization = true)]
+public sealed class AuthSeederFailClosedCollection;
