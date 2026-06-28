@@ -10,6 +10,8 @@ using TenE0.Core.Organizations;
 using TenE0.Core.Permissions.Storage;
 using TenE0.Core.Files;
 using TenE0.Core.Files.Storage;
+using TenE0.Core.Scheduling;
+using TenE0.Core.Scheduling.Entities;
 using TenE0.Core.Sequences.Storage;
 using TenE0.Core.Workflow.Definitions;
 using TenE0.Core.Workflow.Runtime;
@@ -72,6 +74,8 @@ public abstract class TenE0SystemDbContext<TUser, TRole>(
     public DbSet<TenE0DictType> DictTypes => Set<TenE0DictType>();
     public DbSet<TenE0DictItem> DictItems => Set<TenE0DictItem>();
     public DbSet<TenE0SystemParameter> SystemParameters => Set<TenE0SystemParameter>();
+    public DbSet<TenE0ScheduledJob> ScheduledJobs => Set<TenE0ScheduledJob>();
+    public DbSet<TenE0JobExecution> JobExecutions => Set<TenE0JobExecution>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -89,6 +93,7 @@ public abstract class TenE0SystemDbContext<TUser, TRole>(
         modelBuilder.ConfigureTenE0WorkflowRuntimeTables();
         modelBuilder.ConfigureTenE0AuditTables();
         modelBuilder.ConfigureTenE0ConfigurationTables();
+        modelBuilder.ConfigureTenE0SchedulingTables();
     }
 }
 

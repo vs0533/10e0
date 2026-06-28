@@ -22,12 +22,16 @@ namespace TenE0.Core.Observability;
 /// <item><c>tene0.command.duration</c>（Histogram，ms，tag: <c>command</c>）—— CQRS 命令耗时</item>
 /// <item><c>tene0.outbox.delivered</c>（Counter，tag: <c>result=success|failure</c>）—— Outbox 投递结果</item>
 /// <item><c>tene0.outbox.backlog</c>（ObservableGauge，count）—— Outbox 待投递积压</item>
+/// <item><c>tene0.job.executed</c>（Counter，tags: <c>job_code</c>, <c>result=success|failure</c>）—— 定时任务执行结果（#164）</item>
+/// <item><c>tene0.job.active</c>（ObservableGauge，count）—— 启用的定时任务数（#164）</item>
 /// </list>
 /// </para>
 ///
 /// <para>
 /// 埋点位置：<see cref="TenE0.Core.Cqrs.CommandDispatcher.SendAsync{TResult}"/>（命令计数/耗时）；
-/// <see cref="TenE0.Core.Events.Outbox.OutboxRelayService{TContext}.ProcessBatchAsync"/>（投递计数 + 每轮刷新积压）。
+/// <see cref="TenE0.Core.Events.Outbox.OutboxRelayService{TContext}.ProcessBatchAsync"/>（投递计数 + 每轮刷新积压）；
+/// <see cref="TenE0.Core.Scheduling.JobExecutor{TContext}.ExecuteAsync"/>（任务执行计数）；
+/// <see cref="TenE0.Core.Scheduling.SchedulerWorker{TContext}.ProcessBatchAsync"/>（每轮刷新活跃任务数）。
 /// </para>
 /// </summary>
 public sealed class TenE0Metrics : IDisposable
@@ -44,9 +48,12 @@ public sealed class TenE0Metrics : IDisposable
         public const string Result = "result";
         public const string Success = "success";
         public const string Failure = "failure";
+        /// <summary>定时任务的业务编码 tag key（#164）。</summary>
+        public const string JobCode = "job_code";
     }
 
     private long _outboxBacklog;
+    private long _jobActive;
 
     /// <summary>构造。创建 Meter 与全部仪器。</summary>
     public TenE0Metrics()
@@ -74,6 +81,17 @@ public sealed class TenE0Metrics : IDisposable
             observeValue: () => new Measurement<long>(Interlocked.Read(ref _outboxBacklog)),
             unit: "count",
             description: "Outbox 待投递积压数");
+
+        JobExecuted = Meter.CreateCounter<long>(
+            "tene0.job.executed",
+            unit: "count",
+            description: "定时任务执行结果（tags: job_code / result=success|failure）");
+
+        JobActive = Meter.CreateObservableGauge(
+            "tene0.job.active",
+            observeValue: () => new Measurement<long>(Interlocked.Read(ref _jobActive)),
+            unit: "count",
+            description: "启用的定时任务数");
     }
 
     /// <summary>底层 Meter（应用层 OTel 用 <c>AddSource</c> / <c>AddMeter</c> 订阅）。</summary>
@@ -91,10 +109,21 @@ public sealed class TenE0Metrics : IDisposable
     /// <summary>Outbox 积压可观测仪表。</summary>
     public ObservableGauge<long> OutboxBacklog { get; }
 
+    /// <summary>定时任务执行结果计数器（#164）。tags <c>job_code</c> + <c>result</c>。</summary>
+    public Counter<long> JobExecuted { get; }
+
+    /// <summary>启用的定时任务数可观测仪表（#164）。</summary>
+    public ObservableGauge<long> JobActive { get; }
+
     /// <summary>
     /// 更新当前 Outbox 积压值。由 <c>OutboxRelayService</c> 每轮投递后写入。
     /// </summary>
     public void SetBacklog(long count) => Interlocked.Exchange(ref _outboxBacklog, count);
+
+    /// <summary>
+    /// 更新当前启用的定时任务数。由 <c>SchedulerWorker</c> 每轮扫描后写入（#164）。
+    /// </summary>
+    public void SetJobActive(long count) => Interlocked.Exchange(ref _jobActive, count);
 
     /// <summary>释放底层 Meter。</summary>
     public void Dispose() => Meter.Dispose();

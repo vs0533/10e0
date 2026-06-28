@@ -6,6 +6,7 @@ using TenE0.Core.Files.Storage;
 using TenE0.Core.ImportExport;
 using TenE0.Core.Observability;
 using TenE0.Core.Realtime;
+using TenE0.Core.Scheduling;
 using TenE0.Core.Security.Captcha;
 using TenE0.Core.Security.LoginProtection;
 using TenE0.Core.Security.RateLimiting;
@@ -154,6 +155,18 @@ public sealed class TenE0Options
 
     /// <summary>可观测性配置。</summary>
     public Action<ObservabilityOptions>? ObservabilityOptions { get; set; }
+
+    // ---------- 定时任务调度（默认 false；issue #164）----------
+
+    /// <summary>
+    /// 启用定时任务调度（Cron + 持久化 + 集群协调，默认 false）。对应 issue #164。
+    /// 启用后注册 <c>SchedulerWorker</c>（后台扫描到期任务执行）+ <c>IScheduler</c>（管理面 CRUD）+
+    /// 静态任务扫描注册（<c>[Scheduled]</c> attribute）。Admin 端点由调用方在 Program.cs 挂载。
+    /// </summary>
+    public bool Scheduling { get; set; }
+
+    /// <summary>定时任务调度配置。</summary>
+    public Action<SchedulingOptions>? SchedulingOptions { get; set; }
 }
 
 /// <summary>
