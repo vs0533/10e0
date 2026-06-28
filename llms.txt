@@ -23,6 +23,7 @@ production-grade service is a few lines of `Program.cs`.
 - [CQRS](https://github.com/vs0533/10e0/blob/dev/docs/04-cqrs.md): `ICommand<T>` / `IQuery<T>` / handlers / pipeline behaviors.
 - [Entities](https://github.com/vs0533/10e0/blob/dev/docs/05-entities.md): `BaseEntity → AuditedEntity → AggregateRoot` hierarchy.
 - [EntityService](https://github.com/vs0533/10e0/blob/dev/docs/06-entity-service.md): Generic CRUD with uniqueness, field-permissions, M:N.
+- [EntityQueryService](https://github.com/vs0533/10e0/blob/dev/docs/28-entity-query-service.md): read-side mirror of EntityService — paged/list/get/count with auto-applied Named Query Filters and injection-safe filters.
 - [Auth/JWT](https://github.com/vs0533/10e0/blob/dev/docs/08-auth-jwt.md): login / refresh / logout, role-version revocation.
 - [Permissions](https://github.com/vs0533/10e0/blob/dev/docs/09-permissions.md): RBAC + field-level + row-level.
 - [Domain events / Outbox](https://github.com/vs0533/10e0/blob/dev/docs/10-domain-events.md): transactional outbox + 4 lock providers.
@@ -37,14 +38,18 @@ production-grade service is a few lines of `Program.cs`.
 
 The demo project is a complete end-to-end feature slice:
 `src/10E0.Api/Domain/DemoEntity.cs` + `Handlers/DemoCommands.cs` +
-`Handlers/CreateDemoCommandHandler.cs` + `Endpoints/DemoEndpoints.cs`.
+`Handlers/CreateDemoCommandHandler.cs` + `Handlers/PagedDemosQueryHandler.cs` +
+`Endpoints/DemoEndpoints.cs`. The write handler uses `IEntityService`, the
+read (paging/filter/projection) handler uses `IEntityQueryService`.
 
 ## Important
 
 - Primary keys are always `string` (GUID "N" literal). Never `int` or `Guid`.
 - Handlers do **not** extend a base class — pure interface + constructor injection.
 - Write operations go through `IEntityService`, not raw `dbContext.Add` + `SaveChanges`
-  (the latter bypasses audit/permission/uniqueness).
+  (the latter bypasses audit/permission/uniqueness). Read operations (list/paged/
+  detail/count) go through `IEntityQueryService`, which auto-applies soft-delete /
+  row-level / tenant Named Query Filters.
 - Permission is declared via `[RequirePermission]` on the Command/Query record,
   not hand-checked inside handlers/endpoints.
 - JWT `SigningKey` is mandatory and must come from config/env, never hardcoded.
