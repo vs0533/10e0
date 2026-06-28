@@ -349,6 +349,13 @@ public static class ServiceCollectionExtensions
         if (opt.LoginProtection) services.AddTenE0LoginProtection(opt.LoginProtectionOptions);
         if (opt.Captcha) services.AddTenE0Captcha(opt.CaptchaOptions);
 
+        // 可观测性（#161）：放在 Files 之后，确保 IFileStorage 已注册可被 AddTenE0Observability 检测，
+        // 从而条件挂载 FileStorageHealthCheck。默认 false。
+        if (opt.Observability) services.AddTenE0Observability<TContext>(opt.ObservabilityOptions);
+
+        // 定时任务调度（#164）：默认 false。opt-in。
+        if (opt.Scheduling) services.AddTenE0Scheduling<TContext>(handlerAssemblies, opt.SchedulingOptions);
+
         return services;
     }
 }

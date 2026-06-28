@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>true</IsPackable>
+    <PackageId>TenE0.Core.RabbitMq</PackageId>
+    <RootNamespace>TenE0.Core.Messaging.RabbitMq</RootNamespace>
+    <AssemblyName>10E0.Core.RabbitMq</AssemblyName>
+    <!-- Version placeholder: overridden by CI via /p:Version=x.y.z -->
+    <Version>0.0.0</Version>
+  </PropertyGroup>
+
+  <!-- NuGet 包级元数据 override（Directory.Build.props 里的是 Core 专用描述） -->
+  <PropertyGroup Condition="'$(IsPackable)' == 'true'">
+    <Description>10E0 (TenE0) — RabbitMQ Outbox Publisher. 将领域事件 Outbox 投递切换为 RabbitMQ（独立 NuGet 包，避免重依赖污染主包）。复用 TenE0.Core 的 IOutboxPublisher 抽象，业务代码零改动。</Description>
+    <PackageTags>lowcode;framework;ddd;cqrs;efcore;dotnet;messaging;rabbitmq;outbox</PackageTags>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\10E0.Core\10E0.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- RabbitMQ 官方 .NET 客户端 v7（async-only API：IChannel / CreateChannelAsync / BasicPublishAsync）。
+         Apache 2.0。~1MB，故作为独立 NuGet 包按需引入，不进 TenE0.Core 主包。 -->
+    <PackageReference Include="RabbitMQ.Client" Version="7.2.1" />
+  </ItemGroup>
+
+</Project>

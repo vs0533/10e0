@@ -41,11 +41,22 @@
     <PackageReference Include="SixLabors.ImageSharp.Drawing" Version="2.1.6" />
     <!-- Excel 导入导出（MIT 许可，区别于 EPPlus 社区版的非商业条款；netstandard2.0 兼容 net10.0） -->
     <PackageReference Include="ClosedXML" Version="0.105.0" />
+    <!-- Cron 表达式解析（#164 Scheduling 模块）：轻量（~30KB）、MIT，仅做 Cron 解析 + 下次执行计算；
+         不像 Quartz.NET 自带调度器/持久化/集群，避免与框架已有 Outbox Lock / EF Core 体系重复。 -->
+    <PackageReference Include="Cronos" Version="0.9.0" />
   </ItemGroup>
 
-  <!-- Include README in NuGet package -->
+  <!--
+    包内文档（issue #160 follow-up）：
+    - README.md / AGENTS.md：放包根，nuget.org 详情页 + IDE 包属性面板直接可见。
+      AGENTS.md 是给 AI 助手 / 开发者的"开局指南"，确保只装包也能 5 分钟上手。
+    - docs/*.md：随包发布，VS 包属性面板可查；离线场景下 AI/开发者也能读到完整文档。
+    - AGENTS.md 里反向引用了 docs/ 路径，故 PackagePath 保持一致（docs/）。
+  -->
   <ItemGroup Condition="'$(IsPackable)' == 'true'">
     <None Include="..\..\README.md" Pack="true" PackagePath="README.md" />
+    <None Include="..\..\AGENTS.md" Pack="true" PackagePath="AGENTS.md" />
+    <None Include="..\..\docs\**\*.md" Pack="true" PackagePath="docs\" />
   </ItemGroup>
 
 </Project>

@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>true</IsPackable>
+    <PackageId>TenE0.Core.Kafka</PackageId>
+    <RootNamespace>TenE0.Core.Messaging.Kafka</RootNamespace>
+    <AssemblyName>10E0.Core.Kafka</AssemblyName>
+    <!-- Version placeholder: overridden by CI via /p:Version=x.y.z -->
+    <Version>0.0.0</Version>
+  </PropertyGroup>
+
+  <!-- NuGet 包级元数据 override（Directory.Build.props 里的是 Core 专用描述） -->
+  <PropertyGroup Condition="'$(IsPackable)' == 'true'">
+    <Description>10E0 (TenE0) — Kafka Outbox Publisher. 将领域事件 Outbox 投递切换为 Kafka（独立 NuGet 包，避免重依赖污染主包）。复用 TenE0.Core 的 IOutboxPublisher 抽象，业务代码零改动。</Description>
+    <PackageTags>lowcode;framework;ddd;cqrs;efcore;dotnet;messaging;kafka;outbox</PackageTags>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\10E0.Core\10E0.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Confluent.Kafka 2.x（基于 librdkafka，.NET 生态事实标准，性能最好）。
+         Apache 2.0。含 librdkafka native ~10MB，故作为独立 NuGet 包按需引入，不进 TenE0.Core 主包。 -->
+    <PackageReference Include="Confluent.Kafka" Version="2.14.2" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,50 @@
+# 10E0 (TenE0)
+
+> Next-generation enterprise application framework on .NET 10 / C# 14.
+> Clean Architecture + DDD + CQRS. Self-built dispatcher (no MediatR license risk),
+> Outbox pattern, declarative permissions, multi-tenancy, dynamic queries.
+> NuGet: `TenE0.Core` · GitHub: https://github.com/vs0533/10e0 · MIT
+
+10E0 is a declarative backend framework: you express permissions, sequences,
+import/export columns, scheduled jobs, and state machines as **C# attributes and
+fluent APIs** — there is no external YAML DSL. The framework wires up CQRS pipeline
+behaviors, EF Core interceptors (audit + soft-delete), and an Outbox relay so a
+production-grade service is a few lines of `Program.cs`.
+
+## Start here (read in order)
+
+- [AGENTS.md](https://github.com/vs0533/10e0/blob/dev/AGENTS.md): The consumer onboarding guide. Read this first — it has the "add a feature in 6 steps" template, the full attribute cheatsheet, and hard constraints. (~10 min read)
+- [Quickstart](https://github.com/vs0533/10e0/blob/dev/docs/02-quickstart.md): 5-minute path from `dotnet new` to a running API.
+- [Architecture overview](https://github.com/vs0533/10e0/blob/dev/docs/01-architecture.md): Layers, pipeline behavior chain, module map.
+
+## Optional (read when relevant)
+
+- [DI setup reference](https://github.com/vs0533/10e0/blob/dev/docs/03-di-setup.md): Every `AddTenE0Xxx` extension, or the one-line `AddTenE0All` aggregate.
+- [CQRS](https://github.com/vs0533/10e0/blob/dev/docs/04-cqrs.md): `ICommand<T>` / `IQuery<T>` / handlers / pipeline behaviors.
+- [Entities](https://github.com/vs0533/10e0/blob/dev/docs/05-entities.md): `BaseEntity → AuditedEntity → AggregateRoot` hierarchy.
+- [EntityService](https://github.com/vs0533/10e0/blob/dev/docs/06-entity-service.md): Generic CRUD with uniqueness, field-permissions, M:N.
+- [Auth/JWT](https://github.com/vs0533/10e0/blob/dev/docs/08-auth-jwt.md): login / refresh / logout, role-version revocation.
+- [Permissions](https://github.com/vs0533/10e0/blob/dev/docs/09-permissions.md): RBAC + field-level + row-level.
+- [Domain events / Outbox](https://github.com/vs0533/10e0/blob/dev/docs/10-domain-events.md): transactional outbox + 4 lock providers.
+- [Multi-tenancy](https://github.com/vs0533/10e0/blob/dev/docs/20-multi-tenancy.md): `IMultiTenantEntity` + Named Query Filter.
+- [Workflow](https://github.com/vs0533/10e0/blob/dev/docs/21-workflow.md): state machine + approval process fluent API.
+- [Import/Export](https://github.com/vs0533/10e0/blob/dev/docs/22-import-export.md): ClosedXML Excel + RFC 4180 CSV.
+- [Scheduling](https://github.com/vs0533/10e0/blob/dev/docs/15-sequences.md): `[Scheduled]` cron jobs + cluster lock.
+- [Dynamic queries](https://github.com/vs0533/10e0/blob/dev/docs/16-dynamic-queries.md): runtime WHERE/ORDER/paging, injection-safe.
+- [Observability](https://github.com/vs0533/10e0/blob/dev/docs/26-observability.md): HealthChecks + Metrics + OpenTelemetry.
+
+## Golden reference (clone this for a new feature)
+
+The demo project is a complete end-to-end feature slice:
+`src/10E0.Api/Domain/DemoEntity.cs` + `Handlers/DemoCommands.cs` +
+`Handlers/CreateDemoCommandHandler.cs` + `Endpoints/DemoEndpoints.cs`.
+
+## Important
+
+- Primary keys are always `string` (GUID "N" literal). Never `int` or `Guid`.
+- Handlers do **not** extend a base class — pure interface + constructor injection.
+- Write operations go through `IEntityService`, not raw `dbContext.Add` + `SaveChanges`
+  (the latter bypasses audit/permission/uniqueness).
+- Permission is declared via `[RequirePermission]` on the Command/Query record,
+  not hand-checked inside handlers/endpoints.
+- JWT `SigningKey` is mandatory and must come from config/env, never hardcoded.

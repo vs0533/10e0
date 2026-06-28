@@ -9,6 +9,7 @@ using TenE0.Core.Menus;
 using TenE0.Core.Organizations;
 using TenE0.Core.Permissions;
 using TenE0.Core.Permissions.Management;
+using TenE0.Core.Scheduling;
 using TenE0.Core.Workflow.Definitions;
 
 namespace TenE0.Api.Endpoints;
@@ -484,6 +485,111 @@ internal static class AdminEndpoints
             return Results.Ok(items);
         }).RequireAuthorization();
 
+        // ----------------- 定时任务调度管理（#164） -----------------
+        // 全部 [RequireAdmin] + WithMetadata 双保险授权（与 /admin/outbox、/admin/audit-logs 同款）。
+        // 参数注入 IScheduler（Scoped），由 Minimal API 每请求建 scope 解析。
+
+        app.MapGet("/admin/scheduler/jobs", [RequireAdmin] async (
+            IScheduler scheduler, CancellationToken ct) =>
+        {
+            var jobs = await scheduler.ListJobsAsync(ct);
+            return Results.Ok(jobs.Select(j => new
+            {
+                j.Id,
+                j.Code,
+                j.Name,
+                j.CronExpression,
+                j.JobType,
+                j.IsEnabled,
+                j.Mode,
+                j.MaxRetries,
+                RetryIntervalMs = j.RetryInterval.TotalMilliseconds,
+                j.LastRunAt,
+                j.LastRunStatus,
+                j.NextRunAt,
+            }));
+        }).WithMetadata(new RequireAdminAttribute());
+
+        app.MapPost("/admin/scheduler/jobs", [RequireAdmin] async (
+            CreateScheduledJobDto dto, IScheduler scheduler, CancellationToken ct) =>
+        {
+            try
+            {
+                var job = await scheduler.CreateJobAsync(
+                    dto.Code, dto.Name, dto.CronExpression, dto.JobType,
+                    dto.ParametersJson, dto.MaxRetries, TimeSpan.FromMilliseconds(dto.RetryIntervalMs), ct);
+                return Results.Ok(new
+                {
+                    job.Id,
+                    job.Code,
+                    job.Name,
+                    job.NextRunAt,
+                });
+            }
+            catch (InvalidOperationException ex)
+            {
+                return Results.BadRequest(new { error = ex.Message });
+            }
+        }).WithMetadata(new RequireAdminAttribute());
+
+        app.MapPut("/admin/scheduler/jobs/{id}", [RequireAdmin] async (
+            string id, UpdateScheduledJobDto dto, IScheduler scheduler, CancellationToken ct) =>
+        {
+            try
+            {
+                var job = await scheduler.UpdateJobAsync(
+                    id, dto.Name, dto.CronExpression, dto.IsEnabled,
+                    dto.ParametersJson, dto.MaxRetries,
+                    dto.RetryIntervalMs.HasValue ? TimeSpan.FromMilliseconds(dto.RetryIntervalMs.Value) : null,
+                    ct);
+                return Results.Ok(new { ok = true });
+            }
+            catch (InvalidOperationException ex)
+            {
+                return Results.BadRequest(new { error = ex.Message });
+            }
+        }).WithMetadata(new RequireAdminAttribute());
+
+        app.MapPost("/admin/scheduler/jobs/{id}/trigger", [RequireAdmin] async (
+            string id, IScheduler scheduler, CancellationToken ct) =>
+        {
+            var ok = await scheduler.TriggerJobAsync(id, ct);
+            return ok
+                ? Results.Ok(new { ok = true })
+                : Results.Conflict(new { error = "任务不存在或正在执行，无法手动触发" });
+        }).WithMetadata(new RequireAdminAttribute());
+
+        app.MapPost("/admin/scheduler/jobs/{id}/enable", [RequireAdmin] async (
+            string id, IScheduler scheduler, CancellationToken ct) =>
+        {
+            var ok = await scheduler.EnableJobAsync(id, ct);
+            return ok ? Results.Ok(new { ok = true }) : Results.NotFound();
+        }).WithMetadata(new RequireAdminAttribute());
+
+        app.MapPost("/admin/scheduler/jobs/{id}/disable", [RequireAdmin] async (
+            string id, IScheduler scheduler, CancellationToken ct) =>
+        {
+            var ok = await scheduler.DisableJobAsync(id, ct);
+            return ok ? Results.Ok(new { ok = true }) : Results.NotFound();
+        }).WithMetadata(new RequireAdminAttribute());
+
+        app.MapGet("/admin/scheduler/jobs/{id}/executions", [RequireAdmin] async (
+            string id, IScheduler scheduler, int limit, CancellationToken ct) =>
+        {
+            var execs = await scheduler.GetExecutionsAsync(id, limit == 0 ? 50 : limit, ct);
+            return Results.Ok(execs.Select(e => new
+            {
+                e.Id,
+                e.JobId,
+                e.StartedAt,
+                e.FinishedAt,
+                e.Status,
+                e.Attempt,
+                e.ErrorMessage,
+                e.InstanceId,
+            }));
+        }).WithMetadata(new RequireAdminAttribute());
+
         return app;
     }
 }
@@ -499,4 +605,28 @@ internal sealed class PublishDefinitionDto
     public required string NodesJson { get; set; }
     public string? EdgesJson { get; set; }
     public string? TenantId { get; set; }
+}
+
+// 定时任务调度 DTO（#164）
+internal sealed class CreateScheduledJobDto
+{
+    public required string Code { get; set; }
+    public required string Name { get; set; }
+    public required string CronExpression { get; set; }
+    public required string JobType { get; set; }
+    public string? ParametersJson { get; set; }
+    public int MaxRetries { get; set; } = 3;
+
+    // long 而非 double：毫秒是整数单位，long 语义更清晰且避免浮点精度问题。
+    public long RetryIntervalMs { get; set; } = 60_000;
+}
+
+internal sealed class UpdateScheduledJobDto
+{
+    public string? Name { get; set; }
+    public string? CronExpression { get; set; }
+    public bool? IsEnabled { get; set; }
+    public string? ParametersJson { get; set; }
+    public int? MaxRetries { get; set; }
+    public long? RetryIntervalMs { get; set; }
 }

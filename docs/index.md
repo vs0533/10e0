@@ -46,6 +46,8 @@
 | [23-realtime](23-realtime.md) | 声明式实时推送（SignalR + INotifyClient + org claim 链路） |
 | [24-api-versioning](24-api-versioning.md) | API 版本化（Asp.Versioning + 版本透明 + 每版本 OpenAPI 文档） |
 | [25-security](25-security.md) | 安全防刷三件套（限流 + 登录失败锁定 + 验证码） |
+| [26-observability](26-observability.md) | 可观测性（HealthChecks + Metrics + OpenTelemetry，Core 零新依赖） |
+| [27-messaging](27-messaging.md) | 消息队列集成（RabbitMQ / Kafka Publisher，独立 NuGet 包，复用 IOutboxPublisher 抽象） |
 
 ---
 

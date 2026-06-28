@@ -172,6 +172,9 @@ services.Replace(ServiceDescriptor.Scoped<IOutboxPublisher, KafkaOutboxPublisher
 
 切换后 Relay 仍正常工作，业务 handler 代码零改动。
 
+> **框架官方 MQ Publisher**：10E0 提供了 RabbitMQ 和 Kafka 的开箱即用 Publisher 实现（独立 NuGet 包，按需引入）。
+> 接入方式见 [27. 消息队列集成（RabbitMQ / Kafka Publisher）](27-messaging.md)。
+
 ## 10.9 重要注意事项
 
 | 要点 | 说明 |
