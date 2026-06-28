@@ -21,6 +21,19 @@
 
 ### Added
 
+- **实体读侧查询服务 `IEntityQueryService`** (#184):`IEntityService`(写)的读侧对称 —— 为 CQRS 读路径提供官方推荐入口,收敛列表 / 分页 / 筛选 / 投影的高频写法
+  - 核心方法:`GetByIdAsync` / `ListAsync` / `PagedAsync` / `CountAsync` / `ExistsAsync`(均有投影到 View DTO 的 `<TEntity, TView>` 重载)
+  - **自动复用 EF Named Query Filter**:无需手写 `Where(IsSoftDelete==false)`,软删除 / 行级权限(`IEntityFilterContributor`)/ 租户过滤器由 EF 自动附加
+  - **显式旁路开关 `EntityReadOptions.BypassFilters`**(三态,取代危险的 `IgnoreQueryFilters()` 全量旁路):默认全应用(最安全)/ 细粒度旁路具体名(如 `["Tenant"]` 跨租户审计但保留软删)/ `["*"]` 全量旁路并记日志告警
+  - **声明式筛选 / 排序**:`ReadFilter` / `ReadOrderBy` 结构化对象,字段名经运行时 EF 模型白名单校验,**防表达式注入**(对齐 `docs/16-dynamic-queries.md` 安全警告,把"业务方自己写白名单"收敛到服务层默认安全)
+  - **类型安全筛选**:`ReadFilter` 的 Where 走 Expression 树手动构建(参考 `UniqueValidators`),值按属性类型强制转换;`ReadOperator` 支持 `Eq/Ne/Gt/Gte/Lt/Lte/Contains/StartsWith/EndsWith/In`
+  - DI:随 `AddTenE0EntityService` 注册(基础套件,已在 `AddTenE0All`,**零 opt-in 开关**);`EntityQueryService` 内部无状态,`AsNoTracking` 默认 true
+  - 完全向后兼容:不改 `IEntityService` / `DynamicQueryExtensions` / 任何现有端点;新依赖零(复用现有 `System.Linq.Dynamic.Core` + EF Core 10)
+  - 测试:`EntityQueryServiceTests`(40 例,InMemory 单元,覆盖全 Operator / 分页边界 / 字段白名单 / BypassFilters 查询构建)+ `EntityQueryAcceptanceTests`(11 例,SQLite BDD,真验过滤效果:软删 / 租户隔离 / 行级权限 / BypassFilters 三态 / 超管短路)
+  - 范本:`src/10E0.Api/Handlers/PagedDemosQueryHandler.cs` + `GET /demo/paged` 端点(替代 `ListDemosQueryHandler` 的手写 LINQ)
+  - 新增文档 `docs/28-entity-query-service.md`;`AGENTS.md`「黄金 6 步」补读 Handler 推荐用法
+  - Closes #184(读侧缺口;与 #185 证书模块同属 R3 真实项目验证暴露的框架增强)
+
 - **AI 上下文工程** (#182)：让只装 NuGet 包的 AI / 开发者也能 5 分钟上手
   - 新增 `AGENTS.md`（根目录，~18 KB）：面向**消费者**的开局指南 —— 「加一个 feature 的标准 6 步」+ 完整声明式 attribute 速查 + DI 速查 + 黄金范本路径 + 10 条硬约束。区别于既有 `CLAUDE.md`（面向仓库维护者）
   - 新增 `llms.txt`（根目录）：[llmstxt.org](https://llmstxt.org) 规范的 AI 入口（类比 robots.txt），Cursor / Claude / Codex 等工具可 fetch 拿到精选文档索引

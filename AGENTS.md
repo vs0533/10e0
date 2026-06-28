@@ -253,6 +253,8 @@ public sealed class CreateProductHandler(
 - 部分更新:把客户端提交的字段集合传 `EntityWriteOptions.PostedProperties`
 - 领域事件:聚合内部业务方法用 `protected Raise(...)`;`BeforeSaveAsync` 钩子在聚合外部触发用 `RaiseInternal(...)`
 
+> 📖 **读侧 Query Handler**:列表 / 详情 / 分页 / 统计这类读场景,用 `IEntityQueryService`(与 `IEntityService` 对称的读侧服务),自动复用 Named Query Filter(软删/行级权限/租户)、声明式筛选(字段白名单防注入)、投影到 View。范本:`src/10E0.Api/Handlers/PagedDemosQueryHandler.cs`。详见 `docs/28-entity-query-service.md`。
+
 ### 步骤 5:挂端点(Minimal API)
 
 ```csharp
@@ -344,6 +346,7 @@ public class OrderStateMachine : StateMachineDefinitionBase<OrderState, OrderAct
 | 权限 key 定义 + Provider | `src/10E0.Api/Domain/DemoPermissions.cs` |
 | Command / Query / DTO | `src/10E0.Api/Handlers/DemoCommands.cs` |
 | Handler(走 EntityService) | `src/10E0.Api/Handlers/CreateDemoCommandHandler.cs` |
+| 读侧 Handler(走 EntityQueryService,分页/筛选/投影) | `src/10E0.Api/Handlers/PagedDemosQueryHandler.cs` |
 | Minimal API 端点 | `src/10E0.Api/Endpoints/DemoEndpoints.cs` |
 | 领域事件 + 订阅者 | `src/10E0.Api/Events/` |
 | 状态机定义 | `src/10E0.Api/Handlers/OrderStateMachineDefinition.cs` |

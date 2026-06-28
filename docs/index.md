@@ -48,6 +48,7 @@
 | [25-security](25-security.md) | 安全防刷三件套（限流 + 登录失败锁定 + 验证码） |
 | [26-observability](26-observability.md) | 可观测性（HealthChecks + Metrics + OpenTelemetry，Core 零新依赖） |
 | [27-messaging](27-messaging.md) | 消息队列集成（RabbitMQ / Kafka Publisher，独立 NuGet 包，复用 IOutboxPublisher 抽象） |
+| [28-entity-query-service](28-entity-query-service.md) | 实体读侧查询服务（`IEntityQueryService` —— `IEntityService` 的读侧对称，分页/筛选/投影，自动复用 Named Query Filter） |
 
 ---
 

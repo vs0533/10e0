@@ -1,6 +1,7 @@
 using TenE0.Api.Domain;
 using TenE0.Core.Abstractions;
 using TenE0.Core.Permissions;
+using TenE0.Core.Queries;
 
 namespace TenE0.Api.Handlers;
 
@@ -13,6 +14,11 @@ internal sealed record MoveOrgDto(string? NewParentId);
 // Queries / Commands
 [RequirePermission(DemoPermissions.View)]
 internal sealed record ListDemosQuery : IQuery<List<DemoView>>;
+
+// #184 范本:分页查询走 IEntityQueryService(读侧对称),取代手写 LINQ 分页。
+// PagedQuery(pageSize/page)直接复用框架的 PagedQuery;Name 是可选搜索参数。
+[RequirePermission(DemoPermissions.View)]
+internal sealed record PagedDemosQuery(PagedQuery Paged, string? Name) : IQuery<PagedResult<DemoView>>;
 
 [RequirePermission(DemoPermissions.Create)]
 internal sealed record CreateDemoCommand(string Name, string? OrgId, decimal? Salary) : ICommand<string>;
