@@ -13,6 +13,10 @@ internal static class DemoPermissions
     public const string Delete = "demo.delete";
     public const string ManageSalary = "demo.field.salary";  // 字段级权限
     public const string Admin = "perm.admin";                 // 后台管理权限
+
+    // #185 证书模块
+    public const string CertificateView = "certificate.view";
+    public const string CertificateRender = "certificate.render";
 }
 
 /// <summary>
@@ -28,5 +32,7 @@ internal sealed class DemoPermissionProvider : IPermissionProvider
         new(DemoPermissions.Delete,       "删除 Demo",          "demo"),
         new(DemoPermissions.ManageSalary, "维护 Demo 薪资字段", "demo"),
         new(DemoPermissions.Admin,        "权限后台",           "system"),
+        new(DemoPermissions.CertificateView,   "查看证书", "certificate"),
+        new(DemoPermissions.CertificateRender, "生成证书", "certificate"),
     ];
 }

@@ -9,6 +9,9 @@
 | `IEntityService.cs` | 接口：`CreateAsync<T>`, `UpdateAsync<T>`, `DeleteAsync<T>` |
 | `EntityService.cs` | 实现：完整的 CRUD 流水线 |
 | `EntityWriteOptions.cs` | 写操作选项：PostedProperties（局部更新）、PostedNavigations（M:N opt-in）、UniqueValidators、FieldPermissions、BeforeSaveAsync |
+| `IEntityQueryService.cs` | 读侧接口：`GetByIdAsync` / `ListAsync` / `PagedAsync` / `CountAsync` / `ExistsAsync`（含投影重载） |
+| `EntityQueryService.cs` | 读侧实现：Expression 树 Where + 字段白名单 + BypassFilters + 分页 |
+| `EntityReadOptions.cs` | 读操作选项：`EntityReadOptions` + `ReadFilter` + `ReadOperator` + `ReadOrderBy` |
 
 ## CRUD 流水线
 
