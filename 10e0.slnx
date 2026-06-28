@@ -2,6 +2,8 @@
   <Folder Name="/src/">
     <Project Path="src/10E0.Api/10E0.Api.csproj" />
     <Project Path="src/10E0.Core/10E0.Core.csproj" />
+    <Project Path="src/10E0.Core.RabbitMq/10E0.Core.RabbitMq.csproj" />
+    <Project Path="src/10E0.Core.Kafka/10E0.Core.Kafka.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/10E0.Api.Tests/10E0.Api.Tests.csproj" />

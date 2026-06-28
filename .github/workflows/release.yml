@@ -65,20 +65,39 @@ jobs:
           echo "Next version: $NEW_TAG (from $LATEST_TAG)"
 
       # ─── Pack NuGet ────────────────────────────────────────────────
+      # 遍历 src 下所有 IsPackable=true 的项目统一打包，注入同一版本号。
       # NU5104 豁免：Asp.Versioning.OpenApi 当前仅有 10.0.0-rc.1（无 stable），
       # NuGet 默认禁止 stable 包带 prerelease 依赖（NU5104），但此处是上游版本
       # 不可控的客观约束（#163 引入）。TreatWarningsAsErrors 会把 NU5104 升为 error
       # 阻断 pack，故此处显式 NoWarn。待上游发 stable 后可移除。
-      - name: Pack TenE0.Core NuGet package
+      - name: Pack all NuGet packages
+        shell: bash
         run: |
-          dotnet pack src/10E0.Core/10E0.Core.csproj \
-            --no-build \
-            -c Release \
-            -o ./nupkgs \
-            /p:Version=${{ steps.semver.outputs.version }} \
-            /p:ContinuousIntegrationBuild=true \
-            /p:NoWarn=NU5104 \
-            /p:PackageReleaseNotes="Release notes: https://github.com/${{ github.repository }}/releases/tag/${{ steps.semver.outputs.tag }}"
+          mkdir -p ./nupkgs
+          PACKED=0
+          while IFS= read -r proj; do
+            # 跳过非 packable 项目（用 MSBuild -getProperty 读 IsPackable）。
+            is_packable=$(dotnet msbuild "$proj" -getProperty:IsPackable 2>/dev/null | tr -d '[:space:]')
+            if [ "$is_packable" != "true" ]; then
+              echo "  skip (not packable): $proj"
+              continue
+            fi
+            echo "  packing: $proj"
+            dotnet pack "$proj" \
+              --no-build \
+              -c Release \
+              -o ./nupkgs \
+              /p:Version=${{ steps.semver.outputs.version }} \
+              /p:ContinuousIntegrationBuild=true \
+              /p:NoWarn=NU5104 \
+              /p:PackageReleaseNotes="Release notes: https://github.com/${{ github.repository }}/releases/tag/${{ steps.semver.outputs.tag }}"
+            PACKED=$((PACKED + 1))
+          done < <(find src -name "*.csproj" | sort)
+          echo "Packed $PACKED package(s)."
+          if [ "$PACKED" -eq 0 ]; then
+            echo "::error::No packable projects found"
+            exit 1
+          fi
 
       # ─── Changelog ─────────────────────────────────────────────────
       - name: Generate changelog
@@ -119,14 +138,21 @@ jobs:
           tag_name: ${{ steps.semver.outputs.tag }}
           name: "${{ steps.semver.outputs.tag }}"
           body: |
-            ## TenE0.Core ${{ steps.semver.outputs.version }}
+            ## Release ${{ steps.semver.outputs.version }}
 
             ${{ steps.changelog.outputs.body }}
 
-            ## Installation
+            ## Packages
+
+            All packages share version ${{ steps.semver.outputs.version }}:
 
             ```bash
+            # 核心框架（必装）
             dotnet add package TenE0.Core --version ${{ steps.semver.outputs.version }}
+
+            # 可选消息队列 Publisher（按需）
+            dotnet add package TenE0.Core.RabbitMq --version ${{ steps.semver.outputs.version }}
+            dotnet add package TenE0.Core.Kafka --version ${{ steps.semver.outputs.version }}
             ```
 
             **Full changelog**: [Compare ${{ steps.semver.outputs.latest_tag }}...${{ steps.semver.outputs.tag }}](https://github.com/${{ github.repository }}/compare/${{ steps.semver.outputs.latest_tag }}...${{ steps.semver.outputs.tag }})
