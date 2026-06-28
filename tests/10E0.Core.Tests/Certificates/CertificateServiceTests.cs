@@ -240,4 +240,52 @@ public sealed class CertificateServiceTests
         list.Should().HaveCount(2);
         list.Should().OnlyContain(c => c.RelatedEntityId == "proj-1");
     }
+
+    /// <summary>
+    /// CodeQL cs/log-forging 回归测试：调用方传入含 CR/LF 的证书编号，
+    /// 渲染成功路径日志（CertificateService line 130-132）经 SanitizeForLog 净化后不含控制字符。
+    /// 同时验证存储值仍是原值（净化只作用于日志，不影响业务数据）。
+    /// </summary>
+    [Fact]
+    public async Task RenderAsync_CertificateNoWithControlChars_LogSanitized_StoragePreserved()
+    {
+        var dbName = Guid.NewGuid().ToString("N");
+        var factory = CreateFactory(dbName);
+        await SeedTemplateAsync(factory, "tpl");
+        var (fileSvc, renderer) = CreateMocks();
+        var captured = new List<string>();
+        var captureLogger = new CaptureLogger(captured);
+
+        var svc = new CertificateService<TestDbContext>(factory, renderer.Object, fileSvc.Object,
+            null, OptionsNoSequence(), captureLogger);
+
+        // 手动传入含 CR/LF 的编号（模拟恶意/脏数据输入）。
+        var maliciousNo = "CERT\r\nFAKE-LOG-LINE\n\t";
+        var cert = await svc.RenderAsync("tpl", new Dictionary<string, object?>(),
+            new CertificateRenderOptions(CertificateNo: maliciousNo));
+
+        // 存储值是原值（净化只针对日志，不改变业务数据）。
+        cert.CertificateNo.Should().Be(maliciousNo);
+        (await factory.CreateDbContext().Certificates.SingleAsync()).CertificateNo.Should().Be(maliciousNo);
+
+        // 日志不含 CR/LF（净化生效，防 log-forging）。
+        captured.Should().NotBeEmpty();
+        captured.Should().NotContain(msg => msg.Contains('\r') || msg.Contains('\n'),
+            "日志消息不应含 CR/LF（log-forging 净化生效）");
+        // 净化后的编号仍出现在日志中（可见 ASCII 部分保留）。
+        captured.Should().Contain(msg => msg.Contains("CERT"));
+    }
+
+    /// <summary>
+    /// 捕获日志消息的极简 ILogger —— 仅记录 format 后的消息文本（含占位符替换）。
+    /// 用于验证 SanitizeForLog 净化效果。
+    /// </summary>
+    private sealed class CaptureLogger(List<string> sink) : Microsoft.Extensions.Logging.ILogger<CertificateService<TestDbContext>>
+    {
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+        public void Log<TState>(Microsoft.Extensions.Logging.LogLevel logLevel, Microsoft.Extensions.Logging.EventId eventId,
+            TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+            => sink.Add(formatter(state, exception));
+    }
 }

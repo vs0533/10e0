@@ -120,8 +120,11 @@ public sealed class CertificateService<TContext>(
         catch (DbUpdateException ex) when (IsUniqueViolation(ex))
         {
             // 证书编号唯一索引兜底（Sequence 并发冲突或手动传入重复编号）。
+            // LogForSafe：certificateNo/templateCode 来自外部（调用方传入），含 CR/LF 可伪造日志行，
+            // 故写入日志前过 SanitizeForLog（剥控制字符）。CodeQL cs/log-forging 兜底。
             logger?.LogError(ex,
-                "证书编号唯一冲突：CertificateNo={No} TemplateCode={Template}", certificateNo, templateCode);
+                "证书编号唯一冲突：CertificateNo={No} TemplateCode={Template}",
+                SanitizeForLog(certificateNo), SanitizeForLog(templateCode));
             throw new InvalidOperationException(
                 $"证书编号 '{certificateNo}' 已存在（唯一冲突）。若用 Sequence 自动生成，请重试；" +
                 "若手动传入请改编号。", ex);
@@ -129,7 +132,7 @@ public sealed class CertificateService<TContext>(
 
         logger?.LogInformation(
             "证书已生成：Id={Id} No={No} Template={Template} FileAttachment={FileId}",
-            entity.Id, certificateNo, templateCode, upload.Id);
+            entity.Id, SanitizeForLog(certificateNo), SanitizeForLog(templateCode), upload.Id);
 
         return entity;
     }
@@ -215,4 +218,33 @@ public sealed class CertificateService<TContext>(
         ex.InnerException?.Message.Contains("unique", StringComparison.OrdinalIgnoreCase) == true
         || ex.InnerException?.Message.Contains("UNIQUE", StringComparison.OrdinalIgnoreCase) == true
         || ex.InnerException?.Message.Contains("duplicate", StringComparison.OrdinalIgnoreCase) == true;
+
+    /// <summary>
+    /// 日志注入净化：剥除控制字符（CR/LF/NUL/ESC 等），防 log-forging（CodeQL cs/log-forging）。
+    ///
+    /// <para>
+    /// certificateNo / templateCode 源自外部（调用方传入或 Sequence），可含 <c>\r\n</c>，
+    /// 直接进结构化日志的渲染消息会插入伪造日志行（掩盖真实操作 / 注入假事件）。
+    /// 此方法是 CodeQL 数据流上的 sanitizer：值经此转换后即视为可信，不再标记。
+    /// </para>
+    /// <para>
+    /// 保留可见字符（含中文 / 标点 / 空格），仅剥除 C0 控制字符（U+0000-U+001F）与 DEL（U+007F）。
+    /// 制表符（U+0009）保留为半角空格（日志可读）。
+    /// </para>
+    /// </summary>
+    private static string SanitizeForLog(string? value)
+    {
+        if (string.IsNullOrEmpty(value)) return value ?? string.Empty;
+        // 去重构造开销：无控制字符的常见路径直接返回原值。
+        var sb = new System.Text.StringBuilder(value.Length);
+        foreach (var ch in value)
+        {
+            // 允许：可打印 ASCII（≥ U+0020）或中文等（≥ U+00A0）。DEL(U+007F) 与 C0 控制（< U+0020）剥除。
+            if (ch >= '\u0020' && ch != '\u007F')
+                sb.Append(ch);
+            else if (ch == '\t') // 制表符转空格（保留可读，避免列对齐被破坏）
+                sb.Append(' ');
+        }
+        return sb.ToString();
+    }
 }
