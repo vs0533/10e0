@@ -243,8 +243,12 @@ public sealed class CertificateServiceTests
 
     /// <summary>
     /// CodeQL cs/log-forging 回归测试：调用方传入含 CR/LF 的证书编号，
-    /// 渲染成功路径日志（CertificateService line 130-132）经 SanitizeForLog 净化后不含控制字符。
+    /// 渲染成功路径日志经 SanitizeForLog 净化后不含换行符（防伪造日志行）。
     /// 同时验证存储值仍是原值（净化只作用于日志，不影响业务数据）。
+    ///
+    /// <para>SanitizeForLog 用 <c>String.Replace</c> 移除 CR/LF —— 这是 CodeQL
+    /// <c>cs/log-forging</c> 内置认可的 sanitizer barrier（见 <c>LogForgingQuery.qll</c>
+    /// 的 <c>StringReplaceSanitizer</c>），自定义 StringBuilder 循环不被认可。</para>
     /// </summary>
     [Fact]
     public async Task RenderAsync_CertificateNoWithControlChars_LogSanitized_StoragePreserved()
@@ -259,8 +263,8 @@ public sealed class CertificateServiceTests
         var svc = new CertificateService<TestDbContext>(factory, renderer.Object, fileSvc.Object,
             null, OptionsNoSequence(), captureLogger);
 
-        // 手动传入含 CR/LF 的编号（模拟恶意/脏数据输入）。
-        var maliciousNo = "CERT\r\nFAKE-LOG-LINE\n\t";
+        // 手动传入含 CR/LF 的编号（模拟恶意/脏数据输入，意图伪造日志行）。
+        var maliciousNo = "CERT\r\nFAKE-LOG-LINE";
         var cert = await svc.RenderAsync("tpl", new Dictionary<string, object?>(),
             new CertificateRenderOptions(CertificateNo: maliciousNo));
 
@@ -272,8 +276,9 @@ public sealed class CertificateServiceTests
         captured.Should().NotBeEmpty();
         captured.Should().NotContain(msg => msg.Contains('\r') || msg.Contains('\n'),
             "日志消息不应含 CR/LF（log-forging 净化生效）");
-        // 净化后的编号仍出现在日志中（可见 ASCII 部分保留）。
+        // 净化后的可见部分（CERT + FAKE-LOG-LINE 合并）仍出现在日志中。
         captured.Should().Contain(msg => msg.Contains("CERT"));
+        captured.Should().Contain(msg => msg.Contains("FAKE-LOG-LINE"));
     }
 
     /// <summary>
