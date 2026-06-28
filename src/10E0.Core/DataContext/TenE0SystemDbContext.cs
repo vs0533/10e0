@@ -2,6 +2,8 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using TenE0.Core.Auditing;
 using TenE0.Core.Auth.Jwt.Storage;
+using TenE0.Core.Certificate;
+using TenE0.Core.Certificate.Entities;
 using TenE0.Core.Configuration.Storage;
 using TenE0.Core.DynamicFilters.Storage;
 using TenE0.Core.Events.Outbox;
@@ -76,6 +78,8 @@ public abstract class TenE0SystemDbContext<TUser, TRole>(
     public DbSet<TenE0SystemParameter> SystemParameters => Set<TenE0SystemParameter>();
     public DbSet<TenE0ScheduledJob> ScheduledJobs => Set<TenE0ScheduledJob>();
     public DbSet<TenE0JobExecution> JobExecutions => Set<TenE0JobExecution>();
+    public DbSet<TenE0CertificateTemplate> CertificateTemplates => Set<TenE0CertificateTemplate>();
+    public DbSet<TenE0Certificate> Certificates => Set<TenE0Certificate>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -94,6 +98,7 @@ public abstract class TenE0SystemDbContext<TUser, TRole>(
         modelBuilder.ConfigureTenE0AuditTables();
         modelBuilder.ConfigureTenE0ConfigurationTables();
         modelBuilder.ConfigureTenE0SchedulingTables();
+        modelBuilder.ConfigureTenE0CertificateTables();
     }
 }
 

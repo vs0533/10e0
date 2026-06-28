@@ -62,6 +62,7 @@ builder.Services.AddTenE0All<AppDbContext>(builder.Configuration, opt =>
     opt.Workflow = true;
     opt.Scheduling = true;
     opt.Observability = true;
+    opt.Certificate = true;       // #185 证书生成(模板 DSL + PDF 渲染,依赖 Files)
     // 安全三件套
     opt.RateLimiting = true;
     opt.LoginProtection = true;
@@ -146,6 +147,7 @@ public class AppDbContext(
 | `AddTenE0ImportExport(...)` | Excel(ClosedXML)/CSV + ImportExecutor | opt-in |
 | `AddTenE0Realtime(...)` | SignalR 声明式推送 | opt-in |
 | `AddTenE0Scheduling<TContext>(...)` | Cron 定时任务 + 集群锁 | opt-in |
+| `AddTenE0Certificate<TContext>(...)` | 证书生成(模板 DSL + IFileService 集成);默认占位渲染器 | opt-in;依赖 Files;PDF 渲染器在独立包 `TenE0.Core.Certificate`,`AddTenE0PdfCertificateRenderer()` Replace(见 docs/29) |
 | `AddTenE0Observability<TContext>(...)` | HealthChecks + Metrics 埋点 | opt-in;OTel SDK 仍在 app 层装配 |
 | `AddTenE0ApiVersioning()` | Asp.Versioning + 每版本 OpenAPI | |
 | `AddTenE0ExceptionHandler()` | 集中异常 → ApiResult 映射 | |
@@ -390,7 +392,7 @@ public class OrderStateMachine : StateMachineDefinitionBase<OrderState, OrderAct
 
 ## 10. 深度文档(按主题查)
 
-仓库 `docs/` 下有 27 篇专题文档。按任务查:
+仓库 `docs/` 下有 29 篇专题文档。按任务查:
 
 | 我要... | 看哪篇 |
 |---|---|
@@ -400,6 +402,7 @@ public class OrderStateMachine : StateMachineDefinitionBase<OrderState, OrderAct
 | 写 Command / Query / Handler | `docs/04-cqrs.md` |
 | 实体基类怎么选 | `docs/05-entities.md` |
 | `IEntityService` 通用 CRUD 全貌 | `docs/06-entity-service.md` |
+| `IEntityQueryService` 读侧查询(分页/筛选/投影) | `docs/28-entity-query-service.md` |
 | EF Core 配置 / 拦截器 | `docs/07-data-context.md` |
 | 登录 / 刷新 / 登出 | `docs/08-auth-jwt.md` |
 | RBAC + 字段级 + 行级权限 | `docs/09-permissions.md` |
@@ -418,6 +421,7 @@ public class OrderStateMachine : StateMachineDefinitionBase<OrderState, OrderAct
 | 安全(限流/锁定/验证码) | `docs/25-security.md` |
 | 可观测性(Health/Metrics/OTel) | `docs/26-observability.md` |
 | 消息队列(RabbitMQ/Kafka) | `docs/27-messaging.md` |
+| 证书生成(模板 DSL + PDF 渲染) | `docs/29-certificate.md` |
 
 > 📦 **只装了 NuGet 包没仓库?** 上述 docs 也随包发布,在包内 `docs/` 目录可查。仓库地址:`https://github.com/vs0533/10e0`。
 

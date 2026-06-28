@@ -6,6 +6,7 @@ using TenE0.Api.Domain;
 using TenE0.Api.Endpoints;
 using TenE0.Api.Hosting;
 using TenE0.Api.Modules;
+using TenE0.Core.Certificate.Pdf;
 using TenE0.Core.DependencyInjection;
 using TenE0.Core.Errors;
 using TenE0.Core.Security.RateLimiting;
@@ -89,6 +90,16 @@ builder.Services.AddTenE0All<AppUser, DemoDbContext>(builder.Configuration, opt 
     {
         sched.ScanInterval = TimeSpan.FromSeconds(10);
     };
+
+    // #185 证书生成：注册 ICertificateService + 占位渲染器。
+    // 依赖 Files（证书 PDF 存 IFileService）—— 上面 opt.Files = true 已开。
+    // 证书编号走 Sequence（opt.Sequences 默认开），key 用默认 "certificate"。
+    opt.Certificate = true;
+    opt.CertificateOptions = cert =>
+    {
+        cert.SequenceKey = "certificate";
+        cert.SequenceFormat = "CERT-{yyyyMMdd}-{0000}";
+    };
 });
 
 // #161 可观测性 —— app 层装配 OTel SDK（core 不带 OTel 依赖，避免框架包膨胀）。
@@ -124,6 +135,11 @@ builder.Services.AddTenE0All<AppUser, DemoDbContext>(builder.Configuration, opt 
 
 // 业务部分（demo 专属）：seeder / 系统参数定义 / AssigneeDirectory / InMemory 装配器。
 builder.Services.AddAppModule<DemoAppModule>(builder.Configuration);
+
+// #185 证书 PDF 渲染器：Replace 占位渲染器为 PDFsharp 实现（独立包 10E0.Core.Certificate）。
+// 主包 TenE0.Core 零 PDF 依赖；本 demo ProjectRef 了独立包，故此处 Replace 生效。
+// 业务项目若用自定义渲染器，可改 Replace 为自己的 ICertificateRenderer 实现。
+builder.Services.AddTenE0PdfCertificateRenderer();
 
 // #39: 集中异常映射 (PermissionDenied → 403, Validation → 400, DbUpdate → 409, 其余 → 500)
 builder.Services.AddTenE0ExceptionHandler();
@@ -190,7 +206,8 @@ app.MapHealthEndpoints()
    .MapDemoEndpoints()
    .MapAdminEndpoints()
    .MapFileEndpoints()
-   .MapWorkflowEndpoints();
+   .MapWorkflowEndpoints()
+   .MapCertificateEndpoints();
 
 // #161 标准健康端点：/health/live（匿名恒 200）、/health/ready（匿名就绪）。
 // /health 完整报告需 perm.admin（含每项 check 详情/积压数，敏感）。

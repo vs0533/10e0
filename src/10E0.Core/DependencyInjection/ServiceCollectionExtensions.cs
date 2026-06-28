@@ -356,6 +356,12 @@ public static class ServiceCollectionExtensions
         // 定时任务调度（#164）：默认 false。opt-in。
         if (opt.Scheduling) services.AddTenE0Scheduling<TContext>(handlerAssemblies, opt.SchedulingOptions);
 
+        // 证书生成（#185）：默认 false。opt-in。
+        // 渲染器抽象默认占位（NullCertificateRenderer），引用独立包 10E0.Core.Certificate 后
+        // 调 AddTenE0PdfCertificateRenderer() Replace 为 PDFsharp 渲染器。
+        // 依赖 Files 模块（证书 PDF 存 IFileService），建议同时 opt.Files = true。
+        if (opt.Certificate) services.AddTenE0Certificate<TContext>(opt.CertificateOptions);
+
         return services;
     }
 }

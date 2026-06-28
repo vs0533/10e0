@@ -1,5 +1,6 @@
 using System.Reflection;
 using TenE0.Core.Auditing;
+using TenE0.Core.Certificate;
 using TenE0.Core.Configuration;
 using TenE0.Core.Events.Outbox;
 using TenE0.Core.Files.Storage;
@@ -167,6 +168,20 @@ public sealed class TenE0Options
 
     /// <summary>定时任务调度配置。</summary>
     public Action<SchedulingOptions>? SchedulingOptions { get; set; }
+
+    // ---------- 证书生成（默认 false；issue #185）----------
+
+    /// <summary>
+    /// 启用证书生成模块（模板 DSL + 默认 PDF 渲染器 + IFileService 集成，默认 false）。对应 issue #185。
+    /// 启用后注册 <c>ICertificateService</c>（渲染 / 落库 / 查询）+ <c>ICertificateRenderer</c> 抽象
+    /// （默认占位渲染器；引用独立 NuGet 包 <c>TenE0.Core.Certificate</c> 后 Replace 为
+    /// <c>PdfCertificateRenderer</c>，基于 PDFsharp 真 MIT）。
+    /// 依赖 Files 模块（证书 PDF 存 <c>IFileService</c>），建议同时 <c>opt.Files = true</c>。
+    /// </summary>
+    public bool Certificate { get; set; }
+
+    /// <summary>证书生成配置。</summary>
+    public Action<CertificateOptions>? CertificateOptions { get; set; }
 }
 
 /// <summary>

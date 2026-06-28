@@ -33,6 +33,7 @@ production-grade service is a few lines of `Program.cs`.
 - [Scheduling](https://github.com/vs0533/10e0/blob/dev/docs/15-sequences.md): `[Scheduled]` cron jobs + cluster lock.
 - [Dynamic queries](https://github.com/vs0533/10e0/blob/dev/docs/16-dynamic-queries.md): runtime WHERE/ORDER/paging, injection-safe.
 - [Observability](https://github.com/vs0533/10e0/blob/dev/docs/26-observability.md): HealthChecks + Metrics + OpenTelemetry.
+- [Certificate](https://github.com/vs0533/10e0/blob/dev/docs/29-certificate.md): declarative template DSL (title/name/date/QR/seal/...) + PDF renderer (PDFsharp, in independent package `TenE0.Core.Certificate`) + IFileService integration. QR URLs are scheme-validated (http/https only).
 
 ## Golden reference (clone this for a new feature)
 
