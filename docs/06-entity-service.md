@@ -146,3 +146,11 @@ IsSoftDelete, DeleteTime, DeleteBy
 ```
 
 即使客户端恶意提交这些字段（包括将它们放入 `PostedProperties`），也会被 `PatchScalarProperties` 无条件跳过。
+
+---
+
+## 11. 读侧对称：`IEntityQueryService`
+
+本文档只覆盖**写侧**（Create/Update/Delete）。读侧（分页 / 筛选 / 投影）有对等的服务 [`IEntityQueryService`](28-entity-query-service.md) —— 两者共用 `AddTenE0EntityService` 注册、对称的选项对象（`EntityWriteOptions` ↔ `EntityReadOptions`）、一致的"DbContext 由调用方传入"设计。
+
+读场景请看 [28 — 实体读侧查询服务](28-entity-query-service.md)。

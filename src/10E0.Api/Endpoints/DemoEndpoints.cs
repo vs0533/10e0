@@ -64,6 +64,18 @@ internal static class DemoEndpoints
             return ApiResultResult.Api(ApiResult<object>.Ok(list));
         }).WithApiVersionSet(versions).HasApiVersion(new ApiVersion(1, 0));
 
+        // #184 范本:分页查询端点,走 IEntityQueryService(读侧对称服务)。
+        // 路径参数从 query string 绑定(PagedQuery 是 record,ASP.NET 自动 [AsParameters])。
+        app.MapGet("/demo/paged", async (
+            ICommandDispatcher dispatcher,
+            string? name,
+            [AsParameters] PagedQuery paged,
+            CancellationToken ct) =>
+        {
+            var result = await dispatcher.SendAsync(new PagedDemosQuery(paged, name), ct);
+            return ApiResultResult.Api(ApiResult<object>.Ok(result));
+        }).WithApiVersionSet(versions).HasApiVersion(new ApiVersion(1, 0));
+
         app.MapPost("/demo/{id}/publish", async (string id, ICommandDispatcher dispatcher, IErrs errs, CancellationToken ct) =>
         {
             var ok = await dispatcher.SendAsync(new PublishDemoCommand(id), ct);
