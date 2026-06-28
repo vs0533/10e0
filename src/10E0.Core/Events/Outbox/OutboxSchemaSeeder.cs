@@ -115,11 +115,13 @@ public sealed class OutboxSchemaSeeder : IDataSeeder
     private static string BuildAddColumnSql(string provider, string table, string column, string type)
         => provider switch
         {
-            // PG：原生支持 IF NOT EXISTS
+            // PG：原生支持 IF NOT EXISTS。标识符必须加双引号 —— EF Core/Npgsql 默认按"混合大小写"
+            // 字面建表（table_name='OutboxMessages'），而未加引号的标识符会被 PG 折叠成小写
+            // （on outboxmessages）→ 42P01 relation does not exist。见 OutboxSchemaSeeder 注释。
             var p when p.Contains("Npgsql", StringComparison.OrdinalIgnoreCase) ||
                      p.Contains("Postgres", StringComparison.OrdinalIgnoreCase) =>
-                $"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {type}",
-            // SqlServer：无 IF NOT EXISTS，靠探测跳过
+                $"ALTER TABLE {Quote(table)} ADD COLUMN IF NOT EXISTS {Quote(column)} {type}",
+            // SqlServer：无 IF NOT EXISTS，靠探测跳过；标识符大小写不敏感，无需引用
             _ => $"ALTER TABLE {table} ADD {column} {type}",
         };
 
@@ -128,13 +130,20 @@ public sealed class OutboxSchemaSeeder : IDataSeeder
         {
             var p when p.Contains("Npgsql", StringComparison.OrdinalIgnoreCase) ||
                      p.Contains("Postgres", StringComparison.OrdinalIgnoreCase) =>
-                $"CREATE INDEX IF NOT EXISTS {indexName} ON {table} ({col1}, {col2})",
+                // 标识符双引号（同 BuildAddColumnSql 理由）：表/索引/列名都是混合大小写字面量。
+                $"CREATE INDEX IF NOT EXISTS {Quote(indexName)} ON {Quote(table)} ({Quote(col1)}, {Quote(col2)})",
             var p when p.Contains("SqlServer", StringComparison.OrdinalIgnoreCase) =>
                 // SqlServer IF NOT EXISTS 用 WHERE NOT EXISTS 子查询
                 $"IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'{indexName}' AND object_id = OBJECT_ID(N'{table}')) " +
                 $"CREATE INDEX {indexName} ON {table} ({col1}, {col2})",
             _ => $"CREATE INDEX {indexName} ON {table} ({col1}, {col2})",
         };
+
+    /// <summary>
+    /// 用双引号包裹 PG 标识符，防大小写折叠。仅内部转义双引号字符（标识符内嵌 "→""），
+    /// 不做 schema 校验 —— 调用方传入的都是框架内部常量。
+    /// </summary>
+    private static string Quote(string identifier) => "\"" + identifier.Replace("\"", "\"\"") + "\"";
 
     private static string DateTimeOffsetColumnType(string provider)
         => provider.Contains("Npgsql", StringComparison.OrdinalIgnoreCase) ||
