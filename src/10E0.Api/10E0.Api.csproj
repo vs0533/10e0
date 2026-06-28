@@ -34,6 +34,12 @@
 
   <ItemGroup>
     <ProjectReference Include="..\10E0.Core\10E0.Core.csproj" />
+    <!--
+      #185 证书模块默认 PDF 渲染器（PDFsharp）。主包 TenE0.Core 零 PDF 依赖，
+      这里 ProjectRef 独立包并 AddTenE0PdfCertificateRenderer() Replace 占位渲染器。
+      业务项目按需取舍（自定义渲染器可不引本包）。
+    -->
+    <ProjectReference Include="..\10E0.Core.Certificate\10E0.Core.Certificate.csproj" />
   </ItemGroup>
 
   <ItemGroup>

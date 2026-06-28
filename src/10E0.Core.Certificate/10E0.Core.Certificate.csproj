@@ -1,0 +1,44 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>true</IsPackable>
+    <PackageId>TenE0.Core.Certificate</PackageId>
+    <RootNamespace>TenE0.Core.Certificate.Pdf</RootNamespace>
+    <AssemblyName>10E0.Core.Certificate</AssemblyName>
+    <!-- Version placeholder: overridden by CI via /p:Version=x.y.z -->
+    <Version>0.0.0</Version>
+  </PropertyGroup>
+
+  <!-- NuGet 包级元数据 override（Directory.Build.props 里的是 Core 专用描述） -->
+  <PropertyGroup Condition="'$(IsPackable)' == 'true'">
+    <Description>10E0 (TenE0) — 证书生成 PDF 渲染器。把 ICertificateRenderer 替换为基于 PDFsharp 的默认实现（独立 NuGet 包，避免 PDF 重依赖污染主包）。需配合主包 TenE0.Core 的 Certificate 模块（ICertificateService）使用。</Description>
+    <PackageTags>lowcode;framework;ddd;cqrs;efcore;dotnet;certificate;pdf;pdfsharp</PackageTags>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\10E0.Core\10E0.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      PDF 生成（issue #185 证书模块默认渲染器）。
+
+      ⚠️ 选型说明（与 issue #185 原提议不同）：
+      issue 提议 QuestPDF，但 QuestPDF 已于 2026-06-10 切换为 Community License v2.0
+      （非 OSI 认可的开源许可 —— 源码可见商业许可，营收超 $1M 需付费专业/企业版）。
+      本框架一贯偏好纯 MIT 依赖（见 ClosedXML/Cronos 在 10E0.Core.csproj 的注释，
+      以及 RabbitMQ 客户端拆独立包的反膨胀理由）。故改用 PDFsharp —— 真 MIT（2005-2026 empira，
+      无营收门槛，商业免费），与框架许可证偏好完全一致。
+
+      PDFsharp 6.2 是支持 .NET 10 的官方跨平台版本（Core build，无需 WPF/GDI）。
+      API：PdfSharp.Pdf / PdfSharp.Drawing（XGraphics 流式布局）。
+    -->
+    <PackageReference Include="PdfSharp" Version="6.2.4" />
+    <!--
+      二维码生成（证书验真场景）。QRCoder：纯 C# 零依赖，MIT 许可（2025 起由 Shane32 维护）。
+      用 PngByteQRCode 生成 PNG 字节 → PdfSharp XImage.FromStream 嵌入 PDF。
+    -->
+    <PackageReference Include="QRCoder" Version="1.8.0" />
+  </ItemGroup>
+
+</Project>

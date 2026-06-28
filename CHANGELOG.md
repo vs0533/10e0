@@ -21,6 +21,19 @@
 
 ### Added
 
+- **证书生成模块 `Certificate`** (#185):模板 DSL + 默认 PDF 渲染器 + IFileService 集成 —— 把「模板 + 数据」渲染为正式证书 / 结业证 / 发证文档,存 IFileService,可追溯 / 可重生成
+  - **声明式模板 DSL**:`CertificateDefinition`(Title/PaperKind A4-A5-Letter × Portrait/Landscape + 9 种元素 Title/Text/Name/Date/QrCode/Image/Seal/Signature/Line + 全局 Styles),结构化对象非脚本,`System.Text.Json` 多态序列化
+  - **数据绑定 + 安全**:元素 Key ↔ data 字典;data 值仅作字符串/数字/日期/图片占位符替换(不解析表达式);**二维码 URL scheme 白名单**(仅 http/https,拒绝 javascript:/file:/data:,安全考量 #3)
+  - **拆独立 NuGet 包 `TenE0.Core.Certificate`**(仿 RabbitMq/Kafka 反膨胀模式):主包 `TenE0.Core` **零 PDF 依赖**,只放抽象(实体/DSL/`ICertificateService`/`ICertificateRenderer` + `NullCertificateRenderer` 占位);渲染器 `PdfCertificateRenderer` 在独立包,`AddTenE0PdfCertificateRenderer()` Replace 占位渲染器
+  - **与 IFileService 集成**:渲染产物 PDF 走 `IFileService.UploadAsync`(`Category`=`certificate`,复用 `TenE0FileAttachment`);证书实例 `TenE0Certificate.FileAttachmentId` 指向 PDF
+  - **Sequence 编号集成**:`CertificateOptions.SequenceKey` 配置后自动走 `ISequenceGenerator`(防并发重复);`RenderToStreamAsync` 预览不落库;`GetByRelatedEntityAsync` 按业务实体查证书
+  - ⚠️ **PDF 库选型变更**:issue #185 原提议 QuestPDF,但 QuestPDF 已于 2026-06-10 切 **Community License v2.0**(非 OSI 开源 —— 源码可见商业许可,营收 >$1M 需付费)。本框架一贯纯 MIT 偏好(见 ClosedXML/Cronos 注释、RabbitMq 拆包理由),故改用 **PDFsharp 6.2**(empira 官方,真 MIT,2005-2026,无营收门槛)。二维码不嵌入 PNG(PDFsharp Core 不支持 PNG 解码),直接读 QRCoder `ModuleMatrix` + `XGraphics.DrawRectangle` 画黑白方块(零图像格式依赖,不依赖 System.Drawing)
+  - opt-in 开关 `opt.Certificate = true`(默认 false);依赖 Files 模块(`opt.Files = true`)
+  - 测试:`CertificateDefinitionTests`(10 例,DSL/绑定/scheme 白名单)+ `CertificateServiceTests`(6 例,InMemory + Mock)+ `CertificateExtensionsTests`(3 例,DI)+ `PdfCertificateRendererTests`(13 例,独立包,验 `%PDF-` 魔数 + 二维码 + 全纸张组合)
+  - 范本:`src/10E0.Api/Handlers/CertificateCommandHandler.cs` + `Endpoints/CertificateEndpoints.cs` + `Seeders/CertificateSeeder.cs`
+  - 新增文档 `docs/29-certificate.md` + 模块 `CLAUDE.md`;`AGENTS.md` §2/§4/§10 + `llms.txt` + `docs/index.md` 补条目
+  - Closes #185(R3 结业证书场景;与 #184 读侧服务同属 R3 真实项目验证暴露的框架增强)
+
 - **实体读侧查询服务 `IEntityQueryService`** (#184):`IEntityService`(写)的读侧对称 —— 为 CQRS 读路径提供官方推荐入口,收敛列表 / 分页 / 筛选 / 投影的高频写法
   - 核心方法:`GetByIdAsync` / `ListAsync` / `PagedAsync` / `CountAsync` / `ExistsAsync`(均有投影到 View DTO 的 `<TEntity, TView>` 重载)
   - **自动复用 EF Named Query Filter**:无需手写 `Where(IsSoftDelete==false)`,软删除 / 行级权限(`IEntityFilterContributor`)/ 租户过滤器由 EF 自动附加

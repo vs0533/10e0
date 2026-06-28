@@ -52,11 +52,12 @@ public sealed class DemoAppModule : IAppModule
         // AssigneeDirectory：把"角色/组织 → 用户"查询从 Core 解耦到 Api 层（工作流用）
         services.AddScoped<IAssigneeDirectory, AssigneeDirectory<DemoDbContext>>();
 
-        // Seeder：初始权限授予 + 管理员账号 + 组织树 + 菜单 + 系统参数
+        // Seeder：初始权限授予 + 管理员账号 + 组织树 + 菜单 + 系统参数 + 证书模板（#185）
         services.AddScoped<IDataSeeder, PermissionSeeder>();
         services.AddScoped<IDataSeeder, AuthSeeder>();
         services.AddScoped<IDataSeeder, MenuSeeder>();
         services.AddScoped<IDataSeeder, ConfigurationSeeder>();
+        services.AddScoped<IDataSeeder, CertificateSeeder>();
     }
 
     public void MapEndpoints(IEndpointRouteBuilder endpoints)
