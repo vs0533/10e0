@@ -1,3 +1,4 @@
+using System.Reflection;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using TenE0.Core.Scheduling.Entities;
@@ -203,8 +204,11 @@ public sealed class Scheduler<TContext>(
         {
             throw new InvalidOperationException($"JobType '{jobTypeName}' 未实现 IScheduledJob");
         }
-        var allowed = _options.AllowedAssemblies ?? _options.JobAssemblies;
-        if (allowed is { Length: > 0 } && !allowed.Contains(type.Assembly))
+        // 白名单 fail-secure（语义同 JobExecutor.ResolveJobHandler）：
+        //   AllowedAssemblies == null → 用 JobAssemblies；都为空 → 不限制；
+        //   配置了但为空 [] 或不含本程序集 → 拒绝。
+        Assembly[]? allowed = _options.AllowedAssemblies ?? (_options.JobAssemblies.Length > 0 ? _options.JobAssemblies : null);
+        if (allowed is not null && !allowed.Contains(type.Assembly))
         {
             throw new InvalidOperationException(
                 $"JobType '{jobTypeName}' 所在程序集 {type.Assembly.GetName().Name} 不在白名单内，" +

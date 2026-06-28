@@ -1,3 +1,4 @@
+using System.Reflection;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -31,11 +32,10 @@ public sealed class JobExecutor<TContext>(
     IServiceProvider serviceProvider,
     IOptions<SchedulingOptions> options,
     TimeProvider timeProvider,
-    ILogger<JobExecutor<TContext>> logger) : IDisposable
+    ILogger<JobExecutor<TContext>> logger)
     where TContext : DbContext
 {
     private readonly SchedulingOptions _options = options.Value;
-    private CancellationTokenSource? _timeoutCts;
 
     /// <summary>
     /// 执行一个任务（含重试、历史记录、事件触发、NextRunAt 更新）。
@@ -66,6 +66,21 @@ public sealed class JobExecutor<TContext>(
             return JobExecutionStatus.Failed;
         }
 
+        // 1b. 解析任务参数（ParametersJson → JsonElement?）。非法 JSON 视为 null（任务自己判断）。
+        System.Text.Json.JsonElement? parameters = null;
+        if (!string.IsNullOrWhiteSpace(job.ParametersJson))
+        {
+            try
+            {
+                using var doc = System.Text.Json.JsonDocument.Parse(job.ParametersJson);
+                parameters = doc.RootElement.Clone(); // Clone 脱离 doc 生命周期，随 JobContext 传递
+            }
+            catch (System.Text.Json.JsonException ex)
+            {
+                logger.LogWarning(ex, "任务 ParametersJson 非法 JSON Code={Code}，按无参数处理", job.Code);
+            }
+        }
+
         // 2. 创建执行历史行（Running）
         var startedAt = timeProvider.GetUtcNow();
         var execution = new TenE0JobExecution
@@ -85,27 +100,29 @@ public sealed class JobExecutor<TContext>(
         }
 
         // 3. 带超时的 CancellationTokenSource（外部 token + 超时 token，任一触发即取消）。
-        _timeoutCts?.Dispose();
-        _timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        _timeoutCts.CancelAfter(_options.JobTimeout);
-
+        // 用局部 using 而非实例字段：JobExecutor 是 Scoped，若并发执行多个任务，
+        // 实例字段 _timeoutCts 会被互相覆盖/提前 Dispose，导致超时逻辑错乱。
+        // 局部变量 + using 保证每次执行独立的 CTS。
         var finalStatus = JobExecutionStatus.Failed;
         var finalAttempt = 1;
         string? finalError = null;
 
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutCts.CancelAfter(_options.JobTimeout);
+
         for (var attempt = 1; attempt <= job.MaxRetries; attempt++)
         {
             finalAttempt = attempt;
-            var ct = _timeoutCts.Token;
+            var ct = timeoutCts.Token;
             try
             {
-                var context = new JobContext(job, attempt, parameters: null);
+                var context = new JobContext(job, attempt, parameters);
                 await handler.ExecuteAsync(context, ct);
                 finalStatus = JobExecutionStatus.Success;
                 finalError = null;
                 break;
             }
-            catch (OperationCanceledException) when (_timeoutCts.IsCancellationRequested
+            catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested
                                                      && !cancellationToken.IsCancellationRequested)
             {
                 // 超时取消（非外部关闭）：标记 Timeout，不再重试。
@@ -145,14 +162,19 @@ public sealed class JobExecutor<TContext>(
         var finishedAt = timeProvider.GetUtcNow();
         await RecordExecutionFinalAsync(execution.Id, finalStatus, finalAttempt, finalError, finishedAt, cancellationToken);
 
-        // 5. 失败 → 触发 JobFailedEvent（经 Outbox 异步分发；未注册 dispatcher 时 no-op）
+        // 5. 更新任务定义：LastRunAt / LastRunStatus / NextRunAt（Cron 重新计算）。
+        //    必须先于事件触发提交 —— 见步骤 6 注释。
+        await UpdateJobAfterRunAsync(job, finalStatus, cancellationToken);
+
+        // 6. 失败 → 触发 JobFailedEvent。
+        //    **顺序很关键**：所有 DB 写入（历史行 + 任务定义）必须先全部提交成功，
+        //    再发事件。IDomainEventDispatcher 是 InProcess 直连 handler（非 Outbox 持久化），
+        //    若在 DB 提交前发事件，后续 SaveChanges 回滚会导致"事件已发但状态未落库"的不一致。
+        //    所以这里放在最后，且任何 DB 异常已在上面抛出（事件不会被触发）。
         if (finalStatus is JobExecutionStatus.Failed or JobExecutionStatus.Timeout)
         {
             await RaiseJobFailedEventAsync(job, finalAttempt, finalError ?? "未知错误", cancellationToken);
         }
-
-        // 6. 更新任务定义：LastRunAt / LastRunStatus / NextRunAt（Cron 重新计算）
-        await UpdateJobAfterRunAsync(job, finalStatus, cancellationToken);
 
         // 可观测性埋点（#161 / 本模块）：未注册 TenE0Metrics 时为 null → no-op。
         var metrics = serviceProvider.GetService<TenE0Metrics>();
@@ -185,10 +207,13 @@ public sealed class JobExecutor<TContext>(
             throw new InvalidOperationException($"JobType '{jobTypeName}' 未实现 IScheduledJob");
         }
 
-        // 白名单校验：JobType 所在程序集必须在 AllowedAssemblies 或 JobAssemblies 内。
-        // AllowedAssemblies 为空时回退到 JobAssemblies（静态任务扫描程序集），保持默认安全。
-        var allowed = _options.AllowedAssemblies ?? _options.JobAssemblies;
-        if (allowed is { Length: > 0 } && !allowed.Contains(type.Assembly))
+        // 白名单校验（fail-secure）：
+        //   AllowedAssemblies == null（未显式配置）→ 用 JobAssemblies 作为白名单；
+        //   JobAssemblies 也为空 → 视为「不限制」（opt-in 默认，单实例 demo 零配置可用）；
+        //   配置了但为空数组 [] 或不含本程序集 → 拒绝（运维显式收紧）。
+        // 关键：null 与 [] 必须区分语义 —— null = 没设防（允许），[] = 设了防但没放任何（拒绝）。
+        Assembly[]? allowed = _options.AllowedAssemblies ?? (_options.JobAssemblies.Length > 0 ? _options.JobAssemblies : null);
+        if (allowed is not null && !allowed.Contains(type.Assembly))
         {
             throw new InvalidOperationException(
                 $"JobType '{jobTypeName}' 所在程序集 {type.Assembly.GetName().Name} 不在白名单内，" +
@@ -228,7 +253,12 @@ public sealed class JobExecutor<TContext>(
         await using var scope = serviceProvider.CreateAsyncScope();
         var factory = scope.ServiceProvider.GetRequiredService<IDbContextFactory<TContext>>();
         await using var ctx = await factory.CreateDbContextAsync(cancellationToken);
+        // IgnoreQueryFilters：SchedulerWorker 在无 HTTP 请求的后台线程跑，
+        // 此时 ITenantContext（请求作用域）无值，多租户过滤器解析会抛
+        // "Cannot resolve scoped service from root provider" 或按空租户误过滤。
+        // 执行历史是系统级记录，应跨租户写入。
         var exec = await ctx.Set<TenE0JobExecution>()
+            .IgnoreQueryFilters()
             .FirstOrDefaultAsync(e => e.Id == executionId, cancellationToken);
         if (exec is null)
         {
@@ -251,6 +281,9 @@ public sealed class JobExecutor<TContext>(
             {
                 return; // 未启用领域事件 → no-op（不破坏调度核心流程）
             }
+            // 注意：IDomainEventDispatcher 当前实现是 InProcess 直连 handler（非 Outbox 持久化）。
+            // 因此本调用放在所有 DB 提交之后（见 ExecuteAsync 步骤 6 注释），保证事件与落库状态一致；
+            // 若未来切到 Outbox 持久化 dispatcher，可前移到事务内以获得 at-least-once 语义。
             await dispatcher.DispatchAsync(
                 new JobFailedEvent(job.Id, job.Code, job.Name, attempt, errorMessage, timeProvider.GetUtcNow()),
                 cancellationToken);
@@ -268,7 +301,10 @@ public sealed class JobExecutor<TContext>(
         await using var scope = serviceProvider.CreateAsyncScope();
         var factory = scope.ServiceProvider.GetRequiredService<IDbContextFactory<TContext>>();
         await using var ctx = await factory.CreateDbContextAsync(cancellationToken);
+        // IgnoreQueryFilters：后台调度按 Id 更新任务定义，不应受租户/软删过滤器干扰
+        // （详见 RecordExecutionFinalAsync 注释）。
         var tracked = await ctx.Set<TenE0ScheduledJob>()
+            .IgnoreQueryFilters()
             .FirstOrDefaultAsync(j => j.Id == job.Id, cancellationToken);
         if (tracked is null)
         {
@@ -285,7 +321,4 @@ public sealed class JobExecutor<TContext>(
 
     private static string Truncate(string s, int max)
         => s.Length <= max ? s : s[..max];
-
-    /// <summary>释放超时 CTS。</summary>
-    public void Dispose() => _timeoutCts?.Dispose();
 }

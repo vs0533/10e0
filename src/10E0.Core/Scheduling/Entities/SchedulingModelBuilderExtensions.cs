@@ -37,13 +37,24 @@ public static class SchedulingModelBuilderExtensions
     /// <summary>TenantId 列长。</summary>
     public const int TenantIdMaxLength = 64;
 
+    /// <summary>表名：任务定义。权威源 —— RowJobLock 原始 SQL 通过 EF 元数据读回，不重复硬编码。</summary>
+    public const string ScheduledJobsTableName = "TenE0ScheduledJobs";
+
+    /// <summary>表名：执行历史。</summary>
+    public const string JobExecutionsTableName = "TenE0JobExecutions";
+
     /// <summary>
     /// 配置 Scheduling 模块表（由 <c>TenE0SystemDbContext</c> 自动调用）。
     /// </summary>
     public static ModelBuilder ConfigureTenE0SchedulingTables(this ModelBuilder mb)
     {
+        // 显式 ToTable 固定表名 —— EF Core 8+ 默认无复数化（表名 = 类名），
+        // 但为避免本仓库未来引入 pluralizer / snake_case 全局约定后表名漂移，且
+        // 让 RowJobLock 的原始 SQL 路径与 EF 映射始终保持一致，这里把表名钉死为权威源。
+        // RowJobLock 通过 ctx.Model.FindEntityType().GetTableName() 读回该常量。
         mb.Entity<TenE0ScheduledJob>(b =>
         {
+            b.ToTable(ScheduledJobsTableName);
             b.Property(j => j.Code).HasMaxLength(CodeMaxLength).IsRequired();
             b.Property(j => j.Name).HasMaxLength(NameMaxLength).IsRequired();
             b.Property(j => j.CronExpression).HasMaxLength(CronExpressionMaxLength).IsRequired();
@@ -65,6 +76,7 @@ public static class SchedulingModelBuilderExtensions
 
         mb.Entity<TenE0JobExecution>(b =>
         {
+            b.ToTable(JobExecutionsTableName);
             b.Property(e => e.JobId).HasMaxLength(InstanceIdMaxLength).IsRequired();
             b.Property(e => e.Status).HasMaxLength(LastRunStatusMaxLength).IsRequired();
             b.Property(e => e.ErrorMessage).HasMaxLength(ErrorMessageMaxLength);

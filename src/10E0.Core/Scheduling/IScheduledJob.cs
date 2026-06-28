@@ -1,3 +1,4 @@
+using System.Text.Json;
 using TenE0.Core.Scheduling.Entities;
 
 namespace TenE0.Core.Scheduling;
@@ -14,8 +15,8 @@ public sealed class JobContext
     /// <summary>构造执行上下文。</summary>
     /// <param name="job">触发的任务定义。</param>
     /// <param name="attempt">本次是第几次尝试（1 起）。</param>
-    /// <param name="parameters">反序列化后的任务参数；可为 null（无参数任务）。</param>
-    public JobContext(TenE0ScheduledJob job, int attempt, object? parameters)
+    /// <param name="parameters">从 <see cref="Entities.TenE0ScheduledJob.ParametersJson"/> 解析出的 JSON 视图；为空则 <c>null</c>。</param>
+    public JobContext(TenE0ScheduledJob job, int attempt, JsonElement? parameters)
     {
         Job = job ?? throw new ArgumentNullException(nameof(job));
         Attempt = attempt;
@@ -29,10 +30,25 @@ public sealed class JobContext
     public int Attempt { get; }
 
     /// <summary>
-    /// 反序列化后的任务参数；可为 null（无参数任务）。
-    /// 实际类型由具体任务约定；执行器不感知参数类型。
+    /// 从 <see cref="Entities.TenE0ScheduledJob.ParametersJson"/> 解析出的通用 JSON 视图；
+    /// 无参数任务为 <c>null</c>。任务用 <see cref="GetParameters{T}"/> 反序列化为强类型。
     /// </summary>
-    public object? Parameters { get; }
+    public JsonElement? Parameters { get; }
+
+    /// <summary>
+    /// 把 <see cref="Parameters"/> 反序列化为强类型参数。<see cref="Parameters"/> 为空时返回 <c>default</c>。
+    /// </summary>
+    /// <typeparam name="T">参数类型（任务自定义，通常用 record）。</typeparam>
+    /// <returns>反序列化后的参数；无参数时为 <c>default</c>。</returns>
+    public T? GetParameters<T>() => Parameters is { } el
+        ? el.Deserialize<T>(SchedulingJsonDefaults.Options)
+        : default;
+}
+
+/// <summary>任务参数反序列化用的共享 JsonSerializerOptions（驼峰、不区分大小写）。</summary>
+internal static class SchedulingJsonDefaults
+{
+    public static readonly JsonSerializerOptions Options = new(JsonSerializerDefaults.Web);
 }
 
 /// <summary>

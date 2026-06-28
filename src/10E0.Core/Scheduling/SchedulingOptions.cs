@@ -27,14 +27,26 @@ public sealed class SchedulingOptions
 
     /// <summary>
     /// 单个任务执行的硬超时。超过即取消 CancellationToken 并标记 Timeout。
-    /// 默认 30 分钟，防止僵死任务占锁。具体任务可在 <c>[Scheduled]</c> 上覆盖（后续）。
+    /// 默认 5 分钟，防止僵死任务占锁。长任务应同时调大本值与 <see cref="LockLeaseDuration"/>
+    /// （必须 <c>LockLeaseDuration ≥ JobTimeout</c>，启动期校验，否则崩溃后会双重执行）。
     /// </summary>
-    public TimeSpan JobTimeout { get; set; } = TimeSpan.FromMinutes(30);
+    public TimeSpan JobTimeout { get; set; } = TimeSpan.FromMinutes(5);
 
     /// <summary>
-    /// 任务执行锁的租约时长。默认 5 分钟 —— 远长于单次任务执行的预期耗时，
-    /// 但短到一旦实例崩溃，另一实例能在可接受时间内接管（与 Outbox 的 30s 相比更长，
-    /// 因为任务执行通常比单条消息投递久）。
+    /// 任务执行锁的租约时长。默认 2 分钟。
+    /// <para>
+    /// <b>语义与约束</b>：租约 = 单个任务<b>单次执行</b>的最长独占窗口（SchedulerWorker
+    /// 对每个 job 单独 TryAcquire/Release，不是整批持锁）。需满足 <c>LockLeaseDuration ≥ JobTimeout</c>：
+    /// </para>
+    /// <list type="bullet">
+    /// <item>租约 &lt; JobTimeout → 任务还在跑但锁已过期，另一实例会重复拾取（双重执行）。</item>
+    /// <item>租约 ≫ JobTimeout → 实例崩溃后接管延迟变长（需等租约到期）。</item>
+    /// </list>
+    /// <para>
+    /// 默认 5 分钟（= 默认 JobTimeout，满足校验约束；崩溃后另一实例接管延迟 5 分钟，可接受）。
+    /// 长任务应同时调大 JobTimeout 与本值。改 JobTimeout 时务必同步检查
+    /// <see cref="LockLeaseDuration"/>（SchedulingExtensions 启动期 ValidateOnStart 会拦非法配置）。
+    /// </para>
     /// </summary>
     public TimeSpan LockLeaseDuration { get; set; } = TimeSpan.FromMinutes(5);
 

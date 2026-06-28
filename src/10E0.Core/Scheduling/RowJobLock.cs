@@ -83,16 +83,30 @@ public sealed class RowJobLock<TContext> : IJobLock
 
         // 真实关系型 provider 路径：单条 UPDATE 用 WHERE 条件天然实现
         // "未被任何实例持有" 或 "锁已过期" 即可抢占。
-        // ExecuteSqlInterpolatedAsync 自动把插值参数参数化（防 SQL 注入）；
         // 返回受影响行数；0 行 = 抢锁失败，1 行 = 抢占成功。
-        var rows = await ctx.Database.ExecuteSqlInterpolatedAsync(
-            $"""
-             UPDATE TenE0ScheduledJobs
-                SET LockedByInstance = {instanceId},
-                    LockedUntil = {newLockedUntil}
-              WHERE Code = {jobCode}
-                AND (LockedByInstance IS NULL OR LockedUntil <= {now})
-             """,
+        //
+        // 表名从 EF Core 模型元数据读（GetTableName），不硬编码 —— 实体改名 / ToTable 约定
+        // 调整时原始 SQL 与 LINQ 映射始终一致，避免复数/单数漂移导致 "Invalid object name" 运行期崩溃。
+        //
+        // 注意：SQL 不允许表名走参数占位符（UPDATE @p0 ... 非法），所以表名必须内联到 SQL 文本。
+        // tableName 来自 EF 元数据（本模块 ToTable 固定的受控常量），非用户输入，无注入风险。
+        // 值（instanceId/newLockedUntil/jobCode/now）走显式 DbParameter 防注入。
+        var tableName = ResolveTableName(ctx);
+        var sql = $"""
+                   UPDATE {tableName}
+                      SET LockedByInstance = @instanceId,
+                          LockedUntil = @lockedUntil
+                    WHERE Code = @jobCode
+                      AND (LockedByInstance IS NULL OR LockedUntil <= @now)
+                   """;
+        var rows = await ctx.Database.ExecuteSqlRawAsync(sql,
+            new[]
+            {
+                CreateParam(ctx, "@instanceId", instanceId),
+                CreateParam(ctx, "@lockedUntil", newLockedUntil),
+                CreateParam(ctx, "@jobCode", jobCode),
+                CreateParam(ctx, "@now", now),
+            },
             cancellationToken);
 
         return rows > 0;
@@ -136,14 +150,21 @@ public sealed class RowJobLock<TContext> : IJobLock
 
         // 真实关系型 provider 路径：所有权校验通过 WHERE 子句实现 ——
         // 其他实例持有的行 LockedByInstance != instanceId，UPDATE 命中 0 行，效果等同 no-op。
-        await ctx.Database.ExecuteSqlInterpolatedAsync(
-            $"""
-             UPDATE TenE0ScheduledJobs
-                SET LockedByInstance = NULL,
-                    LockedUntil = NULL
-              WHERE Code = {jobCode}
-                AND LockedByInstance = {instanceId}
-             """,
+        // 表名内联（受控常量，见 TryAcquire 注释），值走参数。
+        var tableName = ResolveTableName(ctx);
+        var sql = $"""
+                   UPDATE {tableName}
+                      SET LockedByInstance = NULL,
+                          LockedUntil = NULL
+                    WHERE Code = @jobCode
+                      AND LockedByInstance = @instanceId
+                   """;
+        await ctx.Database.ExecuteSqlRawAsync(sql,
+            new[]
+            {
+                CreateParam(ctx, "@jobCode", jobCode),
+                CreateParam(ctx, "@instanceId", instanceId),
+            },
             cancellationToken);
     }
 
@@ -167,9 +188,38 @@ public sealed class RowJobLock<TContext> : IJobLock
 
     /// <summary>
     /// 探测当前 DbContext 底层是否 InMemory provider ——
-    /// InMemory 不支持 <c>ExecuteSqlInterpolatedAsync</c> 写库，必须走 LINQ 路径。
+    /// InMemory 不支持 <c>ExecuteSqlRawAsync</c> 写库，必须走 LINQ 路径。
     /// </summary>
     private static bool IsInMemoryProvider(TContext ctx) =>
         (ctx.Database.ProviderName ?? string.Empty)
             .Contains("InMemory", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// 从 EF Core 模型元数据读 <see cref="TenE0ScheduledJob"/> 的实际表名 ——
+    /// 不硬编码表名，避免实体改名 / ToTable 约定调整后原始 SQL 与 LINQ 映射漂移
+    /// （复数/单数差异曾导致 "Invalid object name" 运行期崩溃，PR #180 review Critical #1）。
+    /// </summary>
+    private static string ResolveTableName(TContext ctx)
+    {
+        var entityType = ctx.Model.FindEntityType(typeof(TenE0ScheduledJob))
+            ?? throw new InvalidOperationException(
+                "TenE0ScheduledJob 未在 DbContext 模型中注册，无法解析表名。");
+        // GetTableName() 返回 ToTable 配置的权威表名（本模块固定为 "TenE0ScheduledJobs"）。
+        return entityType.GetTableName()
+            ?? throw new InvalidOperationException("无法从 EF 元数据解析 TenE0ScheduledJob 表名。");
+    }
+
+    /// <summary>
+    /// 用底层 ADO.NET 连接创建参数（provider 无关：SqlServer/Sqlite/Postgres 各自的 DbParameter）。
+    /// 表名无法参数化（SQL 语法限制），但值必须参数化防注入。
+    /// </summary>
+    private static System.Data.Common.DbParameter CreateParam(TContext ctx, string name, object value)
+    {
+        // 通过 DbConnection.CreateCommand().CreateParameter() 拿到当前 provider 的参数类型，
+        // 避免硬依赖 Microsoft.Data.SqlClient / Microsoft.Data.Sqlite。
+        var param = ctx.Database.GetDbConnection().CreateCommand().CreateParameter();
+        param.ParameterName = name;
+        param.Value = value;
+        return param;
+    }
 }

@@ -57,12 +57,14 @@ public static class SchedulingExtensions
         Action<SchedulingOptions>? configure = null)
         where TContext : DbContext
     {
-        // 配置 options：应用 callback + 把 jobAssemblies 写入 options（供白名单与扫描共享）。
-        services.AddOptions<SchedulingOptions>();
-        if (configure is not null)
-        {
-            services.Configure(configure);
-        }
+        // 配置 options：单次 AddOptions，业务方 callback 与 jobAssemblies 都通过 Configure 叠加。
+        // Validate 校验 LockLeaseDuration ≥ JobTimeout（否则崩溃后会双重执行，详见 SchedulingOptions 注释）。
+        services.AddOptions<SchedulingOptions>()
+            .Configure(configure ?? (_ => { }))
+            .Validate(opt => opt.LockLeaseDuration >= opt.JobTimeout,
+                $"SchedulingOptions 配置错误：LockLeaseDuration({{LockLeaseDuration}}) 必须 ≥ JobTimeout({{JobTimeout}})，" +
+                "否则任务未跑完租约已过期，另一实例会重复拾取导致双重执行。")
+            .ValidateOnStart();
         if (jobAssemblies is { Length: > 0 })
         {
             services.Configure<SchedulingOptions>(opt =>

@@ -62,7 +62,7 @@ Cron 驱动的定时任务框架（issue #164）：声明式静态任务（`[Sch
 | `RowLock` | `RowJobLock<TContext>` | 同库多实例调度 | `TenE0ScheduledJobs` 行锁（`LockedByInstance`/`LockedUntil` 列） |
 | `Distributed` | 预留（当前回退 None） | 跨库 / Redis | 未实现，留后续 |
 
-**锁租约语义**（与 Outbox 一致）：租约 = 任务执行期间的"持续声明"窗口。`LockLeaseDuration` 默认 5 分钟（远长于单次执行的预期耗时，但短到实例崩溃后另一实例可接管）。租约过期后任何实例下轮 TryAcquire 即可重新拾取。
+**锁租约语义**：租约 = 单个任务**单次执行**的最长独占窗口（SchedulerWorker 对每个 job 单独 TryAcquire/Release，不是整批持锁）。需满足 `LockLeaseDuration ≥ JobTimeout`：租约 < JobTimeout → 任务未跑完锁已过期，另一实例重复拾取（双重执行）；启动期 `ValidateOnStart` 校验此约束。默认两者均 5 分钟（崩溃后接管延迟 5 分钟，可接受）。租约过期后任何实例下轮 TryAcquire 即可重新拾取。
 
 ## 关键设计决策
 
@@ -72,17 +72,20 @@ Cron 驱动的定时任务框架（issue #164）：声明式静态任务（`[Sch
 - **静态任务不可通过 API 修改**：`Scheduler.UpdateJobAsync` 对 `Mode = Static` 的任务抛异常（其定义在代码中，改代码后重启生效）。
 - **手动触发去重**：`Scheduler.TriggerJobAsync` 先查 `IJobLock.IsRunningAsync`，任务正被某实例执行时拒绝触发（避免手动 + 定时重叠）。`IsRunningAsync` 在 `NoOpJobLock` 下恒 false（单实例靠 `BackgroundService` 串行保证）。
 - **时区**：Cron 默认用 UTC（`SchedulingOptions.TimeZone`，避免夏令时坑），业务需本地时区时显式配置。
-- **超时硬截断**：`JobExecutor` 用 `CancellationTokenSource.CreateLinkedTokenSource` + `CancelAfter(JobTimeout)`（默认 30 分钟），超时即取消 handler 并标记 `Timeout`，防僵死任务占锁。
-- **租户过滤**：`TenE0ScheduledJob` 实现 `IMultiTenantEntity`，但 `StaticJobRegistrar.SeedAsync` 查询时 `IgnoreQueryFilters()`（系统级注册，全局任务，且 seed 阶段在 root provider 跑，解析 Scoped 的 `ITenantContext` 会抛异常）。
+- **超时硬截断**：`JobExecutor` 用局部 `CancellationTokenSource.CreateLinkedTokenSource` + `CancelAfter(JobTimeout)`（默认 5 分钟），超时即取消 handler 并标记 `Timeout`，防僵死任务占锁。CTS 用局部 `using`（非实例字段），避免并发执行时字段互相覆盖。
+- **任务参数**：`JobContext.Parameters` 是 `JsonElement?`（从 `ParametersJson` 解析），任务用 `context.GetParameters<T>()()` 反序列化为强类型。非法 JSON 按无参数处理（不阻断执行）。
+- **白名单 fail-secure**：`AllowedAssemblies` 控制 JobType 反射白名单。语义：`null`（未配置）+ `JobAssemblies` 也空 → 不限制（opt-in demo 零配置可用）；`null` 但 `JobAssemblies` 非空 → 用 `JobAssemblies` 作白名单；显式设 `[]` 或不含本程序集 → **拒绝**（运维显式收紧，防反射注入任意代码）。
+- **失败事件顺序**：`JobFailedEvent` 在所有 DB 提交（历史行 + 任务定义）**之后**触发。`IDomainEventDispatcher` 当前是 InProcess 直连 handler（非 Outbox 持久化），若在提交前发事件、后续 SaveChanges 回滚会导致"事件已发但状态未落库"的不一致。放最后保证一致性。
+- **租户过滤**：`TenE0ScheduledJob`/`TenE0JobExecution` 实现 `IMultiTenantEntity`，但后台调度在无 HTTP 请求的线程跑，`ITenantContext`（请求作用域）无值。因此 `StaticJobRegistrar.SeedAsync`、`JobExecutor` 的所有读写路径都 `IgnoreQueryFilters()`（系统级全局任务，跨租户）。
 
 ## 集成要点（依赖模块）
 
 - **Cronos**（外部 NuGet，MIT）：Cron 解析 + 下次执行计算。
 - **`TenE0SystemDbContext`**：自动注册 `TenE0ScheduledJob` + `TenE0JobExecution` 表 + `ConfigureTenE0SchedulingTables()`。
 - **`IDataSeeder`**（`Hosting/`）：`StaticJobRegistrar` Order=1（Outbox SchemaSeeder Order=0 之后，业务 seeder Order=10+ 之前）。
-- **`IDomainEventDispatcher`**（`Events/`）：`JobExecutor` 失败时触发 `JobFailedEvent`；未启用领域事件时 no-op。
+- **`IDomainEventDispatcher`**（`Events/`）：`JobExecutor` 失败时触发 `JobFailedEvent`（InProcess 直连 handler，在 DB 提交后触发）；未启用领域事件时 no-op。
 - **`TenE0Metrics`**（`Observability/`）：`tene0.job.executed` Counter（tag job_code + result）+ `tene0.job.active` ObservableGauge；未注册时 no-op。
-- **Outbox `IOutboxLock` 模式**（`Events/Outbox/`）：`RowJobLock` 复用 `SqlServerOutboxLock` 的 LINQ + SQL 双路径设计。
+- **Outbox `IOutboxLock` 模式**（`Events/Outbox/`）：`RowJobLock` 复用 `SqlServerOutboxLock` 的 LINQ + SQL 双路径设计。**表名不硬编码**：SQL 路径通过 `ctx.Model.FindEntityType().GetTableName()` 从 EF 元数据读回（实体改名 / ToTable 约定调整时原始 SQL 与 LINQ 映射始终一致）。
 
 ## 启用方式
 

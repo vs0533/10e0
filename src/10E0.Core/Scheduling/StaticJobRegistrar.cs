@@ -153,10 +153,17 @@ public sealed class StaticJobRegistrar(
 
     /// <summary>
     /// 构造可被 <see cref="System.Type.GetType(string)"/> 加载的类型全名。
-    /// 格式 <c>"Namespace.Type, Assembly"</c>。
+    /// 用 <see cref="Type.AssemblyQualifiedName"/> —— 这是 .NET 官方推荐的程序集限定类型名格式
+    /// （含 Version/Culture/PublicKeyToken，比手拼 "FullName, SimpleName" 更稳健，
+    /// 对强名称程序集也能正确加载；JobExecutor.ResolveJobHandler 用 Type.GetType 还原）。
     /// </summary>
     private static string BuildJobTypeName(Type type)
-        => $"{type.FullName}, {type.Assembly.GetName().Name}";
+    {
+        // AssemblyQualifiedName 在极少数类型上可能为 null（如泛型开放类型），本场景的 IScheduledJob
+        // 都是具体封闭类型，不会为 null；防御性判空保持健壮。
+        return type.AssemblyQualifiedName
+            ?? throw new InvalidOperationException($"无法为类型 {type.FullName} 生成 AssemblyQualifiedName");
+    }
 }
 
 /// <summary>

@@ -616,7 +616,9 @@ internal sealed class CreateScheduledJobDto
     public required string JobType { get; set; }
     public string? ParametersJson { get; set; }
     public int MaxRetries { get; set; } = 3;
-    public double RetryIntervalMs { get; set; } = 60_000;
+
+    // long 而非 double：毫秒是整数单位，long 语义更清晰且避免浮点精度问题。
+    public long RetryIntervalMs { get; set; } = 60_000;
 }
 
 internal sealed class UpdateScheduledJobDto
@@ -626,5 +628,5 @@ internal sealed class UpdateScheduledJobDto
     public bool? IsEnabled { get; set; }
     public string? ParametersJson { get; set; }
     public int? MaxRetries { get; set; }
-    public double? RetryIntervalMs { get; set; }
+    public long? RetryIntervalMs { get; set; }
 }
