@@ -21,6 +21,12 @@
 
 ### Added
 
+- **AI 上下文工程** (#182)：让只装 NuGet 包的 AI / 开发者也能 5 分钟上手
+  - 新增 `AGENTS.md`（根目录，~18 KB）：面向**消费者**的开局指南 —— 「加一个 feature 的标准 6 步」+ 完整声明式 attribute 速查 + DI 速查 + 黄金范本路径 + 10 条硬约束。区别于既有 `CLAUDE.md`（面向仓库维护者）
+  - 新增 `llms.txt`（根目录）：[llmstxt.org](https://llmstxt.org) 规范的 AI 入口（类比 robots.txt），Cursor / Claude / Codex 等工具可 fetch 拿到精选文档索引
+  - `10E0.Core.csproj` Pack 配置扩展：`AGENTS.md` + 全部 `docs/*.md`（28 篇）随包发布。此前装包仅得裸 DLL + README，docs/demo/CLAUDE.md 对消费者完全不可见；现在 nuget.org 详情页 / IDE 包属性面板 / 离线场景均可见
+  - 实测 `dotnet pack` 验证：AGENTS.md（18 KB）+ README.md + 28 篇 docs 全部进 nupkg
+
 - **可观测性** (#161)：`TenE0.Core.Observability` 模块 —— 健康检查 + Metrics + OpenTelemetry 接入点，**Core 零新依赖**（HealthChecks 与 `System.Diagnostics.Metrics` 都在 `Microsoft.AspNetCore.App` 共享框架内；OTel SDK 由 app 层按需引用）
   - **健康检查**：`DbContextHealthCheck`（`AnyAsync()` 探测，关系型 + InMemory 通用）/ `OutboxHealthCheck`（积压数阈值 → Healthy/Degraded/Unhealthy）/ `FileStorageHealthCheck`（写读删往返，仅 Files 启用时挂）
   - **三层健康端点**：`/health/live`（匿名恒 200，K8s liveness）/ `/health/ready`（匿名就绪）/ `/health`（完整 JSON 报告，需 `perm.admin`）

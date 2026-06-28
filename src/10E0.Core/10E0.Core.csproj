@@ -46,9 +46,17 @@
     <PackageReference Include="Cronos" Version="0.9.0" />
   </ItemGroup>
 
-  <!-- Include README in NuGet package -->
+  <!--
+    包内文档（issue #160 follow-up）：
+    - README.md / AGENTS.md：放包根，nuget.org 详情页 + IDE 包属性面板直接可见。
+      AGENTS.md 是给 AI 助手 / 开发者的"开局指南"，确保只装包也能 5 分钟上手。
+    - docs/*.md：随包发布，VS 包属性面板可查；离线场景下 AI/开发者也能读到完整文档。
+    - AGENTS.md 里反向引用了 docs/ 路径，故 PackagePath 保持一致（docs/）。
+  -->
   <ItemGroup Condition="'$(IsPackable)' == 'true'">
     <None Include="..\..\README.md" Pack="true" PackagePath="README.md" />
+    <None Include="..\..\AGENTS.md" Pack="true" PackagePath="AGENTS.md" />
+    <None Include="..\..\docs\**\*.md" Pack="true" PackagePath="docs\" />
   </ItemGroup>
 
 </Project>
