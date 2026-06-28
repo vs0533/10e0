@@ -120,11 +120,13 @@ public sealed class CertificateService<TContext>(
         catch (DbUpdateException ex) when (IsUniqueViolation(ex))
         {
             // 证书编号唯一索引兜底（Sequence 并发冲突或手动传入重复编号）。
-            // LogForSafe：certificateNo/templateCode 来自外部（调用方传入），含 CR/LF 可伪造日志行，
-            // 故写入日志前过 SanitizeForLog（剥控制字符）。CodeQL cs/log-forging 兜底。
+            // 日志参数用 String.Replace 移除 CR/LF —— 直接内联（不抽方法），让 CodeQL 在 sink 参数
+            // 表达式上就能识别 StringReplaceSanitizer barrier（抽私有方法时 CodeQL 跨过程 barrier
+            // 识别不稳，实测 PR #189/#190 仍报警）。防 log-forging（伪造日志行）。
             logger?.LogError(ex,
                 "证书编号唯一冲突：CertificateNo={No} TemplateCode={Template}",
-                SanitizeForLog(certificateNo), SanitizeForLog(templateCode));
+                certificateNo.Replace("\r", "").Replace("\n", ""),
+                templateCode.Replace("\r", "").Replace("\n", ""));
             throw new InvalidOperationException(
                 $"证书编号 '{certificateNo}' 已存在（唯一冲突）。若用 Sequence 自动生成，请重试；" +
                 "若手动传入请改编号。", ex);
@@ -132,7 +134,10 @@ public sealed class CertificateService<TContext>(
 
         logger?.LogInformation(
             "证书已生成：Id={Id} No={No} Template={Template} FileAttachment={FileId}",
-            entity.Id, SanitizeForLog(certificateNo), SanitizeForLog(templateCode), upload.Id);
+            entity.Id,
+            certificateNo.Replace("\r", "").Replace("\n", ""),
+            templateCode.Replace("\r", "").Replace("\n", ""),
+            upload.Id);
 
         return entity;
     }
@@ -218,33 +223,4 @@ public sealed class CertificateService<TContext>(
         ex.InnerException?.Message.Contains("unique", StringComparison.OrdinalIgnoreCase) == true
         || ex.InnerException?.Message.Contains("UNIQUE", StringComparison.OrdinalIgnoreCase) == true
         || ex.InnerException?.Message.Contains("duplicate", StringComparison.OrdinalIgnoreCase) == true;
-
-    /// <summary>
-    /// 日志注入净化：移除 CR/LF（log-forging 的实际攻击向量），防伪造日志行（CodeQL cs/log-forging）。
-    ///
-    /// <para>
-    /// certificateNo / templateCode 源自外部（调用方传入或 Sequence），可含 <c>\r\n</c>，
-    /// 直接进结构化日志的渲染消息会插入伪造日志行（掩盖真实操作 / 注入假事件）。
-    /// </para>
-    /// <para>
-    /// <b>实现用 <see cref="string.Replace(string,string)"/></b> —— 这是 CodeQL <c>cs/log-forging</c>
-    /// 查询内置认可的 sanitizer barrier（见 <c>LogForgingQuery.qll</c> 的 <c>StringReplaceSanitizer</c>）。
-    /// 自定义 StringBuilder 循环默认<b>不</b>被 CodeQL 识别为 barrier，会导致全量扫描重复误报
-    /// （见 PR #189/#190 经历：自定义 sanitizer 治标不治本，每次同步 PR 重扫都报）。
-    /// </para>
-    /// <para>
-    /// 移除 CR 与 LF（CRLF 会随之消失）。制表符等无换行能力的字符保留（日志列对齐可读性优先；
-    /// 真正能伪造日志行的只有换行符）。这是 log-forging 防护的最小充分集，与 CodeQL 推荐一致。
-    /// </para>
-    /// </summary>
-    private static string SanitizeForLog(string? value)
-    {
-        if (string.IsNullOrEmpty(value)) return value ?? string.Empty;
-        // String.Replace 是 CodeQL 内置 StringReplaceSanitizer 认可的 barrier ——
-        // 经此调用的返回值在数据流上即视为已净化，不再标记 cs/log-forging。
-        // 两次 Replace 分别去 CR 与 LF（CRLF 自然消失）。
-        return value
-            .Replace("\r", string.Empty)
-            .Replace("\n", string.Empty);
-    }
 }
