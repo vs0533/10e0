@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using TenE0.Core.Abstractions;
+using TenE0.Core.DependencyInjection;
 using TenE0.Core.DynamicFilters;
 using TenE0.Core.Permissions.DataFilter;
 
@@ -34,6 +35,10 @@ public abstract class BaseDataContext(
     IHttpContextAccessor httpContextAccessor) : DbContext(options)
 {
     private IServiceProvider Services => httpContextAccessor.HttpContext?.RequestServices ?? serviceProvider;
+
+    /// <summary>是否启用多租户过滤（读 <c>TenE0Options.MultiTenancy</c>，默认 true）。
+    /// false（单租户/不分租户部署）时 OnModelCreating 不注册 Tenant 过滤器。</summary>
+    private bool MultiTenancyEnabled => Services.GetService<TenE0Options>()?.MultiTenancy ?? true;
 
     // ------------------------------------------------------------
     // 暴露给过滤表达式引用的运行时属性 — EF 会在每次查询时读取并参数化
@@ -98,7 +103,7 @@ public abstract class BaseDataContext(
     /// 约束不持有 <see cref="Microsoft.Extensions.Logging.ILogger"/>）。
     /// </summary>
     public bool TenantFilterActive
-        => CurrentTenantId is null && !BypassFilters;
+        => MultiTenancyEnabled && CurrentTenantId is null && !BypassFilters;
 
     private ICurrentUserContext? ResolveCurrentUser() => Services.GetService<ICurrentUserContext>();
     private IDataAccessPolicy ResolveAccessPolicy() => Services.GetRequiredService<IDataAccessPolicy>();
@@ -113,6 +118,9 @@ public abstract class BaseDataContext(
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
+
+        // 多租户开关：opt.MultiTenancy=false（单租户/不分租户部署）时跳过 Tenant 过滤器注册。
+        var multiTenancy = MultiTenancyEnabled;
 
         var contributorsByEntity = ResolveFilterContributors()
             .GroupBy(c => c.EntityType)
@@ -133,7 +141,7 @@ public abstract class BaseDataContext(
             // 表达式: BypassFilters OR e.TenantId == CurrentTenantId
             // - BypassFilters 短路（超管可见全部）
             // - CurrentTenantId 为 null 时短路仍生效（条件 == null == false），安全默认隐藏所有行
-            if (typeof(IMultiTenantEntity).IsAssignableFrom(entityType.ClrType))
+            if (multiTenancy && typeof(IMultiTenantEntity).IsAssignableFrom(entityType.ClrType))
             {
                 var parameter = Expression.Parameter(entityType.ClrType, "e");
                 var tenantProperty = Expression.Property(parameter, nameof(IMultiTenantEntity.TenantId));

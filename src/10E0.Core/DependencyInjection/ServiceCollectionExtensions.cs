@@ -280,6 +280,9 @@ public static class ServiceCollectionExtensions
         var opt = new TenE0Options();
         configure?.Invoke(opt);
 
+        // 注册为 singleton，供 BaseDataContext.OnModelCreating 读取（如 MultiTenancy 开关）。
+        services.AddSingleton(opt);
+
         // 入口程序集可能在 NativeAOT / 单文件裁剪 / 部分测试 runner 下为 null —— 显式校验并给出可操作提示，
         // 而非让下游 [0] 访问抛 NRE。
         var handlerAssemblies = opt.HandlerAssemblies
