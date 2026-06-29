@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.Extensions.DependencyInjection;
 using TenE0.Core.Abstractions;
 using TenE0.Core.DataContext;
+using TenE0.Core.DependencyInjection;
 using TenE0.Core.DynamicFilters;
 using TenE0.Core.Permissions.DataFilter;
 
@@ -116,9 +117,11 @@ public sealed class TenantQueryFilterAcceptanceTests
         Mock<IDataAccessPolicy> policy,
         IEnumerable<IEntityFilterContributor> contributors,
         Mock<IDynamicFilterProvider> dynamicProvider,
-        Mock<ITenantContext> tenant)
+        Mock<ITenantContext> tenant,
+        TenE0Options? options = null)
     {
         var services = new ServiceCollection();
+        if (options is not null) services.AddSingleton(options);
         services.AddSingleton(user.Object);
         services.AddSingleton(policy.Object);
         services.AddSingleton(tenant.Object);
@@ -352,5 +355,25 @@ public sealed class TenantQueryFilterAcceptanceTests
         // Assert
         visible.Should().BeEquivalentTo(new[] { "A1" },
             "non-admin must remain tenant-scoped even when the data contains other tenants");
+    }
+
+    // ── opt.MultiTenancy = false（单租户 / 不分租户部署）──────────
+
+    [Fact]
+    public void GivenMultiTenancyOptOut_WhenModelBuilt_ThenNoTenantFilterRegistered()
+    {
+        // Arrange — opt.MultiTenancy = false（不分租户部署）
+        var opt = new TenE0Options { MultiTenancy = false };
+        var (sp, accessor) = BuildServices(CreateUser(), CreatePolicy(), [], CreateDynamicProvider(), CreateTenantContext(null), opt);
+
+        // Act — NewInMemoryOptions 已挂 InstanceModelCacheKeyFactory,每个 context 独立 model(读自己的 opt)
+        using var ctx = new TestTenantContext(NewInMemoryOptions(), sp, accessor);
+
+        // Assert — Tenant 过滤器未注册(opt-out 的核心:多租户实体查询不受租户限制)。
+        // 运行时"查询返回全部"由 R3 集成验证(单租户部署全链路),单测聚焦注册检查。
+        var entityType = ctx.Model.FindEntityType(typeof(TenantDocument));
+        entityType.Should().NotBeNull();
+        entityType!.FindDeclaredQueryFilter("Tenant").Should().BeNull(
+            "opt.MultiTenancy=false 必须跳过 Tenant 过滤器注册 —— 单租户/不分租户部署");
     }
 }

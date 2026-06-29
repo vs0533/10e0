@@ -74,6 +74,13 @@ public sealed class TenE0Options
     /// <summary>启用动态数据过滤（默认 true）。</summary>
     public bool DynamicFilters { get; set; } = true;
 
+    /// <summary>启用多租户隔离（#11，默认 true）。
+    /// <para><b>true</b>：给 <c>IMultiTenantEntity</c> 注册 Tenant 命名过滤器，按 <c>CurrentTenantId</c> 过滤
+    ///（#121 安全默认：<c>CurrentTenantId=null</c> 时隐藏全部多租户行）。</para>
+    /// <para><b>false</b>：不注册租户过滤器 —— 多租户实体查询不受租户限制，适用于
+    /// <b>单租户 / 不分租户</b>部署（<c>CurrentTenantId</c> 是否为 null 都不影响查询，所有数据可见）。</para></summary>
+    public bool MultiTenancy { get; set; } = true;
+
     /// <summary>启用数据字典 + 系统参数（默认 true）。对应 <c>AddTenE0Configuration</c>。</summary>
     public bool Configuration { get; set; } = true;
 
